@@ -83,9 +83,7 @@ class GPT2Model(nn.Module):
         hidden_states = self.ln_f(hidden_states)
         return hidden_states
 
-
-
-if __name__ == '__main__':
+def test_shape():
     def count_parameters(model: nn.Module):
         total = 0
         param_required_grad = 0
@@ -95,11 +93,6 @@ if __name__ == '__main__':
                 param_required_grad += param.numel()
         return total, param_required_grad
 
-    def print_parameters(model: nn.Module):
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                print(f'{name:30}: {param.shape}')
-
     config = GPT2Config()
     model = GPT2Model(config)
 
@@ -108,3 +101,34 @@ if __name__ == '__main__':
     assert count[1] == 124439808
 
     print('pass')
+
+def test_model_name():
+    def parameters_list(model: nn.Module):
+        param_list = []
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                param_list.append((name, f"{param.shape}"))
+        return param_list
+
+    config = GPT2Config()
+    model = GPT2Model(config)
+    l = parameters_list(model)
+    print(len(l))
+
+    from transformers import GPT2Model as GPT2ModelRef
+    model_ref = GPT2ModelRef.from_pretrained('gpt2')
+    l_ref = parameters_list(model_ref)
+    print(len(l_ref))
+    for (name, param), (name_ref, param_ref) in zip(l, l_ref):
+        print(name, param)
+        print(name_ref, param_ref)
+        assert name == name_ref
+        # assert param == param_ref
+        if param == param_ref:
+            print('--------------------------------')
+        else:
+            print('------------- dif --------------')
+    print('pass')
+
+if __name__ == '__main__':
+    test_model_name()
