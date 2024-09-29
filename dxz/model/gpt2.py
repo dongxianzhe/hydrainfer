@@ -82,6 +82,13 @@ class GPT2Model(nn.Module):
             hidden_states = layer(hidden_states)
         hidden_states = self.ln_f(hidden_states)
         return hidden_states
+    
+    def load_weights(self, state_dict_ref: dict[str, Tensor]):
+        for name, weight in self.state_dict().items():
+            if any(needle in name for needle in ["c_attn.weight", "c_proj.weight", "c_fc.weight"]):
+                weight.data.copy_(state_dict_ref[name].t())
+            else:
+                weight.data.copy_(state_dict_ref[name])
 
 def test_shape():
     def count_parameters(model: nn.Module):
@@ -135,6 +142,9 @@ def test_model_output():
     model = GPT2Model(config)
     from transformers import GPT2Model as GPT2ModelRef
     model_ref = GPT2ModelRef.from_pretrained('gpt2')
+
+    state_dict = model_ref.state_dict()
+    model.load_weights(state_dict)
 
     input_ids = torch.arange(10)
     position_ids = torch.arange(10)
