@@ -6,13 +6,6 @@ from torch import nn
 from torch import Tensor
 from transformers import GPT2Config
 
-def print_once(message):
-    if not hasattr(print_once, 'has_printed'):
-        print_once.has_printed = False  # 初始化属性
-    if not print_once.has_printed:
-        print(message)
-        print_once.has_printed = True  # 更新状态
-
 class NewGELUActivation(nn.Module):
     def forward(self, input: Tensor) -> Tensor:
         return 0.5 * input * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (input + 0.044715 * torch.pow(input, 3.0))))
@@ -128,7 +121,6 @@ class GPT2Model(nn.Module):
             "last_hidden_state" : hidden_states,
             "hidden_states" : all_hidden_states,
         }
-        # return hidden_states
     
     def load_weights(self, state_dict_ref: dict[str, Tensor]):
         for name, weight in self.state_dict().items():
@@ -157,123 +149,3 @@ class GPT2LMHeadModel(nn.Module):
                     weight.data.copy_(state_dict_ref[name].t())
                 else:
                     weight.data.copy_(state_dict_ref[name])
-
-
-def test_shape():
-    def count_parameters(model: nn.Module):
-        total = 0
-        param_required_grad = 0
-        for param in model.parameters():
-            total += param.numel()
-            if param.requires_grad:
-                param_required_grad += param.numel()
-        return total, param_required_grad
-
-    config = GPT2Config()
-    model = GPT2Model(config)
-
-    count = count_parameters(model)
-    print(count)
-    assert count[1] == 124439808
-
-    print('pass')
-
-def test_model_name():
-    def parameters_list(model: nn.Module):
-        param_list = []
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                param_list.append((name, f"{param.shape}"))
-        return param_list
-
-    config = GPT2Config()
-    model = GPT2Model(config)
-    l = parameters_list(model)
-    print(len(l))
-
-    from transformers import GPT2Model as GPT2ModelRef
-    model_ref = GPT2ModelRef.from_pretrained('gpt2')
-    l_ref = parameters_list(model_ref)
-    print(len(l_ref))
-    for (name, param), (name_ref, param_ref) in zip(l, l_ref):
-        print(name, param)
-        print(name_ref, param_ref)
-        assert name == name_ref
-        # assert param == param_ref
-        if param == param_ref:
-            print('--------------------------------')
-        else:
-            print('------------- dif --------------')
-    print('pass')
-
-def test_model_output():
-    config = GPT2Config()
-    model = GPT2Model(config)
-    from transformers import GPT2Model as GPT2ModelRef
-    model_ref = GPT2ModelRef.from_pretrained('gpt2')
-    model.eval()
-    model_ref.eval()
-
-    state_dict = model_ref.state_dict()
-    model.load_weights(state_dict)
-
-    # check param weights equal
-    s1 = model.state_dict()
-    s2 = model_ref.state_dict()
-    for name, weight in s1.items():
-        if any(needle in name for needle in ["c_attn.weight", "c_proj.weight", "c_fc.weight"]):
-            weight_ref = s2[name].t()
-        else:
-            weight_ref = s2[name]
-
-        assert torch.allclose(weight, weight_ref, rtol=1e-3, atol=1e-3), f"layer {name} not equal"
-        
-    input_ids = torch.arange(20)
-    position_ids = torch.arange(20)
-
-    output = model(input_ids=input_ids, position_ids=position_ids)
-    output_ref = model_ref(input_ids=input_ids, position_ids=position_ids, output_hidden_states = True)
-    for i, (layer_i, layer_i_ref) in enumerate(zip(output['hidden_states'], output_ref['hidden_states'])):
-        print(f'---------------layer {i}---------------')
-        print(f'layer_i {layer_i.shape} layer_i_ref {layer_i_ref.shape}')
-        layer_i = layer_i.reshape(-1)
-        layer_i_ref = layer_i_ref.reshape(-1)
-        print(f'layer_i {layer_i.shape} layer_i_ref {layer_i_ref.shape}')
-        print(layer_i)
-        print(layer_i_ref)
-        print(torch.allclose(layer_i.reshape(-1, 768)[0], layer_i_ref.reshape(-1, 768)[0], rtol=1e-3, atol=1e-3))
-        print(torch.allclose(layer_i, layer_i_ref, rtol=1e-3, atol=1e-3))
-
-    print(f"{len(output_ref['hidden_states'])}")
-
-    print(output['last_hidden_state'].view(-1)[0])
-    print(output_ref['last_hidden_state'].view(-1)[0])
-    
-    assert torch.allclose(output['last_hidden_state'], output_ref['last_hidden_state'], rtol=1e-3, atol=1e-3), "outout not equal"
-    print('pass')
-
-def test_gpt2lmhead_output():
-    config = GPT2Config()
-    model = GPT2LMHeadModel(config)
-    from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
-    model_ref = GPT2LMHeadModelRef.from_pretrained('gpt2')
-    model.eval()
-    model_ref.eval()
-
-    state_dict = model_ref.state_dict()
-    model.load_weights(state_dict)
-
-    input_ids = torch.arange(20)
-    position_ids = torch.arange(20)
-
-    output = model(input_ids=input_ids, position_ids=position_ids)
-    output_ref = model_ref(input_ids=input_ids, position_ids=position_ids, output_hidden_states = True)
-    assert torch.allclose(output['logits'], output_ref['logits'], rtol=1e-3, atol=1e-3), "outout not equal"
-    print('pass')
-
-if __name__ == '__main__':
-    test_gpt2lmhead_output()
-    # x = torch.arange(12).reshape(2, 6)
-    # y = x.chunk(chunks=3, dim=-1)
-    # print(x)
-    # print(y)
