@@ -137,6 +137,28 @@ class GPT2Model(nn.Module):
             else:
                 weight.data.copy_(state_dict_ref[name])
 
+class GPT2LMHeadModel(nn.Module):
+    def __init__(self, config: GPT2Config):
+        super(GPT2LMHeadModel, self).__init__()
+        self.transformer = GPT2Model(config)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+    
+    def forward(self, input_ids: Tensor, position_ids: Tensor) -> Tensor:
+        hidden_state = self.transformer(input_ids, position_ids)['last_hidden_state']
+        lm_logits = self.lm_head(hidden_state)
+        return {'logits' : lm_logits}
+    
+    def load_weights(self, state_dict_ref: dict[str, Tensor]):
+        for name, weight in self.state_dict().items():
+            if 'lm_head' in name:
+                weight.data.copy_(state_dict_ref['transformer.wte.weight']) 
+            else:
+                if any(needle in name for needle in ["c_attn.weight", "c_proj.weight", "c_fc.weight"]):
+                    weight.data.copy_(state_dict_ref[name].t())
+                else:
+                    weight.data.copy_(state_dict_ref[name])
+
+
 def test_shape():
     def count_parameters(model: nn.Module):
         total = 0
@@ -192,7 +214,6 @@ def test_model_output():
     model.eval()
     model_ref.eval()
 
-
     state_dict = model_ref.state_dict()
     model.load_weights(state_dict)
 
@@ -231,8 +252,27 @@ def test_model_output():
     assert torch.allclose(output['last_hidden_state'], output_ref['last_hidden_state'], rtol=1e-3, atol=1e-3), "outout not equal"
     print('pass')
 
+def test_gpt2lmhead_output():
+    config = GPT2Config()
+    model = GPT2LMHeadModel(config)
+    from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
+    model_ref = GPT2LMHeadModelRef.from_pretrained('gpt2')
+    model.eval()
+    model_ref.eval()
+
+    state_dict = model_ref.state_dict()
+    model.load_weights(state_dict)
+
+    input_ids = torch.arange(20)
+    position_ids = torch.arange(20)
+
+    output = model(input_ids=input_ids, position_ids=position_ids)
+    output_ref = model_ref(input_ids=input_ids, position_ids=position_ids, output_hidden_states = True)
+    assert torch.allclose(output['logits'], output_ref['logits'], rtol=1e-3, atol=1e-3), "outout not equal"
+    print('pass')
+
 if __name__ == '__main__':
-    test_model_output()
+    test_gpt2lmhead_output()
     # x = torch.arange(12).reshape(2, 6)
     # y = x.chunk(chunks=3, dim=-1)
     # print(x)
