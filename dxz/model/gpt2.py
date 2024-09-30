@@ -122,7 +122,7 @@ class GPT2Model(nn.Module):
             "hidden_states" : all_hidden_states,
         }
     
-    def load_weights(self, state_dict_ref: dict[str, Tensor]):
+    def load_state_dict(self, state_dict_ref: dict[str, Tensor]):
         for name, weight in self.state_dict().items():
             if any(needle in name for needle in ["c_attn.weight", "c_proj.weight", "c_fc.weight"]):
                 weight.data.copy_(state_dict_ref[name].t())
@@ -140,7 +140,7 @@ class GPT2LMHeadModel(nn.Module):
         lm_logits = self.lm_head(hidden_state)
         return {'logits' : lm_logits}
     
-    def load_weights(self, state_dict_ref: dict[str, Tensor]):
+    def load_state_dict(self, state_dict_ref: dict[str, Tensor]):
         for name, weight in self.state_dict().items():
             if 'lm_head' in name:
                 weight.data.copy_(state_dict_ref['transformer.wte.weight']) 

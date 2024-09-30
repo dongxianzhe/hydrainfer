@@ -26,7 +26,7 @@ def test_GPT2Model():
     model.eval()
     model_ref.eval()
     state_dict = model_ref.state_dict()
-    model.load_weights(state_dict)
+    model.load_state_dict(state_dict)
 
     s1 = model.state_dict()
     s2 = model_ref.state_dict()
@@ -60,7 +60,7 @@ def test_gpt2lmhead_output():
     model_ref.eval()
 
     state_dict = model_ref.state_dict()
-    model.load_weights(state_dict)
+    model.load_state_dict(state_dict)
 
 
     input_ids = torch.randint(0, config.vocab_size, (config.max_position_embeddings,))
