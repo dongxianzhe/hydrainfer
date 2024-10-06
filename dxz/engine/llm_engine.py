@@ -28,9 +28,3 @@ class LLMEngine:
             results.append(decoded_output)
         
         return results
-
-if __name__ == '__main__':
-    llm_engine = LLMEngine()
-    results = llm_engine.generate(["Hello"])
-    for result in results:
-        print(result)
