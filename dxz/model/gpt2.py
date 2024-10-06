@@ -51,7 +51,7 @@ class GPT2Attention(nn.Module):
         k = k.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
         v = v.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
 
-        mask = torch.tril(torch.ones(size=(q_seq_len, q_seq_len), dtype=torch.bool))
+        mask = torch.tril(torch.ones(size=(q_seq_len, q_seq_len), dtype=torch.bool, device=q.device))
 
         attn_output = self.atten(q, k, v, sm_scale = 1. / math.sqrt(q.shape[-1]), mask=mask)
         attn_output = attn_output.reshape(q_seq_len, self.config.hidden_size)

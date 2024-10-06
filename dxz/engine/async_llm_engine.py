@@ -3,18 +3,20 @@ from transformers import GPT2Config, GPT2Tokenizer
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from dxz.model.gpt2 import GPT2LMHeadModel
 
-class LLMEngine:
+class AsyncLLMEngine:
     def __init__(self) -> None:
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.model = GPT2LMHeadModel(GPT2Config())
         self.model.load_state_dict(GPT2LMHeadModelRef.from_pretrained('gpt2').state_dict())
+        self.model.to(device=torch.device('cuda:0'))
 
-    def generate(self, prompts: list[str]) -> list[str]:
+    async def generate(self, prompts: list[str]) -> list[str]:
         results = []
         for prompt in prompts:
             encoded_input = self.tokenizer.encode(prompt, return_tensors='pt')[0] # token list # (n_tokens, )
+            encoded_input = encoded_input.to(device=torch.device('cuda:0'))
             for _ in range(50):
-                position_ids = torch.arange(encoded_input.shape[-1]) # (n_tokens, )
+                position_ids = torch.arange(encoded_input.shape[-1], device=torch.device('cuda:0')) # (n_tokens, )
                 logits = self.model(input_ids=encoded_input, position_ids=position_ids)['logits'] # (n_tokens, vocab_size)
                 next_token_logits = logits[-1, :] # (vocab_size, )
                 next_token_id = torch.argmax(next_token_logits, dim=-1, keepdim=True) # (1, )
