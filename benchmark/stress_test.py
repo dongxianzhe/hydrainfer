@@ -5,14 +5,23 @@ import time
 import numpy as np
 import tqdm
 
+# url = "http://localhost:8888/generate"
+url = "http://localhost:9999/v1/completions"
+
+headers = {
+    "Content-Type": "application/json"
+}
+
 def request():
     start_time = time.time()
 
-    url = "http://localhost:8888/generate"
     data = {
-        "prompt": "Hello"
+        "model": "gpt2",
+        "prompt":"Hello",
+        "max_tokens": 50,
+        "temperature": 0
     }
-    response = requests.post(url, data=json.dumps(data))
+    response = requests.post(url, headers=headers, data=json.dumps(data))
 
     if response.status_code != 200:
         print(f"Error: {response.status_code}, {response.text}")
