@@ -22,13 +22,13 @@ class AsyncLLMEngine:
             input_ids = self.tokenizer.encode(prompt, return_tensors='pt')[0] # token list # (n_tokens, )
             output_ids: list[int] = []
 
-            total_tokens = input_ids.shape[-1]
+            total_tokens = input_ids.shape[-1] # when each loop begin, total_tokens is kv_seq_len = cache_length + input_ids's length
             input_ids = input_ids.to(device=torch.device('cuda:0'))
             position_ids = torch.arange(total_tokens, device=torch.device('cuda:0')) # (n_tokens, )
             n_head, n_embd, n_head, n_layer =self.config.n_head, self.config.n_embd, self.config.n_head, self.config.n_layer
             kv_caches: list[tuple[torch.Tensor, torch.Tensor]] = [(
-                torch.empty(size=(max_tokens, n_head, n_embd // n_head), device=torch.device('cuda:0')),
-                torch.empty(size=(max_tokens, n_head, n_embd // n_head), device=torch.device('cuda:0')))
+                torch.empty(size=(input_ids.shape[0] + max_tokens, n_head, n_embd // n_head), device=torch.device('cuda:0')),
+                torch.empty(size=(input_ids.shape[0] + max_tokens, n_head, n_embd // n_head), device=torch.device('cuda:0')))
                 for _ in range(n_layer)
             ]
             model_forward_parameters = ModelForwardParameters(cache_length=0)
@@ -44,7 +44,7 @@ class AsyncLLMEngine:
                 total_tokens += 1
                 input_ids = next_token_id # (n_tokens=1, )
                 position_ids  = torch.tensor(total_tokens - 1, dtype=torch.int, device=torch.device('cuda:0'))
-                model_forward_parameters = ModelForwardParameters(cache_length=total_tokens)
+                model_forward_parameters = ModelForwardParameters(cache_length=total_tokens - 1)
 
             results.append(prompt + self.tokenizer.decode(output_ids))
         
