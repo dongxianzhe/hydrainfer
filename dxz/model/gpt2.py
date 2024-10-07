@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch import Tensor
 from transformers import GPT2Config
+from dxz.model.model_forward_parameters import ModelForwardParameters
 
 class NewGELUActivation(nn.Module):
     def forward(self, input: Tensor) -> Tensor:
@@ -41,18 +42,33 @@ class GPT2Attention(nn.Module):
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
         self.atten = Attention()
     
-    def forward(self, hidden_states: Tensor) -> Tensor:
+    def forward(self, hidden_states: Tensor, kv_cache: Tensor, model_forward_parameters: ModelForwardParameters) -> Tensor:
         q_seq_len = hidden_states.shape[0]
 
         qkv = self.c_attn(hidden_states)
 
+        # new kv token
         q, k, v = qkv.chunk(chunks=3, dim=-1)
         q = q.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
         k = k.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
         v = v.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
+        # set kv cache
+        n_old_token = model_forward_parameters.cache_length
+        n_new_token = q.shape[0]
+        n_token = n_old_token + n_new_token
+        k_cache, v_cache = kv_cache
+        k_cache[n_old_token : n_token].data.copy_(k)
+        v_cache[n_old_token : n_token].data.copy_(v)
 
-        mask = torch.tril(torch.ones(size=(q_seq_len, q_seq_len), dtype=torch.bool, device=q.device))
-
+        # create mask
+        q_seq_len = n_new_token
+        kv_seq_len = n_token
+        if q_seq_len == kv_seq_len: # prefill state
+            mask = torch.tril(torch.ones(size=(q_seq_len, q_seq_len), dtype=torch.bool, device=q.device))
+        else: # decode state
+            mask = None
+        k = k_cache[: kv_seq_len]
+        v = v_cache[: kv_seq_len]
         attn_output = self.atten(q, k, v, sm_scale = 1. / math.sqrt(q.shape[-1]), mask=mask)
         attn_output = attn_output.reshape(q_seq_len, self.config.hidden_size)
 
@@ -86,10 +102,10 @@ class GPT2Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.mlp = GPT2MLP(config)
 
-    def forward(self, hidden_states: Tensor) -> Tensor:
+    def forward(self, hidden_states: Tensor, kv_cache: tuple[Tensor, Tensor], model_forward_parameters: ModelForwardParameters) -> Tensor:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
-        attn_output = self.attn(hidden_states)
+        attn_output = self.attn(hidden_states, kv_cache, model_forward_parameters)
         hidden_states = attn_output + residual
 
         residual = hidden_states
@@ -106,20 +122,20 @@ class GPT2Model(nn.Module):
         self.h = nn.ModuleList([GPT2Block(config) for _ in range(config.num_hidden_layers)])
         self.ln_f = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor):
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: ModelForwardParameters) -> dict[str, Tensor]:
         input_embeds = self.wte(input_ids)
         position_embeds = self.wpe(position_ids)
         hidden_states = input_embeds + position_embeds
 
         all_hidden_states = ()
-        for _, layer in enumerate(self.h):
+        for i, layer in enumerate(self.h):
             all_hidden_states += (hidden_states, )
-            hidden_states = layer(hidden_states)
+            hidden_states = layer(hidden_states, kv_caches[i], model_forward_parameters)
         hidden_states = self.ln_f(hidden_states)
         all_hidden_states += (hidden_states, )
         return {
             "last_hidden_state" : hidden_states,
-            "hidden_states" : all_hidden_states,
+            "hidden_states" : all_hidden_states, # the input of [layer1, layer2, ... layer12, lm_heads]
         }
     
     def load_state_dict(self, state_dict_ref: dict[str, Tensor]):
@@ -135,8 +151,8 @@ class GPT2LMHeadModel(nn.Module):
         self.transformer = GPT2Model(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor) -> Tensor:
-        hidden_state = self.transformer(input_ids, position_ids)['last_hidden_state']
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: ModelForwardParameters) -> dict[str, Tensor]:
+        hidden_state = self.transformer(input_ids, position_ids, kv_caches, model_forward_parameters)['last_hidden_state']
         lm_logits = self.lm_head(hidden_state)
         return {'logits' : lm_logits}
     
