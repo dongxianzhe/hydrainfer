@@ -85,13 +85,4 @@ add_compile_definitions(TORCH_CUDA=1)
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
 message(STATUS "CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
 
-
-include(cc_binary)
-cc_binary(
-NAME
-    helloworld
-SRCS
-    helloworld.cpp
-DEPS
-    torch
-)
+add_subdirectory(kernel)
