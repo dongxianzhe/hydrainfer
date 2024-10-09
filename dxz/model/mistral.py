@@ -91,4 +91,4 @@ class MistralForCausalLM(nn.Module):
     
     def forward(input_ids: Tensor, position_ids: Tensor) -> Tensor:
         h = self.model(input_ids, position_ids)
-        self.lm_head(h)
+        return self.lm_head(h)
