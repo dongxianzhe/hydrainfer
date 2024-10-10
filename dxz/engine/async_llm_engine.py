@@ -2,7 +2,7 @@ import torch
 from transformers import GPT2Config, GPT2Tokenizer
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from dxz.model.gpt2 import GPT2LMHeadModel
-from dxz.model.gpt2 import ModelForwardParameters
+from dxz.model.gpt2 import InputParameters
 
 class AsyncLLMEngine:
     def __init__(self) -> None:
@@ -31,7 +31,7 @@ class AsyncLLMEngine:
                 torch.empty(size=(input_ids.shape[0] + max_tokens, n_head, n_embd // n_head), device=torch.device('cuda:0')))
                 for _ in range(n_layer)
             ]
-            model_forward_parameters = ModelForwardParameters(cache_length=0)
+            model_forward_parameters = InputParameters(cache_length=0)
             for _ in range(max_tokens):
                 logits = self.model(input_ids=input_ids, position_ids=position_ids, kv_caches=kv_caches, model_forward_parameters=model_forward_parameters)['logits'] # (n_tokens, vocab_size)
                 next_token_logits = logits[-1, :] # (vocab_size, )
@@ -44,7 +44,7 @@ class AsyncLLMEngine:
                 total_tokens += 1
                 input_ids = next_token_id # (n_tokens=1, )
                 position_ids  = torch.tensor(total_tokens - 1, dtype=torch.int, device=torch.device('cuda:0'))
-                model_forward_parameters = ModelForwardParameters(cache_length=total_tokens - 1)
+                model_forward_parameters = InputParameters(cache_length=total_tokens - 1)
 
             results.append(prompt + self.tokenizer.decode(output_ids))
         

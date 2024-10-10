@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from torch import Tensor
 from transformers import GPT2Config
-from dxz.model.model_forward_parameters import ModelForwardParameters
+from dxz.model.parameters import InputParameters
 
 class NewGELUActivation(nn.Module):
     def forward(self, input: Tensor) -> Tensor:
@@ -42,7 +42,7 @@ class GPT2Attention(nn.Module):
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
         self.atten = Attention()
     
-    def forward(self, hidden_states: Tensor, kv_cache: Tensor, model_forward_parameters: ModelForwardParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor, kv_cache: Tensor, model_forward_parameters: InputParameters) -> Tensor:
         q_seq_len = hidden_states.shape[0]
 
         qkv = self.c_attn(hidden_states)
@@ -102,7 +102,7 @@ class GPT2Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.mlp = GPT2MLP(config)
 
-    def forward(self, hidden_states: Tensor, kv_cache: tuple[Tensor, Tensor], model_forward_parameters: ModelForwardParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor, kv_cache: tuple[Tensor, Tensor], model_forward_parameters: InputParameters) -> Tensor:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
         attn_output = self.attn(hidden_states, kv_cache, model_forward_parameters)
@@ -122,7 +122,7 @@ class GPT2Model(nn.Module):
         self.h = nn.ModuleList([GPT2Block(config) for _ in range(config.num_hidden_layers)])
         self.ln_f = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: ModelForwardParameters) -> dict[str, Tensor]:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: InputParameters) -> dict[str, Tensor]:
         input_embeds = self.wte(input_ids)
         position_embeds = self.wpe(position_ids)
         hidden_states = input_embeds + position_embeds
@@ -151,7 +151,7 @@ class GPT2LMHeadModel(nn.Module):
         self.transformer = GPT2Model(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: ModelForwardParameters) -> dict[str, Tensor]:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: InputParameters) -> dict[str, Tensor]:
         hidden_state = self.transformer(input_ids, position_ids, kv_caches, model_forward_parameters)['last_hidden_state']
         lm_logits = self.lm_head(hidden_state)
         return {'logits' : lm_logits}
