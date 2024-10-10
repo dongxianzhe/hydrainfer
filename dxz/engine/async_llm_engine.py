@@ -31,9 +31,9 @@ class AsyncLLMEngine:
                 torch.empty(size=(input_ids.shape[0] + max_tokens, n_head, n_embd // n_head), device=torch.device('cuda:0')))
                 for _ in range(n_layer)
             ]
-            model_forward_parameters = InputParameters(cache_length=0)
+            input_params = InputParameters(cache_length=0)
             for _ in range(max_tokens):
-                logits = self.model(input_ids=input_ids, position_ids=position_ids, kv_caches=kv_caches, model_forward_parameters=model_forward_parameters)['logits'] # (n_tokens, vocab_size)
+                logits = self.model(input_ids=input_ids, position_ids=position_ids, kv_caches=kv_caches, input_params=input_params)['logits'] # (n_tokens, vocab_size)
                 next_token_logits = logits[-1, :] # (vocab_size, )
                 next_token_id = torch.argmax(next_token_logits, dim=-1, keepdim=True) # (1, )
                 output_ids.append(next_token_id.item())
@@ -44,7 +44,7 @@ class AsyncLLMEngine:
                 total_tokens += 1
                 input_ids = next_token_id # (n_tokens=1, )
                 position_ids  = torch.tensor(total_tokens - 1, dtype=torch.int, device=torch.device('cuda:0'))
-                model_forward_parameters = InputParameters(cache_length=total_tokens - 1)
+                input_params = InputParameters(cache_length=total_tokens - 1)
 
             results.append(prompt + self.tokenizer.decode(output_ids))
         

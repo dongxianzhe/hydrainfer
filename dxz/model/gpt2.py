@@ -6,59 +6,33 @@ from torch import nn
 from torch import Tensor
 from transformers import GPT2Config
 from dxz.model.parameters import InputParameters
-
-class NewGELUActivation(nn.Module):
-    def forward(self, input: Tensor) -> Tensor:
-        return 0.5 * input * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (input + 0.044715 * torch.pow(input, 3.0))))
+from dxz.layer.activation import NewGELUActivation
 
 class Attention(nn.Module):
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, sm_scale: Optional[float] = None, logits_soft_cap: Optional[float] = None, alibi_biases: Optional[Tensor] = None, mask: Optional[Tensor] = None) -> Tensor:
-        # query (q_seq_len, num_heads, head_size)
-        # key   (k_seq_len, num_heads, head_size)
-        # value (k_seq_len, num_heads, head_size)
-        # alibi_biases (num_heads, q_seq_len, k_seq_len)
+    def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
+        super().__init__()
+        self.n_qo_heads  = n_qo_heads
+        self.n_kv_heads = n_kv_heads
+        self.head_dim   = head_dim
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, kv_cache: tuple[Tensor, Tensor], input_params: InputParameters) -> Tensor:
+        # query (q_seq_len, num_heads * head_size)
+        # key   (k_seq_len, num_heads * head_size)
+        # value (k_seq_len, num_heads * head_size)
         # only support q_seq_len == k_seq_len because not support flat tensor and kv cache. the batch can only be one now
-        scores = torch.einsum("qhd,khd->hqk", query.to(torch.float32), key.to(torch.float32))
-        if sm_scale is not None:
-            scores *= sm_scale
-
-        if logits_soft_cap is not None:
-            scores = torch.tanh(scores / logits_soft_cap) * logits_soft_cap
-        
-        if alibi_biases is not None:
-            scores += alibi_biases
-        
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float('-inf'))
-
-        scores = torch.softmax(scores, dim=-1)
-        return torch.einsum("hqk,khd->qhd", scores, value)
-
-class GPT2Attention(nn.Module):
-    def __init__(self, config: GPT2Config):
-        super(GPT2Attention, self).__init__()
-        self.config = config
-        self.c_attn = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=True)
-        self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
-        self.atten = Attention()
-    
-    def forward(self, hidden_states: Tensor, kv_cache: Tensor, model_forward_parameters: InputParameters) -> Tensor:
-        q_seq_len = hidden_states.shape[0]
-
-        qkv = self.c_attn(hidden_states)
-
-        # new kv token
-        q, k, v = qkv.chunk(chunks=3, dim=-1)
-        q = q.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
-        k = k.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
-        v = v.view(-1, self.config.n_head, self.config.hidden_size // self.config.n_head)
+        q = query.view(-1, self.n_qo_heads, self.head_dim)
+        k = key.view(-1, self.n_kv_heads, self.head_dim)
+        v = value.view(-1, self.n_kv_heads, self.head_dim)
         # set kv cache
-        n_old_token = model_forward_parameters.cache_length
+        n_old_token = input_params.cache_length
         n_new_token = q.shape[0]
         n_token = n_old_token + n_new_token
         k_cache, v_cache = kv_cache
         k_cache[n_old_token : n_token].data.copy_(k)
         v_cache[n_old_token : n_token].data.copy_(v)
+
+        # creat sm_scale
+        sm_scale = 1. / math.sqrt(q.shape[-1])
 
         # create mask
         q_seq_len = n_new_token
@@ -69,12 +43,50 @@ class GPT2Attention(nn.Module):
             mask = None
         k = k_cache[: kv_seq_len]
         v = v_cache[: kv_seq_len]
-        attn_output = self.atten(q, k, v, sm_scale = 1. / math.sqrt(q.shape[-1]), mask=mask)
-        attn_output = attn_output.reshape(q_seq_len, self.config.hidden_size)
+
+        # q @ k
+        scores = torch.einsum("qhd,khd->hqk", q.to(torch.float32), k.to(torch.float32))
+
+        # sm_scale
+        if sm_scale is not None:
+            scores *= sm_scale
+        # casual mask        
+        if mask is not None:
+            scores = scores.masked_fill(mask == 0, float('-inf'))
+
+        # softmax
+        scores = torch.softmax(scores, dim=-1)
+
+        # s@v
+        o = torch.einsum("hqk,khd->qhd", scores, v)
+        return o.view(q_seq_len, -1)
+        # attn_output = attn_output.reshape(q_seq_len, self.config.hidden_size)
+
+class GPT2Attention(nn.Module):
+    def __init__(self, config: GPT2Config):
+        super(GPT2Attention, self).__init__()
+        self.config = config
+        self.c_attn = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=True)
+        self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
+        self.atten = Attention(
+            n_qo_heads=config.n_head,
+            n_kv_heads=config.n_head,
+            head_dim=config.hidden_size // config.n_head
+        )
+    
+    def forward(self, hidden_states: Tensor, kv_cache: Tensor, input_params: InputParameters) -> Tensor:
+        q_seq_len = hidden_states.shape[0]
+
+        qkv = self.c_attn(hidden_states)
+
+        # new kv token
+        q, k, v = qkv.chunk(chunks=3, dim=-1)
+        # ---------------------------------------------
+        attn_output = self.atten(q, k, v, kv_cache, input_params)
+
+        # ---------------------------------------------
 
         attn_output = self.c_proj(attn_output)
-
-        # print_once(f'attn_output {attn_output.shape} {attn_output}')
 
         return attn_output
 
@@ -102,10 +114,10 @@ class GPT2Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
         self.mlp = GPT2MLP(config)
 
-    def forward(self, hidden_states: Tensor, kv_cache: tuple[Tensor, Tensor], model_forward_parameters: InputParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor, kv_cache: tuple[Tensor, Tensor], input_params: InputParameters) -> Tensor:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
-        attn_output = self.attn(hidden_states, kv_cache, model_forward_parameters)
+        attn_output = self.attn(hidden_states, kv_cache, input_params)
         hidden_states = attn_output + residual
 
         residual = hidden_states
@@ -122,7 +134,7 @@ class GPT2Model(nn.Module):
         self.h = nn.ModuleList([GPT2Block(config) for _ in range(config.num_hidden_layers)])
         self.ln_f = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_epsilon)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: InputParameters) -> dict[str, Tensor]:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], input_params: InputParameters) -> dict[str, Tensor]:
         input_embeds = self.wte(input_ids)
         position_embeds = self.wpe(position_ids)
         hidden_states = input_embeds + position_embeds
@@ -130,7 +142,7 @@ class GPT2Model(nn.Module):
         all_hidden_states = ()
         for i, layer in enumerate(self.h):
             all_hidden_states += (hidden_states, )
-            hidden_states = layer(hidden_states, kv_caches[i], model_forward_parameters)
+            hidden_states = layer(hidden_states, kv_caches[i], input_params)
         hidden_states = self.ln_f(hidden_states)
         all_hidden_states += (hidden_states, )
         return {
@@ -151,8 +163,8 @@ class GPT2LMHeadModel(nn.Module):
         self.transformer = GPT2Model(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], model_forward_parameters: InputParameters) -> dict[str, Tensor]:
-        hidden_state = self.transformer(input_ids, position_ids, kv_caches, model_forward_parameters)['last_hidden_state']
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[tuple[Tensor, Tensor]], input_params: InputParameters) -> dict[str, Tensor]:
+        hidden_state = self.transformer(input_ids, position_ids, kv_caches, input_params)['last_hidden_state']
         lm_logits = self.lm_head(hidden_state)
         return {'logits' : lm_logits}
     
