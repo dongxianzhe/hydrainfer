@@ -1,42 +1,78 @@
 import torch
 from torch import nn, Tensor
 from dxz.model.parameters import InputParameters
-
-class KVCache:
-    # todo
-    pass
+from dxz.memory.kv_cache import KVCache
 
 class Attention(nn.Module):
-    def __init__(n_qo_head: int, n_kv_heads: int, head_dim: int, handler: str, sliding_window:int=-1):
+    def __init__(n_qo_head: int, n_kv_heads: int, head_dim: int):
+        super().__init__()
         assert n_qo_head % n_kv_heads == 0, f"n_qo_heads {n_qo_head} is not divisible by n_kv_heads {n_kv_heads}"
         # todo handler
         # todo sliding window
         self.n_qo_head      = n_qo_head
         self.n_kv_heads     = n_kv_heads
         self.head_dim       = head_dim
-        self.handler        = handler
-        self.sliding_window = sliding_window
 
-    def forward(query: Tensor, key: Tensor, value: Tensor, positions: Tensor, kv_cache: KVCache, input_params: InputParameters):
+    def forward(query: Tensor, key: Tensor, value: Tensor, kv_cache: KVCache, input_params: InputParameters):
         # query (n_tokens, n_qo_heads * head_dim)
         # key/value (n_tokens, n_kv_heads * head_dim)
-        # position (n_tokens, )
         # return (n_tokens, n_heads, head_dim)
-        # 1. apply positional embedding
-        # 2. append kv cache
-        # 3. o = softmax(mask(alibi_bias(logits_soft_cap(sm_scale(q@k))))@v
+        # 1. reshape queyy key value shape
+        # 2. rotary position embedding
+        # 3. append kv cache page attention
+        # 4. o = softmax(mask(alibi_bias(logits_soft_cap(sm_scale(q@k))))@v flash atten kernel todo
+
+        # 1. reshape queyy key value shape
         n_tokens = query.shape[0]
         q = query.view(n_tokens, self.n_qo_head, self.head_dim)
-        k = query.view(n_tokens, self.n_kv_head, self.head_dim)
-        v = query.view(n_tokens, self.n_kv_head, self.head_dim)
+        k = key.view(n_tokens, self.n_kv_head, self.head_dim)
+        v = value.view(n_tokens, self.n_kv_head, self.head_dim)
 
-        q,k = handler.apply_pos_emb(q, k, positions)
+        # 2. append new kv cache
+        input_params.to(torch.device('cpu'))
+        key_cache, value_cache = kv_cache.get_kv_cache()
+        block_size = kv_cache.block_size
+        for i, slot_id in input_params.new_cache_slots:
+            block_id = slot_id // block_size
+            block_offset = slot_id  % block_size
+            key_cache[block_id, block_offset, :, :] = key[i, :, :]
+            value_cache[block_id, block_offset, :, :] = value[i, :, :]
+        
+        outputs = []
+        # 3. compute for each sequence
+        for i in input_params.num_sequences:
+            block_table = input_params.block_tables[input_params.cu_blocks_lens[i + 1] - input_params.cu_blocks_lens[i]]
+            key = key_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
+            value = value_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
+            k = key[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i], :, :]
+            v = value[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i],:, :]
+            q = query[input_params.q_cu_seq_lens[i]: input_params.q_cu_seq_lens[i + 1], :, :]
+            # q (qo_seq_len, n_qo_heads, head_dim)
+            # k (kv_seq_len, n_kv_heads, head_dim)
+            # v (kv_seq_len, n_kv_heads, head_dim)
+            group_size = q.shape[1] // k.shape[1]
+            k = k.repeat_interleave(repeats=group_size, dim=1)
+            v = v.repeat_interleave(repeats=group_size, dim=1)
+            # k (kv_seq_len, n_qo_heads, head_dim)
+            # v (kv_seq_len, n_qo_heads, head_dim)
 
-        handler.append_kv_cache(kv_cache, k, v, input_params)
+            # compute score
+            scores = torch.einsum('qhd,khd->hqk', q, k)
 
-        o = torch.empty_like(q)
-        if input_params.empty_kv_cache:
-            handler.batch_prefill(q, k, v, input_params, self.sliding_window, o)
-        else:
-            handler.batch_decode(q, k, v, input_params, self.sliding_window, o)
-        return o.view(n_tokens, -1)
+            # sm_scale
+            sm_scale = 1. / math.sqrt(q.shape[-1])
+            scores *= sm_scale
+
+            # mask
+            num_heads, q_seq_len, k_seq_len = scores.shape
+            x = torch.arange(k_seq_len, device=q.device)[None, None, :].repeat(num_heads, q_seq_len, 1)
+            y = torch.arange(q_seq_len, device=q.device)[None, :, None].repeat(num_heads, 1, k_seq_len)
+            mask = x - y > (k_seq_len - q_seq_len)
+            scores = scores.masked_fill_(mask=mask, value=float('-inf'))
+
+            # softmax
+            scores = torch.softmax(scores, dim=-1)
+            o = torch.einsum("hqk,khd->qhd", scores, v)
+            outputs.append(o)
+
+        return torch.cat(outputs, dim=0)
