@@ -7,11 +7,12 @@ class KVCache:
         # key_cache   (num_blocks, block_size, num_kv_heads, head_size)
         # value_cache (num_blocks, block_size, num_kv_heads, head_size)
         assert key_cache.shape == value_cache.shape
-        assert key_cache.device == value.device
+        assert key_cache.device == value_cache.device
+        assert key_cache.dim() == 4
 
         self.key_cache = key_cache
         self.value_cache = value_cache
-        self.num_blocks, self.block_size, self.num_kv_heads, self.head_size = key.shape
+        self.num_blocks, self.block_size, self.num_kv_heads, self.head_size = key_cache.shape
 
     def empty(self) -> bool:
         return key_cache is None or value_cache is None
@@ -33,7 +34,7 @@ class KVCache:
         num_tokens = slot_ids.shape[0]
         for i in range(num_tokens):
             block_id = slot_ids[i] // self.block_size
-            block_offset = slot_ids % self.block_size
-            self.key_cache[block_id, block_offset, :, :] = keys[i]
-            self.value_cache[block_id, block_offset, :, :] = values[i]
-        
+            block_offset = slot_ids[i] % self.block_size
+            self.key_cache[block_id, block_offset, :, :] = keys[i, :, :]
+            self.value_cache[block_id, block_offset, :, :] = values[i, :, :]
+        slot_ids = slot_ids.to(keys.device)
