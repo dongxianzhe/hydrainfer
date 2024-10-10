@@ -8,5 +8,4 @@ build/
 .vscode/
 dist/
 commands
-dxz/utils
 **/*.so
