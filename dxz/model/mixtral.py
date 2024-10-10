@@ -2,6 +2,7 @@ import torch
 from torch import nn, Tensor
 from transformers import MixtralConfig
 from torch.nn import functional
+from typing import Optional
 
 class MixtralBlockSparseTop2MLP(nn.Module):
     def __init__(self, config: MixtralConfig):
@@ -12,10 +13,20 @@ class MixtralBlockSparseTop2MLP(nn.Module):
         self.w3 = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.act_fn = nn.SiLU()
     
-    def forward(self, hidden_states: Tensor) -> Tensor:
-        current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
-        current_hidden_states = self.w2(current_hidden_states)
-        return current_hidden_states
+    def forward(self, hidden_states: Tensor, streams: Optional[list[torch.cuda.Stream]]=None) -> Tensor:
+        if streams:
+            with torch.cuda.stream(streams[0]):
+                h1 = self.act_fn(self.w1(hidden_states))
+            with torch.cuda.stream(streams[1]):
+                h2 = self.w3(hidden_states)
+            current_hidden_states =  h1 * h2
+            current_hidden_states = self.w2(current_hidden_states)
+            return current_hidden_states
+        else:
+            current_hidden_states = self.act_fn(self.w1(hidden_states)) * self.w3(hidden_states)
+            current_hidden_states = self.w2(current_hidden_states)
+            return current_hidden_states
+
 
 class MixtralSparseMoeBlock(nn.Module):
     def __init__(self, config: MixtralConfig):
@@ -24,7 +35,7 @@ class MixtralSparseMoeBlock(nn.Module):
         self.gate = nn.Linear(config.hidden_size, config.num_local_experts)
         self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(config.num_local_experts)])
     
-    def forward(self, hidden_states: Tensor) -> Tensor:
+    def forward(self, hidden_states: Tensor, streams: Optional[list[torch.cuda.Stream]]=None) -> Tensor:
         # hidden_states (n_tokens, hidden_state)
         router_logits = self.gate(hidden_states) # (n_tokens, num_local_experts)
         routing_weights = functional.softmax(router_logits, dim=-1, dtype=torch.float) # (n_tokens, num_local_experts)
@@ -37,13 +48,23 @@ class MixtralSparseMoeBlock(nn.Module):
 
         final_hidden_states = torch.zeros(size=(hidden_states.shape[0], self.config.hidden_size), dtype=hidden_states.dtype, device=hidden_states.device)
         for expert_idx in range(self.config.num_local_experts):
-            # exper_mask[expert_idx] (num_experts_per_tok, n_tokens)
-            weight_ids, token_ids = torch.where(expert_mask[expert_idx])
-            current_state = hidden_states[token_ids]
-            # current_state (n, hidden_size)
-            current_hidden_states = self.experts[expert_idx](current_state) * routing_weights[token_ids, weight_ids, None]
-            # current_hidden_states (n, hidden_size)
-            final_hidden_states.index_add_(dim=0, index=token_ids, source=current_hidden_states.to(hidden_states.dtype))
+            if streams:
+                with torch.cuda.stream(streams[expert_idx % 2]):
+                    # exper_mask[expert_idx] (num_experts_per_tok, n_tokens)
+                    weight_ids, token_ids = torch.where(expert_mask[expert_idx])
+                    current_state = hidden_states[token_ids]
+                    # current_state (n, hidden_size)
+                    current_hidden_states = self.experts[expert_idx](current_state) * routing_weights[token_ids, weight_ids, None]
+                    # current_hidden_states (n, hidden_size)
+                    final_hidden_states.index_add_(dim=0, index=token_ids, source=current_hidden_states.to(hidden_states.dtype))
+            else:
+                # exper_mask[expert_idx] (num_experts_per_tok, n_tokens)
+                weight_ids, token_ids = torch.where(expert_mask[expert_idx])
+                current_state = hidden_states[token_ids]
+                # current_state (n, hidden_size)
+                current_hidden_states = self.experts[expert_idx](current_state) * routing_weights[token_ids, weight_ids, None]
+                # current_hidden_states (n, hidden_size)
+                final_hidden_states.index_add_(dim=0, index=token_ids, source=current_hidden_states.to(hidden_states.dtype))
 
         return final_hidden_states
 
