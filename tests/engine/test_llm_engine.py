@@ -12,7 +12,7 @@ if __name__ == '__main__':
     prompt = "Hello"
     # my model
     llm_engine = AsyncLLMEngine()
-    results: list[str] = asyncio.run(llm_engine.generate([prompt]))
+    results: list[str] = asyncio.run(llm_engine.generate_page_attention([prompt]))
     result: str = results[0]
 
     # ref

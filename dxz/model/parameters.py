@@ -4,7 +4,7 @@ from typing import Optional
 
 class InputParameters:
     def __init__(self,
-            cache_length,
+            # cache_length,
             num_sequences: int = 0,
             empty_kv_cache_for_all_sequences: bool=True,
             q_cu_seq_lens: Optional[Tensor]=None,
@@ -13,11 +13,11 @@ class InputParameters:
             block_tables: Optional[Tensor]=None,
             cu_blocks_lens: Optional[Tensor]=None
            ):
-        self.cache_length = cache_length
+        # self.cache_length = cache_length
         # todo remove fixed size kv cache
 
         # total number of sequences in the batch
-        self.num_sequences = 0
+        self.num_sequences = num_sequences
         # whether the kv cache is empty for all sequences
         self.empty_kv_cache_for_all_sequences = True
         # cumulative sequence length of each sequence
@@ -38,14 +38,14 @@ class InputParameters:
         # IntTensor (n_seq + 1, )
         self.cu_blocks_lens = cu_blocks_lens
     
-    def to(device: torch.device):
-        if q_cu_seq_lens   is not None: 
-            self.q_cu_seq_lens   = q_cu_seq_lens.to(device)
-        if kv_cu_seq_lens  is not None: 
-            self.kv_cu_seq_lens  = kv_cu_seq_lens.to(device)
-        if new_cache_slots is not None: 
-            self.new_cache_slots = new_cache_slots.to(device)
-        if block_tables    is not None: 
-            self.block_tables    = block_tables.to(device)
-        if cu_blocks_lens  is not None: 
-            self.cu_blocks_lens  = cu_blocks_lens.to(device)
+    def to(self, device: torch.device):
+        if self.q_cu_seq_lens   is not None: 
+            self.q_cu_seq_lens   = self.q_cu_seq_lens.to(device)
+        if self.kv_cu_seq_lens  is not None: 
+            self.kv_cu_seq_lens  = self.kv_cu_seq_lens.to(device)
+        if self.new_cache_slots is not None: 
+            self.new_cache_slots = self.new_cache_slots.to(device)
+        if self.block_tables    is not None: 
+            self.block_tables    = self.block_tables.to(device)
+        if self.cu_blocks_lens  is not None: 
+            self.cu_blocks_lens  = self.cu_blocks_lens.to(device)
