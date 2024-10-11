@@ -10,60 +10,6 @@ from dxz.layer.activation import NewGELUActivation
 from dxz.memory.kv_cache import KVCache
 from dxz.layer.attention import Attention
 
-# class Attention(nn.Module):
-#     def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
-#         super().__init__()
-#         self.n_qo_heads  = n_qo_heads
-#         self.n_kv_heads = n_kv_heads
-#         self.head_dim   = head_dim
-
-#     def forward(self, query: Tensor, key: Tensor, value: Tensor, kv_cache: tuple[Tensor, Tensor], input_params: InputParameters) -> Tensor:
-#         # query (q_seq_len, num_heads * head_size)
-#         # key   (k_seq_len, num_heads * head_size)
-#         # value (k_seq_len, num_heads * head_size)
-#         # only support q_seq_len == k_seq_len because not support flat tensor and kv cache. the batch can only be one now
-#         q = query.view(-1, self.n_qo_heads, self.head_dim)
-#         k = key.view(-1, self.n_kv_heads, self.head_dim)
-#         v = value.view(-1, self.n_kv_heads, self.head_dim)
-#         # set kv cache
-#         n_old_token = input_params.cache_length
-#         n_new_token = q.shape[0]
-#         n_token = n_old_token + n_new_token
-#         k_cache, v_cache = kv_cache
-#         k_cache[n_old_token : n_token].data.copy_(k)
-#         v_cache[n_old_token : n_token].data.copy_(v)
-
-#         # creat sm_scale
-#         sm_scale = 1. / math.sqrt(q.shape[-1])
-
-#         # create mask
-#         q_seq_len = n_new_token
-#         kv_seq_len = n_token
-#         if q_seq_len == kv_seq_len: # prefill state
-#             mask = torch.tril(torch.ones(size=(q_seq_len, q_seq_len), dtype=torch.bool, device=q.device))
-#         else: # decode state
-#             mask = None
-#         k = k_cache[: kv_seq_len]
-#         v = v_cache[: kv_seq_len]
-
-#         # q @ k
-#         scores = torch.einsum("qhd,khd->hqk", q.to(torch.float32), k.to(torch.float32))
-
-#         # sm_scale
-#         if sm_scale is not None:
-#             scores *= sm_scale
-#         # casual mask        
-#         if mask is not None:
-#             scores = scores.masked_fill(mask == 0, float('-inf'))
-
-#         # softmax
-#         scores = torch.softmax(scores, dim=-1)
-
-#         # s@v
-#         o = torch.einsum("hqk,khd->qhd", scores, v)
-#         return o.view(q_seq_len, -1)
-#         # attn_output = attn_output.reshape(q_seq_len, self.config.hidden_size)
-
 class GPT2Attention(nn.Module):
     def __init__(self, config: GPT2Config):
         super(GPT2Attention, self).__init__()
@@ -80,7 +26,6 @@ class GPT2Attention(nn.Module):
         qkv = self.c_attn(hidden_states)
         q, k, v = qkv.chunk(chunks=3, dim=-1)
         attn_output = self.atten(q, k, v, kv_cache, input_params)
-        # print(f'attn_output.shape {attn_output.shape}')
         attn_output = self.c_proj(attn_output)
         return attn_output
 

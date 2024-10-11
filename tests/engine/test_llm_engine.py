@@ -1,12 +1,8 @@
-# from dxz.engine.llm_engine import LLMEngine
 from dxz.engine.async_llm_engine import AsyncLLMEngine
 import asyncio
-
 import torch
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from transformers import GPT2Tokenizer
-
-
 
 if __name__ == '__main__':
     prompt = "Hello"
@@ -33,8 +29,8 @@ if __name__ == '__main__':
 
     decoded_output = tokenizer.decode(encoded_input)
 
-    print('------------------------------')
+    print('------------my engine------------------')
     print(result)
-    print('------------------------------')
+    print('---------------ref outout---------------')
     print(decoded_output)
     assert result == decoded_output

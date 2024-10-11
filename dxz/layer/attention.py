@@ -42,10 +42,6 @@ class Attention(nn.Module):
         outputs = []
         # 3. compute for each sequence
         for i in range(input_params.num_sequences):
-            # print(f'input_params.block_tables.shape {input_params.block_tables.shape}')
-            # print(f'input_params.block_tables {input_params.block_tables}')
-            # print(f'input_params.cu_blocks_lens.shape {input_params.cu_blocks_lens.shape}')
-            # print(f'input_params.cu_blocks_lens {input_params.cu_blocks_lens}')
             block_table = input_params.block_tables[:input_params.cu_blocks_lens[i + 1] - input_params.cu_blocks_lens[i]]
             key = key_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
             value = value_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
@@ -80,8 +76,6 @@ class Attention(nn.Module):
             o = torch.einsum("hqk,khd->qhd", scores, v)
             outputs.append(o)
 
-        # print(f'input_params.num_sequences: {input_params.num_sequences}')
         output = torch.cat(outputs, dim=0)
         output = output.view(-1, self.n_qo_heads * self.head_dim)
-        # print(f'output.shape {output.shape}')
         return output

@@ -4,22 +4,16 @@ from typing import Optional
 
 class InputParameters:
     def __init__(self,
-            # cache_length,
             num_sequences: int = 0,
-            empty_kv_cache_for_all_sequences: bool=True,
             q_cu_seq_lens: Optional[Tensor]=None,
             kv_cu_seq_lens: Optional[Tensor]=None, 
             new_cache_slots: Optional[Tensor]=None,
             block_tables: Optional[Tensor]=None,
             cu_blocks_lens: Optional[Tensor]=None
            ):
-        # self.cache_length = cache_length
-        # todo remove fixed size kv cache
 
         # total number of sequences in the batch
         self.num_sequences = num_sequences
-        # whether the kv cache is empty for all sequences
-        self.empty_kv_cache_for_all_sequences = True
         # cumulative sequence length of each sequence
         # used to determine the token range for each sequence
         # IntTensor: (n_seq + 1)
