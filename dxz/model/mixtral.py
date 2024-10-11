@@ -6,6 +6,8 @@ from typing import Optional
 from dxz.memory.kv_cache import KVCache
 from dxz.model.parameters import InputParameters
 from dxz.layer.rotary_embedding import compute_default_inv_freq, RotaryEmbedding
+from dxz.layer.attention import Attention
+from dxz.utils.debug import print_once, probe
 
 class MixtralRMSNorm(nn.Module):
     def __init__(self, hidden_size: int, eps: float=1e-6):
@@ -83,21 +85,23 @@ class MixtralSparseMoeBlock(nn.Module):
     def __init__(self, config: MixtralConfig):
         super().__init__()
         self.config = config
-        self.gate = nn.Linear(config.hidden_size, config.num_local_experts)
+        self.gate = nn.Linear(config.hidden_size, config.num_local_experts, bias=False)
         self.experts = nn.ModuleList([MixtralBlockSparseTop2MLP(config) for _ in range(config.num_local_experts)])
     
     def forward(self, hidden_states: Tensor, streams: Optional[list[torch.cuda.Stream]]=None) -> Tensor:
+        n_tokens = hidden_states.shape[0]
         # hidden_states (n_tokens, hidden_state)
         router_logits = self.gate(hidden_states) # (n_tokens, num_local_experts)
         routing_weights = functional.softmax(router_logits, dim=-1, dtype=torch.float) # (n_tokens, num_local_experts)
         routing_weights, selected_experts = torch.topk(routing_weights, self.config.num_experts_per_tok, dim=-1)
+        routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         routing_weights = routing_weights.to(hidden_states.dtype)
         # routing_weights(n_tokens, num_experts_per_tok) selected_experts(n_tokens, num_experts_per_tok)
         expert_mask = functional.one_hot(selected_experts, num_classes=self.config.num_local_experts).permute(2, 1, 0)
         # expert_mask (n_tokens, num_experts_per_tok, num_local_experts) 
         # -- permute -> (num_local_experts, num_experts_per_tok, n_tokens)  
 
-        final_hidden_states = torch.zeros(size=(hidden_states.shape[0], self.config.hidden_size), dtype=hidden_states.dtype, device=hidden_states.device)
+        final_hidden_states = torch.zeros(size=(n_tokens, self.config.hidden_size), dtype=hidden_states.dtype, device=hidden_states.device)
         for expert_idx in range(self.config.num_local_experts):
             if streams:
                 with torch.cuda.stream(streams[expert_idx % 2]):
@@ -136,41 +140,44 @@ class MixtralAttention(nn.Module):
         self.k_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(self.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.num_heads * self.head_dim, self.hidden_size, bias=False)
+
         self.rotary_emb = RotaryEmbedding(
             rotary_dim = self.head_dim, 
             max_position_embeddings = self.max_position_embeddings, 
             inv_freq = compute_default_inv_freq(rotary_dim=self.head_dim, theta=self.rope_theta), 
             interleaved = False, 
         )
-        self.rotary_emb = MixtralRotaryEmbedding(
-            self.head_dim,
-            max_position_embeddings=self.max_position_embeddings,
-            base=self.rope_theta,
-        )
+
+        self.attention = Attention(n_qo_heads=self.num_heads, n_kv_heads=self.num_key_value_heads, head_dim=self.head_dim)
     
-    def forward(h: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor:
+    def forward(self, h: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor:
         q = self.q_proj(h)
         k = self.k_proj(h)
         v = self.v_proj(h)
-        # todo rotary embedding
+
+        # (n_tokens, n_qo_heads, head_dim)
+        n_tokens =q.shape[0]
+        q, k = q.view(n_tokens, self.num_heads, self.head_dim), k.view(n_tokens, self.num_key_value_heads, self.head_dim)
+        q, k = self.rotary_emb(q, k, position_ids)
+        q, k = q.view(n_tokens, -1), k.view(n_tokens, -1)
         h = self.attention(q, k, v, kv_cache, input_params)
         o = self.o_proj(h)
+
         return o
 
 class MixtralDecoderLayer(nn.Module):
     def __init__(self, config: MixtralConfig):
         super().__init__()
-        self.atten = atten
         # todo
         self.self_attn = MixtralAttention(config)
         self.block_sparse_moe = MixtralSparseMoeBlock(config)
         self.input_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(h: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor: 
+    def forward(self, h: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor: 
         r = h
         h = self.input_layernorm(h)
-        h = self.self_attn(h, kv_cache, input_params)
+        h = self.self_attn(h, position_ids, kv_cache, input_params)
         h = r + h
 
         r = h
@@ -182,23 +189,22 @@ class MixtralDecoderLayer(nn.Module):
 class MixtralModel(nn.Module):
     def __init__(self, config: MixtralConfig):
         super().__init__()
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
         self.layers = nn.ModuleList([MixtralDecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
     
-    def forward(input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> dict[str, Tensor]:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> dict[str, Tensor]:
         h = self.embed_tokens(input_ids)
         all_hidden_states = []
         for i, layer in enumerate(self.layers):
             all_hidden_states.append(h)
-            h = self.layer(h, kv_caches[i], input_params)
-        all_hidden_states.append(h)
+            h = layer(h, position_ids, kv_caches[i], input_params)
         h = self.norm(h)
+        all_hidden_states.append(h)
         return {
             "last_hidden_state" : h,
             "hidden_states" : all_hidden_states, # the input of [layer1, layer2, ... layer12, lm_heads]
         }
-
     
 
 class MixtralForCausalLM(nn.Module):
@@ -207,14 +213,13 @@ class MixtralForCausalLM(nn.Module):
         self.model = MixtralModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> dict[str, Tensor]:
-        h = self.model(input_ids, position_ids, kv_caches, input_params)['last_hidden_state']
+    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> dict[str, Tensor]:
+        model_output = self.model(input_ids, position_ids, kv_caches, input_params)
+        h = model_output['last_hidden_state']
         lm_logits = self.lm_head(h)
-        return {"logits" : lm_logits}
+        return {"logits" : lm_logits, "hidden_states": model_output['hidden_states']}
 
-
-if __name__ == '__main__':
-    config = MixtralConfig()
-    # print(config._attn_implementation)
-    # print(config._attn_implementation)
-    # model = MixtralSparseMoeBlock()
+    def load_state_dict(self, state_dict_ref: dict[str, Tensor]) -> None:
+        state_dict = self.state_dict()
+        for name, weight in state_dict_ref.items():
+            state_dict[name].data.copy_(weight)

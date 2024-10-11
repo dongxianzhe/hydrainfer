@@ -2,6 +2,7 @@ import torch
 from torch import nn, Tensor
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
+from dxz.layer.rotary_embedding import RotaryEmbedding
 import math
 
 class Attention(nn.Module):
