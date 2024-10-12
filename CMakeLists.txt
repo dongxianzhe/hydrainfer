@@ -85,5 +85,5 @@ add_compile_definitions(TORCH_CUDA=1)
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
 message(STATUS "CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
 
-add_subdirectory(kernel)
+add_subdirectory(csrc)
 add_subdirectory(third_party)
