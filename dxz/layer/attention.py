@@ -4,6 +4,11 @@ from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.layer.rotary_embedding import RotaryEmbedding
 import math
+try:
+    from dxz.kernel.flash_attn import mha_varlen_fwd
+except ImportError:
+    print('flash attention import failed')
+    mha_varlen_fwd = None
 
 class Attention(nn.Module):
     def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
@@ -40,8 +45,32 @@ class Attention(nn.Module):
             key_cache[block_id, block_offset, :, :] = key[i, :, :]
             value_cache[block_id, block_offset, :, :] = value[i, :, :]
         
+        # 3. compute for each sequence with flash attn
+        if mha_varlen_fwd:
+            output=torch.empty_like(query).to(torch.half)
+            input_params.to(query.device)
+            mha_varlen_fwd(
+                output,
+                query.to(torch.half),
+                key_cache.to(torch.half), 
+                value_cache.to(torch.half), 
+                input_params.q_cu_seq_lens, 
+                input_params.kv_cu_seq_lens, 
+                input_params.block_tables, 
+                input_params.cu_blocks_lens, 
+                None,
+                128,
+                128,
+                1. / math.sqrt(self.head_dim),
+                0.,
+                -1,
+                -1,
+                0
+            )
+            return output.view(-1, self.n_qo_heads * self.head_dim).to(query.dtype)
+
+        # 3. compute for each sequence with pytorch
         outputs = []
-        # 3. compute for each sequence
         for i in range(input_params.num_sequences):
             block_table = input_params.block_tables[:input_params.cu_blocks_lens[i + 1] - input_params.cu_blocks_lens[i]]
             key = key_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)

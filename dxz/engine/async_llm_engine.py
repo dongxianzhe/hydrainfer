@@ -39,7 +39,7 @@ class AsyncLLMEngine:
                 q_cu_seq_lens = torch.tensor([0, prompt_length], dtype=torch.int), 
                 kv_cu_seq_lens = torch.tensor([0, prompt_length], dtype=torch.int), 
                 new_cache_slots = torch.arange(prompt_length, dtype=torch.int), 
-                block_tables = torch.arange(num_blocks), 
+                block_tables = torch.arange(num_blocks, dtype=torch.int), 
                 cu_blocks_lens = torch.tensor([0, num_blocks], dtype=torch.int)
             )
 
@@ -60,7 +60,7 @@ class AsyncLLMEngine:
                     q_cu_seq_lens = torch.tensor([0, 1], dtype=torch.int), 
                     kv_cu_seq_lens = torch.tensor([0, len(output)], dtype=torch.int), 
                     new_cache_slots = torch.tensor([len(output) - 1], dtype=torch.int), 
-                    block_tables = torch.arange(num_blocks), 
+                    block_tables = torch.arange(num_blocks, dtype=torch.int), 
                     cu_blocks_lens = torch.tensor([0, num_blocks], dtype=torch.int)
                 )
             results.append(self.tokenizer.decode(output))

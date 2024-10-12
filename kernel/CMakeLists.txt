@@ -1,1 +1,2 @@
+add_subdirectory(flash_attn)
 add_subdirectory(gemm)

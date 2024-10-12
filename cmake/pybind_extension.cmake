@@ -58,7 +58,7 @@ function(pybind_extension)
     PY # prefix
     "TESTONLY" # options
     "NAME" # one value args
-    "HDRS;SRCS;COPTS;DEFINES;LINKOPTS;LINKDIRS;DEPS" # multi value args
+    "HDRS;SRCS;COPTS;DEFINES;LINKOPTS;LINKDIRS;DEPS;INCLUDES" # multi value args
     ${ARGN}
   )
 
@@ -69,6 +69,12 @@ function(pybind_extension)
   add_library(${PY_NAME} SHARED)
   target_sources(${PY_NAME} 
     PRIVATE ${PY_SRCS} ${PY_HDRS}
+  )
+  target_include_directories(${PY_NAME}
+    PUBLIC 
+      "$<BUILD_INTERFACE:${COMMON_INCLUDE_DIRS}>"
+    PRIVATE
+      ${PY_INCLUDES}
   )
   target_link_libraries(${PY_NAME}
     PUBLIC ${PY_DEPS}
