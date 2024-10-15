@@ -20,7 +20,6 @@ class LLMEngine:
         self.block_size = 16
         self.head_size = self.config.n_embd // self.config.n_head
         self.num_blocks = 4 * 1024 * 1024 * 1024 // 2 // self.config.n_embd // self.block_size // self.config.n_layer
-        print(f'num_blocks: {self.num_blocks}')
         self.kv_caches = []
         for _ in range(self.config.n_layer):
             key_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=torch.device('cuda:0'), dtype=torch.half)
@@ -49,18 +48,6 @@ class LLMEngine:
             cu_blocks_lens.append(cu_blocks_lens[-1] + len(sequence.block_table))
             selected_token_ids.append(len(input_ids) - 1)
         
-        for i, sequence in enumerate(sequences):
-            print(f'sequence{i} {sequence.token_ids}')
-        print(f'input_ids          {input_ids}')
-        print(f'position_ids       {position_ids}')
-        print(f'q_cu_seq_lens      {q_cu_seq_lens}')
-        print(f'kv_cu_seq_lens     {kv_cu_seq_lens}')
-        print(f'block_tables       {block_tables}')
-        print(f'cu_blocks_lens     {cu_blocks_lens}')
-        print(f'new_cache_slots    {new_cache_slots}')
-        print(f'selected_token_ids {selected_token_ids}')
-        
-        
         input_ids = torch.tensor(input_ids, dtype=torch.int, device=self.device)
         position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.device)
         input_params = InputParameters(
@@ -79,11 +66,5 @@ class LLMEngine:
         # 3. sample
         logits = output['logits']
         sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to(torch.device('cpu'))
-        print(f'sample_token_ids   {sample_token_ids}')
         for i, token_id in enumerate(sample_token_ids):
-            print(f'sequence{i} append {token_id}')
             sequences[i].token_ids.append(token_id.item())
-        for i, sequence in enumerate(sequences):
-            print(f'sequence{i} {sequence.token_ids}')
-
-        print(f'------------------------------------------------------------')

@@ -42,17 +42,9 @@ class Attention(nn.Module):
         for i, slot_id in enumerate(input_params.new_cache_slots):
             block_id = slot_id // block_size
             block_offset = slot_id  % block_size
-            print(f'block_id     {block_id}')
-            print(f'block_offset {block_offset}')
             key_cache[block_id, block_offset, :, :] = key[i, :, :]
             value_cache[block_id, block_offset, :, :] = value[i, :, :]
 
-        print(f'input_params.num_sequences   {input_params.num_sequences}')
-        print(f'input_params.q_cu_seq_lens   {input_params.q_cu_seq_lens}')
-        print(f'input_params.kv_cu_seq_lens  {input_params.kv_cu_seq_lens}')
-        print(f'input_params.new_cache_slots {input_params.new_cache_slots}')
-        print(f'input_params.block_tables    {input_params.block_tables}')
-        print(f'input_params.cu_blocks_lens  {input_params.cu_blocks_lens}')
         # 3. compute for each sequence with flash attn
         # if mha_varlen_fwd:
         #     output=torch.empty_like(query)
@@ -81,7 +73,6 @@ class Attention(nn.Module):
         outputs = []
         for i in range(input_params.num_sequences):
             block_table = input_params.block_tables[input_params.cu_blocks_lens[i]: input_params.cu_blocks_lens[i + 1]]
-            print(f'sequence{i} block table {block_table}')
             key = key_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
             value = value_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
             k = key[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i], :, :].to(torch.float)
