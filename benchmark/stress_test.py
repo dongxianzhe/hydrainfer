@@ -5,8 +5,7 @@ import time
 import numpy as np
 import tqdm
 
-# url = "http://localhost:8888/generate"
-url = "http://localhost:9999/v1/completions"
+url = "http://localhost:8888/v1/completions"
 
 headers = {
     "Content-Type": "application/json"
