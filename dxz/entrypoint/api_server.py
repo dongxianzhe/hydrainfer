@@ -20,14 +20,15 @@ async def generate(request: Request) -> Response:
     request_dict = await request.json()
     prompt = request_dict.pop("prompt")
     global next_engine_id
-    print(f'{prompt} will be scheduled to {next_engine_id} instance')
 
+    # print(f'{prompt} will be scheduled to {next_engine_id} instance')
     # instance scheduler
     instance = async_llm_engines[next_engine_id]
     next_engine_id = (next_engine_id + 1) % len(async_llm_engines)
 
-    await instance.add_request.remote(prompt)
-    return JSONResponse({'text' : "todo return result"})
+    result = instance.add_request.remote(prompt)
+    output = ray.get(result)
+    return JSONResponse({'text' : output})
 
 if __name__ == '__main__':
     for i in range(1):

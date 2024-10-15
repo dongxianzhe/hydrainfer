@@ -7,9 +7,8 @@ import asyncio
 async def main():
     instance = AsyncLLMEngine()
     obj = asyncio.create_task(instance.start())
-    await instance.add_request("Hello")
-    # await asyncio.sleep(1)
-    # instance.add_request("World")
+    output = await instance.add_request("Hello")
+    print(output)
     await obj
 
 if __name__ == '__main__':
