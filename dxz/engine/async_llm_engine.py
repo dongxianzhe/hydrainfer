@@ -8,7 +8,7 @@ class AsyncLLMEngine:
     def __init__(self) -> None:
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.llm_engine = LLMEngine()
-        self.allocator = BlockAllocator(total_blocks=self.num_blocks)
+        self.allocator = BlockAllocator(self.llm_engine.num_blocks) # refactor num blocks
         self.queue = asyncio.Queue()
 
     async def add_request(self, prompt: str):
@@ -16,9 +16,10 @@ class AsyncLLMEngine:
         # 2. insert into queue
         # 3. return call back?
         sequence = Sequence() 
-        sequence.token_id = self.tokenizer.encode(prompt)
-        sequence.num_prompt_tokens = len(sequence.token_id)
-        self.queue.put(sequence)
+        sequence.token_ids = self.tokenizer.encode(prompt)
+        sequence.num_prompt_tokens = len(sequence.token_ids)
+        sequence.block_table = self.allocator.allocate(5)
+        await self.queue.put(sequence)
 
         # output = asyncio.Queue()
         # return output
@@ -33,15 +34,16 @@ class AsyncLLMEngine:
                 s = await self.queue.get()
                 batch.append(s)
 
-            self.llm_engine.execute_model(batch)
+            if len(batch) > 0:
+                self.llm_engine.execute_model(batch)
 
-            max_tokens = 50
-            for sequence in batch:
-                def check_stop(sequence: Sequence) -> bool:
-                    return len(sequence.token_ids) - sequence.num_prompt_tokens == max_tokens
-                if check_stop(sequence):
-                    print(self.tokenizer.decode(sequence.token_ids))
-                else:
-                    self.queue.put(sequence)
+                max_tokens = 50
+                for sequence in batch:
+                    def check_stop(sequence: Sequence) -> bool:
+                        return len(sequence.token_ids) - sequence.num_prompt_tokens == max_tokens
+                    if check_stop(sequence):
+                        print(self.tokenizer.decode(sequence.token_ids))
+                    else:
+                        await self.queue.put(sequence)
 
             await asyncio.sleep(0)

@@ -3,7 +3,7 @@ import torch
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from transformers import GPT2Tokenizer
 from dxz.engine.async_llm_engine import AsyncLLMEngine
-from dxz.request.Sequence import Sequence
+from dxz.request.sequence import Sequence
 
 if __name__ == '__main__':
     prompt = "Hello"
