@@ -15,7 +15,7 @@ class KVCache:
         self.num_blocks, self.block_size, self.num_kv_heads, self.head_size = key_cache.shape
 
     def empty(self) -> bool:
-        return key_cache is None or value_cache is None
+        return self.key_cache is None or self.value_cache is None
     
     def get_kv_cache(self) -> tuple[Tensor, Tensor]:
         return (self.key_cache, self.value_cache)
