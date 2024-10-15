@@ -4,7 +4,6 @@ from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from dxz.model.gpt2 import GPT2LMHeadModel
 from dxz.model.gpt2 import InputParameters
 from dxz.memory.block_allocator import BlockAllocator
-from dxz.request.sequence import Sequence
 from dxz.memory.kv_cache import KVCache
 import queue
 import asyncio

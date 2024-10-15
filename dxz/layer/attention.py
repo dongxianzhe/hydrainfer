@@ -42,42 +42,51 @@ class Attention(nn.Module):
         for i, slot_id in enumerate(input_params.new_cache_slots):
             block_id = slot_id // block_size
             block_offset = slot_id  % block_size
+            print(f'block_id     {block_id}')
+            print(f'block_offset {block_offset}')
             key_cache[block_id, block_offset, :, :] = key[i, :, :]
             value_cache[block_id, block_offset, :, :] = value[i, :, :]
-        
+
+        print(f'input_params.num_sequences   {input_params.num_sequences}')
+        print(f'input_params.q_cu_seq_lens   {input_params.q_cu_seq_lens}')
+        print(f'input_params.kv_cu_seq_lens  {input_params.kv_cu_seq_lens}')
+        print(f'input_params.new_cache_slots {input_params.new_cache_slots}')
+        print(f'input_params.block_tables    {input_params.block_tables}')
+        print(f'input_params.cu_blocks_lens  {input_params.cu_blocks_lens}')
         # 3. compute for each sequence with flash attn
-        if mha_varlen_fwd:
-            output=torch.empty_like(query).to(torch.half)
-            input_params.to(query.device)
-            mha_varlen_fwd(
-                output,
-                query.to(torch.half),
-                key_cache.to(torch.half), 
-                value_cache.to(torch.half), 
-                input_params.q_cu_seq_lens, 
-                input_params.kv_cu_seq_lens, 
-                input_params.block_tables, 
-                input_params.cu_blocks_lens, 
-                None,
-                128,
-                128,
-                1. / math.sqrt(self.head_dim),
-                0.,
-                -1,
-                -1,
-                0
-            )
-            return output.view(-1, self.n_qo_heads * self.head_dim).to(query.dtype)
+        # if mha_varlen_fwd:
+        #     output=torch.empty_like(query)
+        #     input_params.to(query.device)
+        #     mha_varlen_fwd(
+        #         output,
+        #         query, 
+        #         key_cache, 
+        #         value_cache, 
+        #         input_params.q_cu_seq_lens, 
+        #         input_params.kv_cu_seq_lens, 
+        #         input_params.block_tables, 
+        #         input_params.cu_blocks_lens, 
+        #         None,
+        #         128,
+        #         128,
+        #         1. / math.sqrt(self.head_dim),
+        #         0.,
+        #         -1,
+        #         -1,
+        #         0
+        #     )
+        #     return output.view(-1, self.n_qo_heads * self.head_dim).to(query.dtype)
 
         # 3. compute for each sequence with pytorch
         outputs = []
         for i in range(input_params.num_sequences):
-            block_table = input_params.block_tables[:input_params.cu_blocks_lens[i + 1] - input_params.cu_blocks_lens[i]]
+            block_table = input_params.block_tables[input_params.cu_blocks_lens[i]: input_params.cu_blocks_lens[i + 1]]
+            print(f'sequence{i} block table {block_table}')
             key = key_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
             value = value_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
-            k = key[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i], :, :]
-            v = value[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i],:, :]
-            q = query[input_params.q_cu_seq_lens[i]: input_params.q_cu_seq_lens[i + 1], :, :]
+            k = key[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i], :, :].to(torch.float)
+            v = value[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i],:, :].to(torch.float)
+            q = query[input_params.q_cu_seq_lens[i]: input_params.q_cu_seq_lens[i + 1], :, :].to(torch.float)
             # q (qo_seq_len, n_qo_heads, head_dim)
             # k (kv_seq_len, n_kv_heads, head_dim)
             # v (kv_seq_len, n_kv_heads, head_dim)
@@ -98,12 +107,12 @@ class Attention(nn.Module):
             num_heads, q_seq_len, k_seq_len = scores.shape
             x = torch.arange(k_seq_len, device=q.device)[None, None, :].repeat(num_heads, q_seq_len, 1)
             y = torch.arange(q_seq_len, device=q.device)[None, :, None].repeat(num_heads, 1, k_seq_len)
-            mask = x - y > (k_seq_len - q_seq_len)
-            scores = scores.masked_fill_(mask=mask, value=float('-inf'))
+            mask = (x - y) > (k_seq_len - q_seq_len)
+            scores.masked_fill_(mask=mask, value=float('-inf'))
 
             # softmax
             scores = torch.softmax(scores, dim=-1)
-            o = torch.einsum("hqk,khd->qhd", scores, v)
+            o = torch.einsum("hqk,khd->qhd", scores, v).to(query.dtype)
             outputs.append(o)
 
         output = torch.cat(outputs, dim=0)

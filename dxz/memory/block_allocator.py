@@ -1,5 +1,3 @@
-from dxz.memory.block import Block
-
 class BlockAllocator:
     def __init__(self, total_blocks: int):
         self.total_blocks = total_blocks
@@ -8,7 +6,7 @@ class BlockAllocator:
 
     def allocate(self, n_blocks: int) -> list[int]:
         assert n_blocks <= len(self.free_blocks), "not enough block to allocate"
-        blocks: list[Block] = []
+        blocks: list[int] = []
         for _ in range(n_blocks):
             block_id = self.free_blocks.pop()
             blocks.append(block_id)
