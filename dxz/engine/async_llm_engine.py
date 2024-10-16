@@ -76,7 +76,7 @@ class AsyncLLMEngine:
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.llm_engine = LLMEngine()
         self.allocator = BlockAllocator(self.llm_engine.num_blocks) # refactor num blocks
-        self.queue = asyncio.Queue(100)
+        self.queue = asyncio.Queue(1000)
 
         self.sequence_id_allocator = 0
 
@@ -87,7 +87,7 @@ class AsyncLLMEngine:
         # 2. insert into queue
         # 3. register call back and return an awaitable thing to wait async engine call back
         sequence = Sequence() 
-        sequence.sequence_id_allocator = self.sequence_id_allocator
+        sequence.id = self.sequence_id_allocator
         self.sequence_id_allocator += 1
         sequence.token_ids = self.tokenizer.encode(prompt)
         sequence.num_prompt_tokens = len(sequence.token_ids)
@@ -99,6 +99,7 @@ class AsyncLLMEngine:
 
         def callback(output: str) -> bool:
             return output_stream.put(output)
+
         self.callbacks[sequence.id] = callback
         output = await output_stream.__anext__()
 

@@ -46,28 +46,28 @@ class Attention(nn.Module):
             value_cache[block_id, block_offset, :, :] = value[i, :, :]
 
         # 3. compute for each sequence with flash attn
-        # if mha_varlen_fwd:
-        #     output=torch.empty_like(query)
-        #     input_params.to(query.device)
-        #     mha_varlen_fwd(
-        #         output,
-        #         query, 
-        #         key_cache, 
-        #         value_cache, 
-        #         input_params.q_cu_seq_lens, 
-        #         input_params.kv_cu_seq_lens, 
-        #         input_params.block_tables, 
-        #         input_params.cu_blocks_lens, 
-        #         None,
-        #         128,
-        #         128,
-        #         1. / math.sqrt(self.head_dim),
-        #         0.,
-        #         -1,
-        #         -1,
-        #         0
-        #     )
-        #     return output.view(-1, self.n_qo_heads * self.head_dim).to(query.dtype)
+        if mha_varlen_fwd:
+            output=torch.empty_like(query)
+            input_params.to(query.device)
+            mha_varlen_fwd(
+                output,
+                query, 
+                key_cache, 
+                value_cache, 
+                input_params.q_cu_seq_lens, 
+                input_params.kv_cu_seq_lens, 
+                input_params.block_tables, 
+                input_params.cu_blocks_lens, 
+                None,
+                128,
+                128,
+                1. / math.sqrt(self.head_dim),
+                0.,
+                -1,
+                -1,
+                0
+            )
+            return output.view(-1, self.n_qo_heads * self.head_dim).to(query.dtype)
 
         # 3. compute for each sequence with pytorch
         outputs = []
