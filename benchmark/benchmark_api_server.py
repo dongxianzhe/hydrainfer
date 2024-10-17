@@ -1,9 +1,11 @@
+from tqdm import tqdm
 import json
 from transformers import PreTrainedTokenizerBase, AutoTokenizer
 import random
-from typing import List, Tuple
+from typing import List, Tuple, AsyncGenerator
 import argparse
 import numpy as np
+import asyncio
 
 def sample_sharegpt_requests(
     dataset_path: str,
@@ -57,6 +59,37 @@ def sample_sharegpt_requests(
     sampled_requests = random.sample(filtered_dataset, num_requests)
     return sampled_requests
 
+async def get_request(
+    input_requests: List[Tuple[str, int, int]],
+    request_rate: float,
+) -> AsyncGenerator[Tuple[str, int, int], None]:
+    input_requests = iter(input_requests)
+    for request in input_requests:
+        yield request
+
+        if request_rate == float("inf"):
+            # If the request rate is infinity, then we don't need to wait.
+            continue
+        # Sample the request interval from the exponential distribution.
+        interval = np.random.exponential(1.0 / request_rate)
+        # The next request will be sent after the interval.
+        await asyncio.sleep(interval)
+
+async def benchmark(
+    input_requests: List[Tuple[str, int, int]], # (prompt, prompt length, output_lenght)
+    request_rate: float
+):
+    pbar = tqdm(total=len(input_requests))
+    tasks = []
+    async for request in get_request(input_requests, request_rate):
+        prompt, prompt_len, output_len = request
+        tasks.append(asyncio.sleep(0.1))
+        # tasks.append(asyncio.create_task(request_func(request_func_input=request_func_input,pbar=pbar)))
+    await asyncio.gather(*tasks)
+    # outputs: List[RequestFuncOutput] = await asyncio.gather(*tasks)
+    pbar.close()
+    # todo compute metrics
+
 def main(args: argparse.Namespace):
     # 1. set seed
     # 2. load dataset and sample request
@@ -68,8 +101,10 @@ def main(args: argparse.Namespace):
     tokenizer = AutoTokenizer.from_pretrained('gpt2')
     input_requests = sample_sharegpt_requests(dataset_path='./dataset/ShareGPT_V3_unfiltered_cleaned_split.json', num_requests=args.num_prompts, tokenizer=tokenizer)
 
-
-
+    asyncio.run(benchmark(
+        input_requests=input_requests,         
+        request_rate = args.request_rate
+    ))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Benchmark the online serving throughput.")
@@ -80,6 +115,15 @@ if __name__ == '__main__':
         type=int,
         default=1000,
         help="Number of prompts to process.",
+    )
+    parser.add_argument(
+        "--request-rate",
+        type=float,
+        default=float("inf"),
+        help="Number of requests per second. If this is inf, "
+        "then all the requests are sent at time 0. "
+        "Otherwise, we use Poisson process to synthesize "
+        "the request arrival times.",
     )
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
