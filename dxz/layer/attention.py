@@ -5,7 +5,7 @@ from dxz.memory.kv_cache import KVCache
 from dxz.layer.rotary_embedding import RotaryEmbedding
 import math
 try:
-    from dxz.kernel.flash_attn import mha_varlen_fwd
+    from dxz._C.kernel.flash_attn import mha_varlen_fwd
 except ImportError:
     print('flash attention import failed')
     mha_varlen_fwd = None
