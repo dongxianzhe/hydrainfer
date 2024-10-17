@@ -9,3 +9,10 @@ INCLUDES
 DEPS 
     torch # TODO: depends on CUDA instead of torch
 )    
+
+cc_library(
+  NAME 
+    flashinfer
+  INCLUDES
+    flashinfer/include
+)
