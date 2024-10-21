@@ -26,6 +26,7 @@ class LLMEngine:
             value_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=torch.device('cuda:0'), dtype=torch.half)
             self.kv_caches.append(KVCache(key_cache, value_cache))
 
+    @torch.inference_mode()
     def execute_model(self, sequences: list[Sequence]):
         # 1. prepare model input
         num_sequences = len(sequences)
