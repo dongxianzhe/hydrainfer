@@ -11,12 +11,12 @@ headers = {
     "Content-Type": "application/json"
 }
 
-def request():
+def request(id: int):
     start_time = time.time()
 
     data = {
         "model": "gpt2",
-        "prompt":"Hello",
+        "prompt":"Hello", 
         "max_tokens": 50,
         "temperature": 0
     }
@@ -24,6 +24,7 @@ def request():
 
     if response.status_code != 200:
         print(f"Error: {response.status_code}, {response.text}")
+    print(response.text)
 
     end_time = time.time()
     end_to_end_time = end_time - start_time
@@ -39,7 +40,7 @@ if __name__ == '__main__':
     start_time = time.time()
     response_times = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = [executor.submit(request) for _ in range(total_requests)]
+        futures = [executor.submit(request, i) for i in range(total_requests)]
         for future in tqdm.tqdm(concurrent.futures.as_completed(futures)):
             response_time = future.result()
             response_times.append(response_time)
