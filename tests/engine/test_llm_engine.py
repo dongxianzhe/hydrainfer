@@ -27,9 +27,9 @@ def generate_ref(prompt: str, max_tokens=50) -> str:
 
 
 if __name__ == '__main__':
-    prompts = ["Who are you?", "Hello", "what's the weather like today?"]
+    # prompts = ["Who are you?", "Hello", "what's the weather like today?"]
     # prompts = ["Who", "Hello"]
-    # prompts = ["Who"]
+    prompts = ["Hello", "World", "world", "who"]
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     max_tokens = 50
 
