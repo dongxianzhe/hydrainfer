@@ -78,16 +78,10 @@ class GPT2Model(nn.Module):
         position_embeds = self.wpe(position_ids)
         hidden_states = input_embeds + position_embeds
 
-        all_hidden_states = ()
         for i, layer in enumerate(self.h):
-            all_hidden_states += (hidden_states, )
             hidden_states = layer(hidden_states, kv_caches[i], input_params)
         hidden_states = self.ln_f(hidden_states)
-        all_hidden_states += (hidden_states, )
-        return {
-            "last_hidden_state" : hidden_states,
-            "hidden_states" : all_hidden_states, # the input of [layer1, layer2, ... layer12, lm_heads]
-        }
+        return hidden_states
     
     def load_state_dict(self, state_dict_ref: dict[str, Tensor]):
         for name, weight in self.state_dict().items():
@@ -103,9 +97,9 @@ class GPT2LMHeadModel(nn.Module):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> dict[str, Tensor]:
-        hidden_state = self.transformer(input_ids, position_ids, kv_caches, input_params)['last_hidden_state']
+        hidden_state = self.transformer(input_ids, position_ids, kv_caches, input_params)
         lm_logits = self.lm_head(hidden_state)
-        return {'logits' : lm_logits}
+        return lm_logits
     
     def load_state_dict(self, state_dict_ref: dict[str, Tensor]):
         for name, weight in self.state_dict().items():

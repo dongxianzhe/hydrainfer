@@ -42,7 +42,7 @@ if __name__ == '__main__':
         sequence = Sequence()
         sequence.token_ids = tokenizer.encode(prompt)
         sequence.n_kv_cache_tokens = 0
-        sequence.block_table = allocator.allocate(n_blocks=10)
+        sequence.block_table = allocator.allocate(n_blocks=5)
         sequences.append(sequence)
 
     for i in range(max_tokens):

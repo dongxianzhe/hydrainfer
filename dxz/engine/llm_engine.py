@@ -53,13 +53,13 @@ class LLMEngine:
             # This is to make sure that the captured graph does not include the
             # kernel launches for initial benchmarking (e.g., Triton autotune).
             # Note one iteration is not enough for torch.jit.script
-            self.model(input_ids, position_ids, self.kv_caches, input_params)['logits']
-            self.model(input_ids, position_ids, self.kv_caches, input_params)['logits']
+            self.model(input_ids, position_ids, self.kv_caches, input_params)
+            self.model(input_ids, position_ids, self.kv_caches, input_params)
             torch.cuda.synchronize()
 
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g):
-                self.static_logits[:num_sequences] = self.model(input_ids, position_ids, self.kv_caches, input_params)['logits']
+                self.static_logits[:num_sequences] = self.model(input_ids, position_ids, self.kv_caches, input_params)
             torch.cuda.synchronize()
             self.graphs[num_sequences] = g
 
@@ -112,7 +112,7 @@ class LLMEngine:
             g.replay()
             logits = self.static_logits[: num_sequences, :]
         else:
-            logits = self.model(input_ids, position_ids, self.kv_caches, input_params)['logits']
+            logits = self.model(input_ids, position_ids, self.kv_caches, input_params)
 
         # 3. sample
         sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to(torch.device('cpu'))
