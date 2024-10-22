@@ -54,3 +54,16 @@ def sample_sharegpt_requests(
     # Sample the requests.
     sampled_requests = random.sample(filtered_dataset, num_requests)
     return sampled_requests
+
+# if __name__ == '__main__':
+#     from transformers import AutoTokenizer
+#     tokenizer = AutoTokenizer.from_pretrained('gpt2')
+#     input_requests = sample_sharegpt_requests(
+#         dataset_path='./dataset/ShareGPT_V3_unfiltered_cleaned_split.json',
+#         num_requests=3,
+#         tokenizer=tokenizer)
+#     for request in input_requests:
+#         print(request[0])
+#         print(request[1])
+#         print(request[2])
+#         print('====================================================================================================')
