@@ -46,18 +46,17 @@ async def request_func(
                     async for chunk, _ in response.content.iter_chunks():
                         # eg. b'data: {"id":"cmpl-5b2c049fe2664f2ca7f12915b5e4a8f9","object":"text_completion","created":1729229567,"model":"gpt2","choices":[{"index":0,"text":",","logprobs":null,"finish_reason":null,"stop_reason":null}],"usage":null}\n\n'
                         # eg. b'data: [DONE]\n\n'
-                        timestamp = time.perf_counter()
-                        if output.ttft == 0:
-                            output.ttft = timestamp - start_timestamp
-                        else:
-                            output.itl.append(timestamp - most_recent_timestamp)
-                        most_recent_timestamp = timestamp
-
                         chunk = chunk.strip() # remove \n\n
                         chunk = chunk[6:] # remove data: 
                         if not chunk or chunk == b'[DONE]':
                             pass
                         else:
+                            timestamp = time.perf_counter()
+                            if output.ttft == 0:
+                                output.ttft = timestamp - start_timestamp
+                            else:
+                                output.itl.append(timestamp - most_recent_timestamp)
+                            most_recent_timestamp = timestamp
                             data = json.loads(chunk.decode("utf-8")) # convert to json
                             output.generated_text += data['choices'][0]['text']
                     latency = time.perf_counter() - start_timestamp

@@ -8,7 +8,8 @@ from dxz.engine.async_llm_engine import AsyncLLMEngine
 from contextlib import asynccontextmanager
 import asyncio
 from typing import AsyncGenerator
-from dxz.entrypoint.api_protocol import CompletionRequest, CompletionResponse, CompletionResponseChoice
+from dxz.entrypoint.api_protocol import CompletionRequest, CompletionResponse, CompletionResponseChoice, CompletionResponseStreamChoice, CompletionStreamResponse
+
 
 async_llm_engine = AsyncLLMEngine()
 @asynccontextmanager
@@ -29,26 +30,36 @@ async def generate(request: CompletionRequest) -> Response:
     created_time = int(time.time())
     result_generator = async_llm_engine.generate(request.prompt)
 
-    # if stream:
-    #     async def stream_results() -> AsyncGenerator:
-    #         async for output_text in result_generator:
-    #             ret = {"text" : prompt + output_text}
-    #             print(ret)
-    #             yield (json.dumps(ret) + "\0").encode('utf-8')
-    #     return StreamingResponse(stream_results())
-    # else:
-    output_text = await result_generator.__anext__()
-    choices = [CompletionResponseChoice(
-        index=0, 
-        text=output_text,
-    )] # todo now only support one output
-    return  CompletionResponse(
-        id=request_id,
-        object="text_completion",
-        created=created_time,
-        model=request.model,
-        choices=choices,
-    )
+    if request.stream:
+        async def stream_results() -> AsyncGenerator:
+            async for output_text in result_generator:
+                response = CompletionStreamResponse(
+                    id = request_id, 
+                    object = "text_completion", 
+                    created=created_time,
+                    model=request.model,
+                    choices = [
+                        CompletionResponseStreamChoice(
+                            index = 0, 
+                            text = output_text
+                        )]
+                    )
+                yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
+            yield "data: [DONE]\n\n"
+        return StreamingResponse(stream_results())
+    else:
+        output_text = await result_generator.__anext__()
+        choices = [CompletionResponseChoice(
+            index=0, 
+            text=output_text,
+        )] # todo now only support one output
+        return  CompletionResponse(
+            id=request_id,
+            object="text_completion",
+            created=created_time,
+            model=request.model,
+            choices=choices,
+        )
 
 if __name__ == '__main__':
     uvicorn.run(
