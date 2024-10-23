@@ -29,30 +29,24 @@ class AsyncLLMEngine:
         return output_stream
 
     async def loop(self):
-        # 1. batch
-        # 2. forward
-        # 3. check output
         while True:
+            # 1. batch
             batch: list[Sequence] = []
             while not self.queue.empty() and len(batch) < 100:
                 s = self.queue.get()
                 batch.append(s)
 
+            # 2. forward
             if len(batch) > 0:
-                self.llm_engine.execute_model(batch)
+                finished_sequences, unfinished_sequences = self.llm_engine.execute_model(batch)
 
-                max_tokens = 50
-                for sequence in batch:
-                    def check_stop(sequence: Sequence) -> bool:
-                        return len(sequence.token_ids) - sequence.num_prompt_tokens == max_tokens
-                    if check_stop(sequence):
-                        result = self.tokenizer.decode(sequence.token_ids)
-                        output_stream = self.output_streams[sequence.id]
-                        output_stream.put(result)
-                        output_stream.put(StopAsyncIteration())
-                        del self.output_streams[sequence.id]
-                        # todo free kv cache block
-                    else:
-                        self.queue.put(sequence)
-
+            # 3. response
+                for sequence in finished_sequences:
+                    result = self.tokenizer.decode(sequence.token_ids)
+                    output_stream = self.output_streams[sequence.id]
+                    output_stream.put(result)
+                    output_stream.put(StopAsyncIteration())
+                    del self.output_streams[sequence.id]
+                for sequence in unfinished_sequences:
+                    self.queue.put(sequence)
             await asyncio.sleep(0)
