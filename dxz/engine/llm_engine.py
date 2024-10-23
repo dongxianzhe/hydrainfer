@@ -1,5 +1,5 @@
 import torch
-from transformers import GPT2Config, GPT2Tokenizer
+from transformers import GPT2Config
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from dxz.model.gpt2 import GPT2LMHeadModel
 from dxz.model.gpt2 import InputParameters
@@ -10,7 +10,6 @@ class LLMEngine:
     def __init__(self):
         self.device = torch.device('cuda:0')
         # 1. init model
-        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.config = GPT2Config()
         self.model = GPT2LMHeadModel(self.config)
         self.model.load_state_dict(GPT2LMHeadModelRef.from_pretrained('gpt2').state_dict())

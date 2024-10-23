@@ -17,16 +17,13 @@ class AsyncLLMEngine:
         self.output_streams = {}
 
     def generate(self, prompt: str) -> AsyncStream:
-        # 1. tokenize
-        # 2. insert into queue
-        # 3. register call back and return an awaitable thing to wait async engine call back
-        sequence = Sequence() 
-        sequence.id = self.sequence_id_allocator
         self.sequence_id_allocator += 1
-        sequence.token_ids = self.tokenizer.encode(prompt)
-        sequence.num_prompt_tokens = len(sequence.token_ids)
-        sequence.block_table = self.allocator.allocate(5)
-
+        sequence = Sequence(
+            id = self.sequence_id_allocator, 
+            token_ids = self.tokenizer.encode(prompt), 
+            num_prompt_tokens = len(sequence.token_ids),
+            block_table=self.allocator.allocate(5)
+        ) 
         self.queue.put(sequence)
 
         output_stream = AsyncStream()
