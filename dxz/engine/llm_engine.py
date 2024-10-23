@@ -16,15 +16,15 @@ class LLMEngine:
         self.model = GPT2LMHeadModel(self.config)
         self.model.load_state_dict(GPT2LMHeadModelRef.from_pretrained('gpt2').state_dict())
         self.model.half()
-        self.model.to(device=torch.device('cuda:0'))
+        self.model.to(device=self.device)
         # 2. init kv cache
         self.block_size = 16
         self.head_size = self.config.n_embd // self.config.n_head
         self.num_blocks = 4 * 1024 * 1024 * 1024 // 2 // self.config.n_embd // self.block_size // self.config.n_layer
         self.kv_caches = []
         for _ in range(self.config.n_layer):
-            key_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=torch.device('cuda:0'), dtype=torch.half)
-            value_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=torch.device('cuda:0'), dtype=torch.half)
+            key_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=torch.half)
+            value_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=torch.half)
             self.kv_caches.append(KVCache(key_cache, value_cache))
         self.allocator = BlockAllocator(self.num_blocks)
         # 3. capture cuda graph for fast decode
@@ -43,7 +43,7 @@ class LLMEngine:
         self.static_cu_blocks_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
         self.static_logits = torch.empty((cuda_graph_max_batch_size, self.config.vocab_size), dtype=torch.half, device=self.device)
         for batch_size in range(1, cuda_graph_max_batch_size, 1):
-            print(f'batch_size {batch_size}')
+            print(f'cuda capture batch_size {batch_size}')
             input_ids = self.static_input_ids[:batch_size]
             position_ids = self.static_position_ids[:batch_size]
             input_params = InputParameters(
@@ -74,7 +74,6 @@ class LLMEngine:
         for sequence in sequences:
             while len(sequence.block_table) * self.block_size < len(sequence.token_ids):
                 id = self.allocator.allocate(1)[0]
-                print(f'allocated {id}')
                 sequence.block_table.append(id)
         # 2. prepare model input
         num_sequences = len(sequences)
@@ -140,7 +139,6 @@ class LLMEngine:
         # 6. free blocks
         for sequence in sequences:
             if sequence.finished:
-                print(f'free {sequence.block_table}')
                 self.allocator.free(sequence.block_table)
         
         finished_sequences = []
