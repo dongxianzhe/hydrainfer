@@ -28,7 +28,7 @@ async def generate(request: CompletionRequest) -> Response:
     print(request)
     request_id = f"cmpl-{shortuuid.random()}"
     created_time = int(time.time())
-    result_generator = async_llm_engine.generate(request.prompt)
+    result_generator = async_llm_engine.generate(request.prompt, request.stream)
 
     if request.stream:
         async def stream_results() -> AsyncGenerator:

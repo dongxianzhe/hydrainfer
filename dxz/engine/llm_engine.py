@@ -129,13 +129,9 @@ class LLMEngine:
 
         # 5. check finish
         for i, (sequence, token_id) in enumerate(zip(sequences, sample_token_ids)):
-            if token_id == self.tokenizer.eos_token_id:
-                sequence.finished = True
-                continue
             sequence.token_ids.append(token_id.item())
-            if len(sequence.token_ids) - sequence.num_prompt_tokens == sequence.max_tokens:
+            if token_id == self.tokenizer.eos_token_id or len(sequence.token_ids) - sequence.num_prompt_tokens == sequence.max_tokens:
                 sequence.finished = True
-                continue
         # 6. free blocks
         for sequence in sequences:
             if sequence.finished:

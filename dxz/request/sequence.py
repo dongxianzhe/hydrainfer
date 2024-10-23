@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 class Sequence:
     id: int = 0
     num_prompt_tokens: int = 0
+    stream: bool = False
     token_ids: list[int] = field(default_factory=list)
     # states
     finished: bool = False

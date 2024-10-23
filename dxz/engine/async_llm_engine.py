@@ -14,13 +14,14 @@ class AsyncLLMEngine:
 
         self.output_streams = {}
 
-    def generate(self, prompt: str) -> AsyncStream:
+    def generate(self, prompt: str, stream: bool) -> AsyncStream:
         self.sequence_id_allocator += 1
         token_ids = self.tokenizer.encode(prompt)
         sequence = Sequence(
             id = self.sequence_id_allocator, 
             token_ids = token_ids, 
-            num_prompt_tokens = len(token_ids)
+            num_prompt_tokens = len(token_ids), 
+            stream = stream
         ) 
         self.queue.put(sequence)
 
@@ -42,11 +43,18 @@ class AsyncLLMEngine:
 
             # 3. response
                 for sequence in finished_sequences:
-                    result = self.tokenizer.decode(sequence.token_ids)
+                    if sequence.stream:
+                        output_text = self.tokenizer.decode(sequence.token_ids[-1])
+                    else:
+                        output_text = self.tokenizer.decode(sequence.token_ids)
                     output_stream = self.output_streams[sequence.id]
-                    output_stream.put(result)
+                    output_stream.put(output_text)
                     output_stream.put(StopAsyncIteration())
                     del self.output_streams[sequence.id]
                 for sequence in unfinished_sequences:
+                    if sequence.stream:
+                        output_text = self.tokenizer.decode(sequence.token_ids[-1])
+                        output_stream = self.output_streams[sequence.id]
+                        output_stream.put(output_text)
                     self.queue.put(sequence)
             await asyncio.sleep(0)
