@@ -35,7 +35,7 @@ if __name__ == '__main__':
 
     # engine
     llm_engine = LLMEngine()
-    sequences: list[Sequence] = []
+    unfinished_sequences: list[Sequence] = []
     for i, prompt in enumerate(prompts):
         token_ids = tokenizer.encode(prompt)
         sequence = Sequence(
@@ -43,14 +43,17 @@ if __name__ == '__main__':
             token_ids = token_ids, 
             num_prompt_tokens = len(token_ids)
         ) 
-        sequences.append(sequence)
+        unfinished_sequences.append(sequence)
 
-    for i in range(max_tokens):
-        llm_engine.execute_model(sequences)
+    finished_sequences: list[Sequence] = []
+    print(f'{len(finished_sequences)}, {len(unfinished_sequences)}')
+    while len(unfinished_sequences) > 0:
+        f, unfinished_sequences = llm_engine.execute_model(unfinished_sequences)
+        finished_sequences+= f
 
-    for i, sequence in enumerate(sequences):
+    for i, sequence in enumerate(finished_sequences):
         o = tokenizer.decode(sequence.token_ids)
-        o_ref = tokenizer.decode(generate_ref(prompts[i]))
+        o_ref = tokenizer.decode(generate_ref(prompts[sequence.id]))
         print(f'my : {o}')
         print(f'ref: {o_ref}')
         print('------------------------------------------------------------')

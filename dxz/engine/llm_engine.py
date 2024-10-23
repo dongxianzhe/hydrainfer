@@ -1,5 +1,5 @@
 import torch
-from transformers import GPT2Config
+from transformers import GPT2Config, GPT2Tokenizer
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from dxz.model.gpt2 import GPT2LMHeadModel
 from dxz.model.gpt2 import InputParameters
@@ -12,6 +12,7 @@ class LLMEngine:
         self.device = torch.device('cuda:0')
         # 1. init model
         self.config = GPT2Config()
+        self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
         self.model = GPT2LMHeadModel(self.config)
         self.model.load_state_dict(GPT2LMHeadModelRef.from_pretrained('gpt2').state_dict())
         self.model.half()
@@ -126,7 +127,27 @@ class LLMEngine:
 
         # 4. sample
         sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to(torch.device('cpu'))
-        for i, token_id in enumerate(sample_token_ids):
-            sequences[i].token_ids.append(token_id.item())
-        # 5. todo check finish
+
+        # 5. check finish
+        for i, (sequence, token_id) in enumerate(zip(sequences, sample_token_ids)):
+            if token_id == self.tokenizer.eos_token_id:
+                sequence.finished = True
+                continue
+            sequence.token_ids.append(token_id.item())
+            if len(sequence.token_ids) - sequence.num_prompt_tokens == sequence.max_tokens:
+                sequence.finished = True
+                continue
         # 6. free blocks
+        for sequence in sequences:
+            if sequence.finished:
+                print(f'free {sequence.block_table}')
+                self.allocator.free(sequence.block_table)
+        
+        finished_sequences = []
+        unfinished_sequences = []
+        for sequence in sequences:
+            if sequence.finished:
+                finished_sequences.append(sequence)
+            else:
+                unfinished_sequences.append(sequence)
+        return finished_sequences, unfinished_sequences
