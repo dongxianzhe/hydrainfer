@@ -5,6 +5,7 @@ from dxz.model.gpt2 import GPT2LMHeadModel
 from dxz.model.gpt2 import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.request.sequence import Sequence
+from dxz.memory.block_allocator import BlockAllocator
 
 class LLMEngine:
     def __init__(self):
@@ -24,29 +25,33 @@ class LLMEngine:
             key_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=torch.device('cuda:0'), dtype=torch.half)
             value_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=torch.device('cuda:0'), dtype=torch.half)
             self.kv_caches.append(KVCache(key_cache, value_cache))
-        # 3. capture cuda graph
-        self.graphs: dict[int, torch.cuda.CUDAGraph] = {}
-        max_num_sequences = 100
+        self.allocator = BlockAllocator(self.num_blocks)
+        # 3. capture cuda graph for fast decode
+        self.graphs: dict[int, torch.cuda.CUDAGraph] = {} # batch_size -> cuda graph
+        cuda_graph_max_batch_size = 64
+        cuda_graph_max_seq_len = 1024
+        cuda_graph_max_block_len_per_seq = (cuda_graph_max_batch_size + self.block_size - 1) // self.block_size
+        cuda_graph_max_block_len = cuda_graph_max_batch_size * cuda_graph_max_block_len_per_seq
         self.num_blocks_per_seq = num_blocks_per_seq = 5
-        self.static_input_ids = torch.empty(max_num_sequences, dtype=torch.int, device=self.device)
-        self.static_position_ids = torch.empty(max_num_sequences, dtype=torch.int, device=self.device)
-        self.static_q_cu_seq_lens = torch.empty(max_num_sequences + 1, dtype=torch.int, device=self.device)
-        self.static_kv_cu_seq_lens = torch.empty(max_num_sequences + 1, dtype=torch.int, device=self.device)
-        self.static_new_cache_slots = torch.empty(max_num_sequences, dtype=torch.int, device=self.device)
-        self.static_block_tables = torch.empty(num_blocks_per_seq * max_num_sequences, dtype=torch.int, device=self.device)
-        self.static_cu_blocks_lens = torch.empty(max_num_sequences + 1, dtype=torch.int, device=self.device)
-        self.static_logits = torch.empty((max_num_sequences, self.config.vocab_size), dtype=torch.half, device=self.device)
-        for num_sequences in range(1, max_num_sequences, 1):
-            print(f'num_sequences {num_sequences}')
-            input_ids = self.static_input_ids[:num_sequences]
-            position_ids = self.static_position_ids[:num_sequences]
+        self.static_input_ids = torch.empty(cuda_graph_max_batch_size, dtype=torch.int, device=self.device)
+        self.static_position_ids = torch.empty(cuda_graph_max_batch_size, dtype=torch.int, device=self.device)
+        self.static_q_cu_seq_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
+        self.static_kv_cu_seq_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
+        self.static_new_cache_slots = torch.empty(cuda_graph_max_batch_size, dtype=torch.int, device=self.device)
+        self.static_block_tables = torch.empty(cuda_graph_max_block_len, dtype=torch.int, device=self.device)
+        self.static_cu_blocks_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
+        self.static_logits = torch.empty((cuda_graph_max_batch_size, self.config.vocab_size), dtype=torch.half, device=self.device)
+        for batch_size in range(1, cuda_graph_max_batch_size, 1):
+            print(f'batch_size {batch_size}')
+            input_ids = self.static_input_ids[:batch_size]
+            position_ids = self.static_position_ids[:batch_size]
             input_params = InputParameters(
-                num_sequences = num_sequences, 
-                q_cu_seq_lens = self.static_q_cu_seq_lens[:num_sequences+1], 
-                kv_cu_seq_lens = self.static_kv_cu_seq_lens[:num_sequences+1], 
-                new_cache_slots = self.static_new_cache_slots[:num_sequences], 
-                block_tables = self.static_block_tables[:num_blocks_per_seq * num_sequences], 
-                cu_blocks_lens = self.static_cu_blocks_lens[:num_sequences+1]
+                num_sequences = batch_size, 
+                q_cu_seq_lens = self.static_q_cu_seq_lens[:batch_size+1], 
+                kv_cu_seq_lens = self.static_kv_cu_seq_lens[:batch_size+1], 
+                new_cache_slots = self.static_new_cache_slots[:batch_size], 
+                block_tables = self.static_block_tables, 
+                cu_blocks_lens = self.static_cu_blocks_lens[:batch_size+1]
             )
             # Run the model a few times without capturing the graph.
             # This is to make sure that the captured graph does not include the
@@ -58,13 +63,19 @@ class LLMEngine:
 
             g = torch.cuda.CUDAGraph()
             with torch.cuda.graph(g):
-                self.static_logits[:num_sequences] = self.model(input_ids, position_ids, self.kv_caches, input_params)
+                self.static_logits[:batch_size] = self.model(input_ids, position_ids, self.kv_caches, input_params)
             torch.cuda.synchronize()
-            self.graphs[num_sequences] = g
+            self.graphs[batch_size] = g
 
     @torch.inference_mode()
     def execute_model(self, sequences: list[Sequence]):
-        # 1. prepare model input
+        # 1. allocate block
+        for sequence in sequences:
+            while len(sequence.block_table) * self.block_size < len(sequence.token_ids):
+                id = self.allocator.allocate(1)[0]
+                print(f'allocated {id}')
+                sequence.block_table.append(id)
+        # 2. prepare model input
         num_sequences = len(sequences)
         input_ids: list[int] = []
         position_ids: list[int] = []
@@ -95,7 +106,7 @@ class LLMEngine:
             block_tables = torch.tensor(block_tables, dtype=torch.int, device=self.device), 
             cu_blocks_lens = torch.tensor(cu_blocks_lens, dtype=torch.int, device=self.device)
         )
-        # 2. forward
+        # 3. forward
         all_sequence_is_decode: bool = all(sequence.n_kv_cache_tokens != 0 for sequence in sequences)
         for sequence in sequences:
             sequence.n_kv_cache_tokens = len(sequence.token_ids)
@@ -106,14 +117,16 @@ class LLMEngine:
             self.static_q_cu_seq_lens[: num_sequences + 1].copy_(input_params.q_cu_seq_lens)
             self.static_kv_cu_seq_lens[: num_sequences + 1].copy_(input_params.kv_cu_seq_lens)
             self.static_new_cache_slots[: num_sequences].copy_(input_params.new_cache_slots)
-            self.static_block_tables[: self.num_blocks_per_seq * num_sequences].copy_(input_params.block_tables)
+            self.static_block_tables[: input_params.block_tables.shape[-1]].copy_(input_params.block_tables)
             self.static_cu_blocks_lens[: num_sequences + 1].copy_(input_params.cu_blocks_lens)
             g.replay()
             logits = self.static_logits[: num_sequences, :]
         else:
             logits = self.model(input_ids, position_ids, self.kv_caches, input_params)
 
-        # 3. sample
+        # 4. sample
         sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to(torch.device('cpu'))
         for i, token_id in enumerate(sample_token_ids):
             sequences[i].token_ids.append(token_id.item())
+        # 5. todo check finish
+        # 6. free blocks

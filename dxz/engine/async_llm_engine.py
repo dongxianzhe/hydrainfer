@@ -1,5 +1,4 @@
 from transformers import GPT2Tokenizer
-from dxz.memory.block_allocator import BlockAllocator
 from dxz.engine.llm_engine import LLMEngine
 from dxz.request.sequence import Sequence
 from dxz.entrypoint.async_stream import AsyncStream
@@ -9,7 +8,6 @@ class AsyncLLMEngine:
     def __init__(self) -> None:
         self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.llm_engine = LLMEngine()
-        self.allocator = BlockAllocator(self.llm_engine.num_blocks) # refactor num blocks
         self.queue = queue.Queue()
 
         self.sequence_id_allocator = 0
@@ -18,11 +16,11 @@ class AsyncLLMEngine:
 
     def generate(self, prompt: str) -> AsyncStream:
         self.sequence_id_allocator += 1
+        token_ids = self.tokenizer.encode(prompt)
         sequence = Sequence(
             id = self.sequence_id_allocator, 
-            token_ids = self.tokenizer.encode(prompt), 
-            num_prompt_tokens = len(sequence.token_ids),
-            block_table=self.allocator.allocate(5)
+            token_ids = token_ids, 
+            num_prompt_tokens = len(token_ids)
         ) 
         self.queue.put(sequence)
 
@@ -53,6 +51,7 @@ class AsyncLLMEngine:
                         output_stream.put(result)
                         output_stream.put(StopAsyncIteration())
                         del self.output_streams[sequence.id]
+                        # todo free kv cache block
                     else:
                         self.queue.put(sequence)
 

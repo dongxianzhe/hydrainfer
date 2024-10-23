@@ -35,14 +35,14 @@ if __name__ == '__main__':
 
     # engine
     llm_engine = LLMEngine()
-    allocator = BlockAllocator(100)
-    allocator.allocate(1)
     sequences: list[Sequence] = []
-    for prompt in prompts:
-        sequence = Sequence()
-        sequence.token_ids = tokenizer.encode(prompt)
-        sequence.n_kv_cache_tokens = 0
-        sequence.block_table = allocator.allocate(n_blocks=5)
+    for i, prompt in enumerate(prompts):
+        token_ids = tokenizer.encode(prompt)
+        sequence = Sequence(
+            id = i, 
+            token_ids = token_ids, 
+            num_prompt_tokens = len(token_ids)
+        ) 
         sequences.append(sequence)
 
     for i in range(max_tokens):
