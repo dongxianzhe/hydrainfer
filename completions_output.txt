@@ -1,3 +1,0 @@
-scalellm 
-b'data: {"id":"cmpl-RChT6kMNgEurtFYvVWGJVL","object":"text_completion","created":1729588817,"model":"gpt2","choices":[{"index":0,"text":"","logprobs":null,"finish_reason":"length"}]}\n\n'
-b'data: [DONE]\n\n'

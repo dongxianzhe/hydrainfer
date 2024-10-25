@@ -46,47 +46,48 @@ from torch import Tensor, nn
 #         each seq has one top_p param (-inf, +inf)
 #         select sum probability greater than top_p
 
-def sample(
-    logits: Tensor, # (num_tokens, vocab_size)
-    unique_token_ids: Tensor,  # (num_tokens, max_seq_len)
+def process_logits(
+    logits: Tensor,
+    unique_token_ids: Tensor,
     unique_token_counts: Tensor, 
     unique_token_lens: Tensor,
-    frequency_penalties: Tensor, # (num_tokens, )
-    presence_penalties: Tensor,  # (num_tokens, )
+    frequency_penalties: Tensor,
+    presence_penalties: Tensor,
     repetition_penalties: Tensor,
-    temperatures: Tensor, # (num_tokens, )
+    temperatures: Tensor,
     top_k: Tensor, 
     top_p: Tensor
 ) -> Tensor:
     # some mesc things
     num_tokens, vocab_size = logits.shape
     device=logits.device
+
     # 1. frequency and presence penalties
-    score = logits.gather(dim=1, index=unique_token_ids) # score (num_tokens, max_seq_lens) scores[i][j] is logits[i][unique_token_ids[i][j]]
+    score = logits.gather(dim=1, index=unique_token_ids.to(torch.int64)) # score (num_tokens, max_seq_lens) scores[i][j] is logits[i][unique_token_ids[i][j]]
     score.sub_(unique_token_counts * frequency_penalties[:, None]) # broadcast (num_tokens, 1) to (num_tokens, max_seq_lens)
     score.sub_((unique_token_counts > 0) * presence_penalties[:, None])
+
     # 2. repetition penalties
     score = torch.where(score < 0, score * repetition_penalties[:, None], score / repetition_penalties[:, None])
-    logits.scatter_(dim=1, index=unique_token_ids, src=score) # logits[i][unique_token_ids[i][j]] = score[i][j] for i in num_tokens, j in max_seq_lens
+    logits.scatter_(dim=1, index=unique_token_ids.to(torch.int64), src=score) # logits[i][unique_token_ids[i][j]] = score[i][j] for i in num_tokens, j in max_seq_lens
+
     # 3. temperatures 
     temperatures = torch.where(temperatures == 0, 1., temperatures) # temperatures[i][j] = temperatures[i][j] == 0 ? 1 : temperatures[i][j]
     logits.div_(temperatures[:, None])    
+
     # 4. topk
     top_k = torch.where(top_k <= 0, 2147483647, top_k)
     logits_sort, logits_ids = logits.sort(dim=-1, descending=True)
     top_k_mask = torch.arange(vocab_size, dtype=torch.int, device=device)[None, :] >= top_k[:, None]
     logits_sort.masked_fill_(mask=top_k_mask, value=float('-inf'))
+
     # 5. topp
     probs_sort = logits_sort.softmax(dim=-1)
     probs_sum = probs_sort.cumsum(dim=-1) # probs_sum[i][j] means sum probs_soft[i][:j]
-    top_p_mask = probs_sum - probs_sort > top_p[:, None]
+    top_p_mask = (probs_sum - probs_sort) > top_p[:, None]
+    print(f'vocab_size: {vocab_size}')
+    print(f'vocab_size - top_p_mask.sum(dim=-1) {vocab_size - top_p_mask.sum(dim=-1)}')
     logits_sort.masked_fill_(mask=top_p_mask, value=float('-inf'))
-    return logits_sort.gather(dim=-1, index=logits_ids.argsort())
 
-def unique_randint(low, high, size):
-    tensor = torch.empty(size)
-    for i in range(size[0]):
-        range_tensor = torch.arange(low, high)
-        unique_tensor = range_tensor[torch.randperm(range_tensor.size(0))[:size[1]]]
-        tensor[i] = unique_tensor
-    return tensor
+    logits = logits_sort.gather(dim=-1, index=logits_ids.argsort())
+    return logits
