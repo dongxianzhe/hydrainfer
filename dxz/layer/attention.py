@@ -16,12 +16,10 @@ except ImportError:
     print('flash attention import failed')
     mha_varlen_fwd = None
 
-class Attention(nn.Module):
+class FlashAttention(nn.Module):
     def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
         super().__init__()
         assert n_qo_heads % n_kv_heads == 0, f"n_qo_heads {n_qo_heads} is not divisible by n_kv_heads {n_kv_heads}"
-        # todo handler
-        # todo sliding window
         self.n_qo_heads     = n_qo_heads
         self.n_kv_heads     = n_kv_heads
         self.head_dim       = head_dim
@@ -30,10 +28,6 @@ class Attention(nn.Module):
         # query (n_tokens, n_qo_heads * head_dim)
         # key/value (n_tokens, n_kv_heads * head_dim)
         # return (n_tokens, n_heads, head_dim)
-        # 1. reshape queyy key value shape
-        # 2. rotary position embedding
-        # 3. append kv cache page attention
-        # 4. o = softmax(mask(alibi_bias(logits_soft_cap(sm_scale(q@k))))@v flash atten kernel todo
 
         # 1. reshape queyy key value shape
         n_tokens = query.shape[0]
@@ -44,45 +38,63 @@ class Attention(nn.Module):
         # 2. append new kv cache
         # input_params.to(torch.device('cpu'))
         key_cache, value_cache = kv_cache.get_kv_cache()
-        block_size = kv_cache.block_size
-        if set_kv_cache:
-            set_kv_cache(
-                input_params.new_cache_slots, # slot_ids: Tensor,  # [n_tokens]
-                key, # keys: Tensor,      # [n_tokens, n_kv_heads, head_dim]
-                value, # values: Tensor,    # [n_tokens, n_kv_heads, head_dim]
-                key_cache, # key_cache: Tensor,  # [n_blocks, block_size, n_heads, head_dim]
-                value_cache# value_cache: Tensor
-            ) 
-        else:
-            for i, slot_id in enumerate(input_params.new_cache_slots):
-                block_id = slot_id // block_size
-                block_offset = slot_id  % block_size
-                key_cache[block_id, block_offset, :, :] = key[i, :, :]
-                value_cache[block_id, block_offset, :, :] = value[i, :, :]
+        set_kv_cache(
+            input_params.new_cache_slots, # slot_ids: Tensor,  # [n_tokens]
+            key, # keys: Tensor,      # [n_tokens, n_kv_heads, head_dim]
+            value, # values: Tensor,    # [n_tokens, n_kv_heads, head_dim]
+            key_cache, # key_cache: Tensor,  # [n_blocks, block_size, n_heads, head_dim]
+            value_cache# value_cache: Tensor
+        ) 
 
         # 3. compute for each sequence with flash attn
-        if mha_varlen_fwd:
-            output=torch.empty_like(query)
-            input_params.to(query.device)
-            mha_varlen_fwd(
-                output,
-                query, 
-                key_cache, 
-                value_cache, 
-                input_params.q_cu_seq_lens, 
-                input_params.kv_cu_seq_lens, 
-                input_params.block_tables, 
-                input_params.cu_blocks_lens, 
-                None,
-                128,
-                128,
-                1. / math.sqrt(self.head_dim),
-                0.,
-                -1,
-                -1,
-                0
-            )
-            return output.view(-1, self.n_qo_heads * self.head_dim).to(query.dtype)
+        output=torch.empty_like(query)
+        mha_varlen_fwd(
+            output,
+            query, 
+            key_cache, 
+            value_cache, 
+            input_params.q_cu_seq_lens, 
+            input_params.kv_cu_seq_lens, 
+            input_params.block_tables, 
+            input_params.cu_blocks_lens, 
+            None,
+            1024,
+            1024,
+            1. / math.sqrt(self.head_dim),
+            0,
+            -1,
+            0,
+            0
+        )
+        return output.view(-1, self.n_qo_heads * self.head_dim)
+
+class Attention(nn.Module):
+    def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
+        super().__init__()
+        assert n_qo_heads % n_kv_heads == 0, f"n_qo_heads {n_qo_heads} is not divisible by n_kv_heads {n_kv_heads}"
+        self.n_qo_heads     = n_qo_heads
+        self.n_kv_heads     = n_kv_heads
+        self.head_dim       = head_dim
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, kv_cache: KVCache, input_params: InputParameters):
+        # query (n_tokens, n_qo_heads * head_dim)
+        # key/value (n_tokens, n_kv_heads * head_dim)
+        # return (n_tokens, n_heads, head_dim)
+        # 1. reshape queyy key value shape
+        n_tokens = query.shape[0]
+        query = query.view(n_tokens, self.n_qo_heads, self.head_dim)
+        key = key.view(n_tokens, self.n_kv_heads, self.head_dim)
+        value = value.view(n_tokens, self.n_kv_heads, self.head_dim)
+
+        # 2. append new kv cache
+        # input_params.to(torch.device('cpu'))
+        key_cache, value_cache = kv_cache.get_kv_cache()
+        block_size = kv_cache.block_size
+        for i, slot_id in enumerate(input_params.new_cache_slots):
+            block_id = slot_id // block_size
+            block_offset = slot_id  % block_size
+            key_cache[block_id, block_offset, :, :] = key[i, :, :]
+            value_cache[block_id, block_offset, :, :] = value[i, :, :]
 
         # 3. compute for each sequence with pytorch
         outputs = []
@@ -118,9 +130,9 @@ class Attention(nn.Module):
 
             # softmax
             scores = torch.softmax(scores, dim=-1)
-            o = torch.einsum("hqk,khd->qhd", scores, v).to(query.dtype)
+            o = torch.einsum("hqk,khd->qhd", scores, v)
             outputs.append(o)
 
         output = torch.cat(outputs, dim=0)
         output = output.view(-1, self.n_qo_heads * self.head_dim)
-        return output
+        return output.to(query.dtype)
