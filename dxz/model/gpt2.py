@@ -82,30 +82,29 @@ class GPT2Model(nn.Module):
         hidden_states = self.ln_f(hidden_states)
         return hidden_states
     
-    def load_state_dict(self, state_dict_ref: dict[str, Tensor]):
-        for name, weight in self.state_dict().items():
-            if any(needle in name for needle in ["c_attn.weight", "c_proj.weight", "c_fc.weight"]):
-                weight.data.copy_(state_dict_ref[name].t())
-            else:
-                weight.data.copy_(state_dict_ref[name])
-
 class GPT2LMHeadModel(nn.Module):
     def __init__(self, config: GPT2Config):
         super(GPT2LMHeadModel, self).__init__()
+        self.config = config
         self.transformer = GPT2Model(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.lm_head.weight = self.transformer.wte.weight
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> dict[str, Tensor]:
         hidden_state = self.transformer(input_ids, position_ids, kv_caches, input_params)
         lm_logits = self.lm_head(hidden_state)
         return lm_logits
     
-    def load_state_dict(self, state_dict_ref: dict[str, Tensor]):
-        for name, weight in self.state_dict().items():
-            if 'lm_head' in name:
-                weight.data.copy_(state_dict_ref['transformer.wte.weight']) 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path: str):
+        assert pretrained_model_name_or_path == 'gpt2', '{pretrained_model_name_or_path} is not support'
+        from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
+        model_ref = GPT2LMHeadModelRef.from_pretrained(pretrained_model_name_or_path)
+        model = cls(model_ref.config)
+        state_dict_ref = model_ref.state_dict()
+        for name, weight in model.state_dict().items():
+            if any(needle in name for needle in ["c_attn.weight", "c_proj.weight", "c_fc.weight"]):
+                weight.data.copy_(state_dict_ref[name].t())
             else:
-                if any(needle in name for needle in ["c_attn.weight", "c_proj.weight", "c_fc.weight"]):
-                    weight.data.copy_(state_dict_ref[name].t())
-                else:
-                    weight.data.copy_(state_dict_ref[name])
+                weight.data.copy_(state_dict_ref[name])
+        return model

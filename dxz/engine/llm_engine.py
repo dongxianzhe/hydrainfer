@@ -1,6 +1,5 @@
 import torch
-from transformers import GPT2Config, GPT2Tokenizer
-from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
+from transformers import GPT2Tokenizer
 from dxz.model.gpt2 import GPT2LMHeadModel
 from dxz.model.gpt2 import InputParameters
 from dxz.memory.kv_cache import KVCache
@@ -11,12 +10,12 @@ class LLMEngine:
     def __init__(self):
         self.device = torch.device('cuda:0')
         # 1. init model
-        self.config = GPT2Config()
         self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-        self.model = GPT2LMHeadModel(self.config)
-        self.model.load_state_dict(GPT2LMHeadModelRef.from_pretrained('gpt2').state_dict())
+        self.model = GPT2LMHeadModel.from_pretrained('gpt2')
         self.model.half()
         self.model.to(device=self.device)
+        self.model.eval()
+        self.config = self.model.config
         # 2. init kv cache
         self.block_size = 16
         self.head_size = self.config.n_embd // self.config.n_head
