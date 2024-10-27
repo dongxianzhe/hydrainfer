@@ -9,11 +9,12 @@ from dxz.memory.block_allocator import BlockAllocator
 class LLMEngine:
     def __init__(self):
         self.device = torch.device('cuda:0')
+        self.dtype = torch.half
         # 1. init model
         self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
         self.model = GPT2LMHeadModel.from_pretrained('gpt2')
-        self.model.half()
-        self.model.to(device=self.device)
+        self.model.to(self.dtype)
+        self.model.to(self.device)
         self.model.eval()
         self.config = self.model.config
         # 2. init kv cache
@@ -22,8 +23,8 @@ class LLMEngine:
         self.num_blocks = 4 * 1024 * 1024 * 1024 // 2 // self.config.n_embd // self.block_size // self.config.n_layer
         self.kv_caches = []
         for _ in range(self.config.n_layer):
-            key_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=torch.half)
-            value_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=torch.half)
+            key_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=self.dtype)
+            value_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=self.dtype)
             self.kv_caches.append(KVCache(key_cache, value_cache))
         self.allocator = BlockAllocator(self.num_blocks)
         # 3. capture cuda graph for fast decode
@@ -40,7 +41,7 @@ class LLMEngine:
         self.static_new_cache_slots = torch.empty(cuda_graph_max_batch_size, dtype=torch.int, device=self.device)
         self.static_block_tables = torch.empty(cuda_graph_max_block_len, dtype=torch.int, device=self.device)
         self.static_cu_blocks_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
-        self.static_logits = torch.empty((cuda_graph_max_batch_size, self.config.vocab_size), dtype=torch.half, device=self.device)
+        self.static_logits = torch.empty((cuda_graph_max_batch_size, self.config.vocab_size), dtype=self.dtype, device=self.device)
         for batch_size in range(1, cuda_graph_max_batch_size, 1):
             print(f'cuda capture batch_size {batch_size}')
             input_ids = self.static_input_ids[:batch_size]
