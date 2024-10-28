@@ -1,3 +1,5 @@
+from functools import wraps
+import inspect
 import torch
 
 def print_once(scope:str="default", message: str=""):
@@ -17,9 +19,30 @@ def probe(key: str, value: any):
     if not torch.allclose(probe.data[key], value, rtol=1e-3, atol=1e-5):
         print(f'probe {key} not equal !!! ')
 
+def save_checkpoint(save_path, only_save_once=True):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            if only_save_once and not hasattr(self, 'only_save_once'):
+                self.only_save_once=True
+                sig = inspect.signature(func)
+                bound_args = sig.bind(self, *args, **kwargs)
+                bound_args.apply_defaults()
 
-if __name__ == '__main__':
-    x = torch.zeros(size=(10, 128))
-    y = torch.zeros(size=(10, 128))
-    probe('h', x)
-    probe('h', y)
+                input = {name: arg.detach().clone() if torch.is_tensor(arg) else arg for name, arg in bound_args.arguments.items()}
+                
+                output = func(self, *args, **kwargs)
+                
+                # output_data = output.detach().clone()
+                
+                torch.save({
+                    'input': input,
+                    'output': output,
+                }, save_path)
+                
+                print(f"forward input and output have been saved to {save_path}.")
+            else:
+                output = func(self, *args, **kwargs)
+            return output
+        return wrapper
+    return decorator
