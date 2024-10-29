@@ -1,60 +1,40 @@
-from transformers import GPT2Tokenizer
 from dxz.engine.llm_engine import LLMEngine
-from dxz.request.sequence import Sequence
 from dxz.entrypoint.async_stream import AsyncStream
-import queue
 import asyncio
 class AsyncLLMEngine:
     def __init__(self) -> None:
-        self.tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
         self.llm_engine = LLMEngine()
-        self.queue = queue.Queue()
-
-        self.sequence_id_allocator = 0
-
-        self.output_streams = {}
+        self.is_stream_output:dict[int, bool]        = {} # sequence.id -> wheather stream output
+        self.output_streams  :dict[int, AsyncStream] = {} # sequence.id -> output generator
 
     def generate(self, prompt: str, stream: bool) -> AsyncStream:
-        self.sequence_id_allocator += 1
-        token_ids = self.tokenizer.encode(prompt)
-        sequence = Sequence(
-            id = self.sequence_id_allocator, 
-            token_ids = token_ids, 
-            num_prompt_tokens = len(token_ids), 
-            stream = stream
-        ) 
-        self.queue.put(sequence)
+        id = self.llm_engine.add_request(prompt)
 
         output_stream = AsyncStream()
-        self.output_streams[sequence.id] = output_stream
+        self.is_stream_output[id] = stream
+        self.output_streams  [id] = output_stream
         return output_stream
 
     async def loop(self):
         while True:
-            # 1. batch
-            batch: list[Sequence] = []
-            while not self.queue.empty() and len(batch) < 100:
-                s = self.queue.get()
-                batch.append(s)
+            decode, finished = self.llm_engine.step() 
 
-            # 2. forward
-            if len(batch) > 0:
-                finished_sequences, unfinished_sequences = self.llm_engine.execute_model(batch)
-
-            # 3. response
-                for sequence in finished_sequences:
-                    if sequence.stream:
-                        output_text = self.tokenizer.decode(sequence.token_ids[-1])
-                    else:
-                        output_text = self.tokenizer.decode(sequence.token_ids)
+            tokenizer = self.llm_engine.tokenizer
+            for sequence in decode:
+                if self.is_stream_output[sequence.id]:
+                    output_text = tokenizer.decode(sequence.token_ids[-1])
                     output_stream = self.output_streams[sequence.id]
                     output_stream.put(output_text)
-                    output_stream.put(StopAsyncIteration())
-                    del self.output_streams[sequence.id]
-                for sequence in unfinished_sequences:
-                    if sequence.stream:
-                        output_text = self.tokenizer.decode(sequence.token_ids[-1])
-                        output_stream = self.output_streams[sequence.id]
-                        output_stream.put(output_text)
-                    self.queue.put(sequence)
+            for sequence in finished:
+                if self.is_stream_output[sequence.id]:
+                    output_text = tokenizer.decode(sequence.token_ids[-1])
+                else:
+                    output_text = tokenizer.decode(sequence.token_ids)
+                output_stream = self.output_streams[sequence.id]
+                output_stream.put(output_text)
+                output_stream.put(StopAsyncIteration())
+                del self.is_stream_output[sequence.id]
+                del self.output_streams[sequence.id]
+
+
             await asyncio.sleep(0)

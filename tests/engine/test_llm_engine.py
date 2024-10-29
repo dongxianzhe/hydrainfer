@@ -9,6 +9,7 @@ def generate_ref(prompt: str, max_tokens=50) -> str:
     device=torch.device('cuda:0')
     dtype =torch.half
 
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     model = GPT2LMHeadModelRef.from_pretrained("gpt2")
     model.to(dtype)
     model.to(device)
@@ -33,33 +34,38 @@ prompts = [
     "hello world."
     ]
 
-if __name__ == '__main__':
+def test_forward():
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    max_tokens = 50
-
     # engine
     llm_engine = LLMEngine()
-    unfinished_sequences: list[Sequence] = []
-    for i, prompt in enumerate(prompts):
-        token_ids = tokenizer.encode(prompt)
-        sequence = Sequence(
-            id = i, 
-            token_ids = token_ids, 
-            num_prompt_tokens = len(token_ids)
-        ) 
-        unfinished_sequences.append(sequence)
+    for prompt in prompts:
+        seq_id = llm_engine.add_request(prompt)
+    
+    sequences: list[Sequence] = []
+    for i in range(100): # step 100 to ensure finish all sequences
+        _, finished = llm_engine.step()
+        sequences += finished
 
-    finished_sequences: list[Sequence] = []
-    while len(unfinished_sequences) > 0:
-        f, unfinished_sequences = llm_engine.execute_model(unfinished_sequences)
-        finished_sequences+= f
-
-    for i, sequence in enumerate(finished_sequences):
+    for sequence in sequences: 
         o = tokenizer.decode(sequence.token_ids)
-        o_ref = tokenizer.decode(generate_ref(prompts[sequence.id]))
+        o_ref = tokenizer.decode(generate_ref(prompts[sequence.id - 1]))
         print('============================================================')
         print(f'my : {o}')
         print('------------------------------------------------------------')
         print(f'ref: {o_ref}')
         print('============================================================')
         # assert o == o_ref
+
+def test_input():
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    all = []
+    for prompt in prompts:
+        token_ids = tokenizer.encode(prompt)
+        print(f'len token_ids {len(token_ids)}')
+        all += token_ids
+    print(f'total token_ids {len(all)}')
+
+
+if __name__ == '__main__':
+    test_forward()
+    # test_input()

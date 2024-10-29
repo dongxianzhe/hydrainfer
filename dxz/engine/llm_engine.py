@@ -5,6 +5,7 @@ from dxz.model.gpt2 import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.request.sequence import Sequence
 from dxz.memory.block_allocator import BlockAllocator
+import queue
 
 class LLMEngine:
     def __init__(self):
@@ -67,49 +68,142 @@ class LLMEngine:
                 self.static_logits[:batch_size] = self.model(input_ids, position_ids, self.kv_caches, input_params)
             torch.cuda.synchronize()
             self.graphs[batch_size] = g
+        
+        # 5. batch policy
+        self.sequence_id_allocator: int = 0
+        self.max_tokens_per_batch : int = 1024
+        self.chunk_size           : int = 256
+        self.new_queue    : queue.Queue = queue.Queue()
+        self.prefill_queue: queue.Queue = queue.Queue()
+        self.decode_queue : queue.Queue = queue.Queue()
+
+    def add_request(self, prompt: str) -> int:
+        self.sequence_id_allocator += 1
+        token_ids = self.tokenizer.encode(prompt)
+        sequence = Sequence(
+            id = self.sequence_id_allocator, 
+            token_ids = token_ids, 
+            num_prompt_tokens = len(token_ids), 
+            eos_token_id = self.tokenizer.eos_token_id
+        ) 
+        self.new_queue.put(sequence)
+
+        return sequence.id
+    
+    def continous_batch(self):
+        done: bool = False
+        batch_num_tokens = 0
+        batch_sequences: list[Sequence] = []
+        q_seq_lens = []
+        while not self.decode_queue.empty():
+            sequence: Sequence = self.decode_queue.get()
+            
+            if len(sequence.block_table) * self.block_size < len(sequence.token_ids): # need allocate new block
+                blocks = self.allocator.allocate(1)
+                if len(blocks) == 0: # out of memory
+                    if not self.prefill_queue.empty(): # try to find an prefill sequence to preempt
+                        preempted_sequence:Sequence = self.prefill_queue.get()
+                        self.allocator.free(preempted_sequence.block_table)
+                        preempted_sequence.n_kv_cache_tokens = 0
+                        self.new_queue.put(preempted_sequence)
+                        blocks = self.allocator.allocate(1)
+                    elif not self.decode_queue.empty(): # try to find an decode sequence to preempt
+                        preempted_sequence:Sequence = self.prefill_queue.get()
+                        self.allocator.free(preempted_sequence.block_table)
+                        preempted_sequence.n_kv_cache_tokens = 0
+                        self.new_queue.put(preempted_sequence)
+                        blocks = self.allocator.allocate(1)
+                    else: # no sequence can be preempted, stop batch
+                        self.decode_queue.put(sequence)
+                        done = True
+                        break
+                sequence.block_table += blocks
+            
+            if batch_num_tokens + 1 <= self.max_tokens_per_batch:
+                # select this sequence
+                batch_num_tokens += 1 
+                batch_sequences.append(sequence)
+                q_seq_lens.append(1)
+
+            else: # this batch has too many tokens
+                done = True
+                break
+            
+        while not done and (not self.prefill_queue.empty() or not self.new_queue.empty()):
+            if not self.prefill_queue.empty():
+                sequence: Sequence = self.prefill_queue.get()
+            else:
+                sequence: Sequence = self.new_queue.get()
+            # compute chunk size
+            num_chunk_tokens = min(self.chunk_size, len(sequence.token_ids) - sequence.n_kv_cache_tokens, self.max_tokens_per_batch - batch_num_tokens)
+            if num_chunk_tokens == 0:
+                if sequence.is_new:
+                    self.new_queue.put(sequence)
+                else:
+                    self.prefill_queue.put(sequence)
+                done = True
+                break
+            
+            if len(sequence.block_table) * self.block_size <= sequence.n_kv_cache_tokens + num_chunk_tokens: # need allocate block
+                n_blocks = (sequence.n_kv_cache_tokens + num_chunk_tokens - len(sequence.block_table) * self.block_size + self.block_size - 1) // self.block_size
+                blocks = self.allocator.allocate(n_blocks)
+                if len(blocks) == 0: # out of memory
+                    self.prefill_queue.put(sequence)
+                    done = True
+                    break
+                else:
+                    sequence.block_table += blocks
+
+            # select this sequence
+            batch_num_tokens += num_chunk_tokens
+            batch_sequences.append(sequence)
+            q_seq_lens.append(num_chunk_tokens)
+        
+        return batch_sequences, q_seq_lens
+
 
     @torch.inference_mode()
-    def execute_model(self, sequences: list[Sequence]):
-        # 1. allocate block
-        for sequence in sequences:
-            while len(sequence.block_table) * self.block_size < len(sequence.token_ids):
-                id = self.allocator.allocate(1)[0]
-                sequence.block_table.append(id)
-        # 2. prepare model input
-        num_sequences = len(sequences)
-        input_ids: list[int] = []
-        position_ids: list[int] = []
-        q_cu_seq_lens: list[int] = [0]
-        kv_cu_seq_lens: list[int] = [0]
-        block_tables: list[int] = []
-        cu_blocks_lens: list[int] = [0]
-        new_cache_slots: list[int] = []
+    def step(self) -> tuple[list[Sequence], list[Sequence]]:
+        # 1. batch and allocate memory
+        batch_sequences, q_seq_lens = self.continous_batch()
+        if len(batch_sequences) == 0:
+            return [], []
+        # 2. prepare input
+        token_ids         : list[int] = []
+        positions         : list[int] = []
+        q_cu_seq_lens     : list[int] = [0]
+        kv_cu_seq_lens    : list[int] = [0]
+        block_tables      : list[int] = []
+        cu_blocks_lens    : list[int] = [0]
+        new_cache_slots   : list[int] = []
         selected_token_ids: list[int] = []
-        for sequence in sequences:
-            for i in range(sequence.n_kv_cache_tokens, len(sequence.token_ids)):
-                input_ids.append(sequence.token_ids[i])
-                position_ids.append(i)
+        for sequence, q_seq_len in zip(batch_sequences, q_seq_lens):
+            kv_seq_len = sequence.n_kv_cache_tokens + q_seq_len
+            for i in range(sequence.n_kv_cache_tokens, kv_seq_len):
+                token_ids.append(sequence.token_ids[i])
+                positions.append(i)
                 new_cache_slots.append(sequence.block_table[i // self.block_size] * self.block_size + i % self.block_size)
-            q_cu_seq_lens.append(q_cu_seq_lens[-1] + len(sequence.token_ids) - sequence.n_kv_cache_tokens)
-            kv_cu_seq_lens.append(kv_cu_seq_lens[-1] + len(sequence.token_ids))
+            q_cu_seq_lens.append(q_cu_seq_lens[-1] + q_seq_len)
+            kv_cu_seq_lens.append(kv_cu_seq_lens[-1] + kv_seq_len)
             block_tables += sequence.block_table
             cu_blocks_lens.append(cu_blocks_lens[-1] + len(sequence.block_table))
-            selected_token_ids.append(len(input_ids) - 1)
-        
-        input_ids = torch.tensor(input_ids, dtype=torch.int, device=self.device)
-        position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.device)
+            if kv_seq_len >= sequence.num_prompt_tokens:
+                selected_token_ids.append(len(token_ids) - 1)
+
+        input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.device)
+        position_ids = torch.tensor(positions, dtype=torch.int, device=self.device)
         input_params = InputParameters(
-            num_sequences = num_sequences, 
+            num_sequences = len(batch_sequences), 
             q_cu_seq_lens = torch.tensor(q_cu_seq_lens, dtype=torch.int, device=self.device),
             kv_cu_seq_lens = torch.tensor(kv_cu_seq_lens, dtype=torch.int, device=self.device), 
             new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.device), 
             block_tables = torch.tensor(block_tables, dtype=torch.int, device=self.device), 
             cu_blocks_lens = torch.tensor(cu_blocks_lens, dtype=torch.int, device=self.device)
         )
+        
         # 3. forward
-        all_sequence_is_decode: bool = all(sequence.n_kv_cache_tokens != 0 for sequence in sequences)
-        for sequence in sequences:
-            sequence.n_kv_cache_tokens = len(sequence.token_ids)
+        all_sequence_is_decode: bool = len(batch_sequences) == len(token_ids)
+        num_sequences = input_params.num_sequences
         if all_sequence_is_decode and num_sequences in self.graphs:
             g = self.graphs[num_sequences]
             self.static_input_ids[: num_sequences].copy_(input_ids)
@@ -124,24 +218,32 @@ class LLMEngine:
         else:
             logits = self.model(input_ids, position_ids, self.kv_caches, input_params)
 
+        for sequence, q_seq_len in zip(batch_sequences, q_seq_lens):
+            sequence.n_kv_cache_tokens += q_seq_len
+        
         # 4. sample
         sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to(torch.device('cpu'))
 
-        # 5. check finish
-        for i, (sequence, token_id) in enumerate(zip(sequences, sample_token_ids)):
-            sequence.token_ids.append(token_id.item())
-            if token_id == self.tokenizer.eos_token_id or len(sequence.token_ids) - sequence.num_prompt_tokens == sequence.max_tokens:
-                sequence.finished = True
-        # 6. free blocks
-        for sequence in sequences:
-            if sequence.finished:
+        i = 0
+        for sequence in batch_sequences:
+            if sequence.is_decode:
+                token_id = sample_token_ids[i].item()
+                i += 1
+                sequence.token_ids.append(token_id)
+            
+        # 5. put sequnce batch to queue and free finished
+        decode_output: list[Sequence] = []
+        finished_output: list[Sequence] = []
+        for sequence in batch_sequences:
+            if sequence.is_prefill_but_not_new:
+                self.prefill_queue.put(sequence)
+            elif sequence.is_decode_but_not_finished:
+                decode_output.append(sequence)
+                self.decode_queue.put(sequence)
+            elif sequence.is_finished:
+                finished_output.append(sequence)
                 self.allocator.free(sequence.block_table)
-        
-        finished_sequences = []
-        unfinished_sequences = []
-        for sequence in sequences:
-            if sequence.finished:
-                finished_sequences.append(sequence)
             else:
-                unfinished_sequences.append(sequence)
-        return finished_sequences, unfinished_sequences
+                raise Exception
+        
+        return decode_output, finished_output
