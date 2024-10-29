@@ -56,13 +56,13 @@ async def get_request(
         await asyncio.sleep(interval)
 
 async def benchmark(
+    args: argparse.Namespace, 
     inputs: List[Tuple[str, int, int]], # (prompt, prompt length, output_lenght)
-    request_rate: float
 ):
     pbar = tqdm(total=len(inputs))
     benchmark_start_time = time.perf_counter()
     tasks = []
-    async for request in get_request(inputs, request_rate):
+    async for request in get_request(inputs, args.request_rate):
         prompt, prompt_len, output_len = request
         request_func_input = RequestFuncInput(prompt=prompt)
         tasks.append(asyncio.create_task(request_func(request_func_input=request_func_input,pbar=pbar)))
@@ -160,7 +160,14 @@ async def benchmark(
                                     metrics.median_tpot_ms))
     print("{:<40} {:<10.2f}".format("P90 TPOT (ms):", metrics.p90_tpot_ms))
     print("{:<40} {:<10.2f}".format("P99 TPOT (ms):", metrics.p99_tpot_ms))
-    print("=" * 50)
+    if args.output_text:
+        print("=" * 50)
+        for i, (input, output) in enumerate(zip(inputs, outputs)):
+            print(f'=============================={i} {len(output.itl)}==============================')
+            print(input[0])
+            print(f'---------------------------------------------------------------')
+            print(output.generated_text)
+        
 
 def main(args: argparse.Namespace):
     # 1. set seed
@@ -174,8 +181,8 @@ def main(args: argparse.Namespace):
     inputs = sample_sharegpt_requests(dataset_path='./dataset/ShareGPT_V3_unfiltered_cleaned_split.json', num_requests=args.num_prompts, tokenizer=tokenizer)
 
     asyncio.run(benchmark(
+        args=args, 
         inputs=inputs, 
-        request_rate = args.request_rate
     ))
 
 if __name__ == '__main__':
@@ -197,6 +204,23 @@ if __name__ == '__main__':
         "Otherwise, we use Poisson process to synthesize "
         "the request arrival times.",
     )
+    parser.add_argument(
+        "--output",
+        type=float,
+        default=float("inf"),
+        help="Number of requests per second. If this is inf, "
+        "then all the requests are sent at time 0. "
+        "Otherwise, we use Poisson process to synthesize "
+        "the request arrival times.",
+    )
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        '--output-text',
+        action='store_true',
+        default=False,
+        help='output generated text'
+    )
+
+    
     args = parser.parse_args()
     main(args)
