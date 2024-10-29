@@ -32,17 +32,19 @@ class LLMEngine:
         self.graphs: dict[int, torch.cuda.CUDAGraph] = {} # batch_size -> cuda graph
         cuda_graph_max_batch_size = 64
         cuda_graph_max_seq_len = 1024
-        cuda_graph_max_block_len_per_seq = (cuda_graph_max_batch_size + self.block_size - 1) // self.block_size
+        cuda_graph_max_block_len_per_seq = (cuda_graph_max_seq_len + self.block_size - 1) // self.block_size
         cuda_graph_max_block_len = cuda_graph_max_batch_size * cuda_graph_max_block_len_per_seq
-        self.num_blocks_per_seq = num_blocks_per_seq = 5
-        self.static_input_ids = torch.empty(cuda_graph_max_batch_size, dtype=torch.int, device=self.device)
-        self.static_position_ids = torch.empty(cuda_graph_max_batch_size, dtype=torch.int, device=self.device)
-        self.static_q_cu_seq_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
-        self.static_kv_cu_seq_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
-        self.static_new_cache_slots = torch.empty(cuda_graph_max_batch_size, dtype=torch.int, device=self.device)
-        self.static_block_tables = torch.empty(cuda_graph_max_block_len, dtype=torch.int, device=self.device)
-        self.static_cu_blocks_lens = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
-        self.static_logits = torch.empty((cuda_graph_max_batch_size, self.config.vocab_size), dtype=self.dtype, device=self.device)
+
+        self.vocab_size = self.config.vocab_size
+        self.graphs: dict[int, torch.cuda.CUDAGraph] = {} # batch_size -> cuda graph
+        self.static_input_ids       = torch.empty(cuda_graph_max_batch_size    , dtype=torch.int, device=self.device)
+        self.static_position_ids    = torch.empty(cuda_graph_max_batch_size    , dtype=torch.int, device=self.device)
+        self.static_q_cu_seq_lens   = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
+        self.static_kv_cu_seq_lens  = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
+        self.static_new_cache_slots = torch.empty(cuda_graph_max_batch_size    , dtype=torch.int, device=self.device)
+        self.static_block_tables    = torch.empty(cuda_graph_max_block_len     , dtype=torch.int, device=self.device)
+        self.static_cu_blocks_lens  = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
+        self.static_logits          = torch.empty((cuda_graph_max_batch_size   , self.vocab_size), dtype=self.dtype, device=self.device)
         for batch_size in range(1, cuda_graph_max_batch_size, 1):
             print(f'cuda capture batch_size {batch_size}')
             input_ids = self.static_input_ids[:batch_size]

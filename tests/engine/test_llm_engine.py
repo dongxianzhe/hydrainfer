@@ -66,6 +66,20 @@ def test_input():
     print(f'total token_ids {len(all)}')
 
 
+def test_batch_policy():
+    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    llm_engine = LLMEngine()
+    num_requests = 10000
+    for i in range(num_requests):
+        seq_id = llm_engine.add_request(prompts[0])
+    sequences: list[Sequence] = []
+    for i in range(10000): # step 100 to ensure finish all sequences
+        _, finished = llm_engine.step()
+        sequences += finished
+
+    assert len(sequences) == num_requests
+
 if __name__ == '__main__':
-    test_forward()
+    # test_forward()
     # test_input()
+    test_batch_policy()
