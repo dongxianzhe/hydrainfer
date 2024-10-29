@@ -5,6 +5,7 @@ from dxz.model.gpt2 import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.request.sequence import Sequence
 from dxz.memory.block_allocator import BlockAllocator
+from dxz.model_runner.cuda_graph_model_runner import CudaGraphModelRunner
 import queue
 
 class LLMEngine:
@@ -29,49 +30,9 @@ class LLMEngine:
             self.kv_caches.append(KVCache(key_cache, value_cache))
         self.allocator = BlockAllocator(self.num_blocks)
         # 3. capture cuda graph for fast decode
-        self.graphs: dict[int, torch.cuda.CUDAGraph] = {} # batch_size -> cuda graph
-        cuda_graph_max_batch_size = 64
-        cuda_graph_max_seq_len = 1024
-        cuda_graph_max_block_len_per_seq = (cuda_graph_max_seq_len + self.block_size - 1) // self.block_size
-        cuda_graph_max_block_len = cuda_graph_max_batch_size * cuda_graph_max_block_len_per_seq
-
-        self.vocab_size = self.config.vocab_size
-        self.graphs: dict[int, torch.cuda.CUDAGraph] = {} # batch_size -> cuda graph
-        self.static_input_ids       = torch.empty(cuda_graph_max_batch_size    , dtype=torch.int, device=self.device)
-        self.static_position_ids    = torch.empty(cuda_graph_max_batch_size    , dtype=torch.int, device=self.device)
-        self.static_q_cu_seq_lens   = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
-        self.static_kv_cu_seq_lens  = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
-        self.static_new_cache_slots = torch.empty(cuda_graph_max_batch_size    , dtype=torch.int, device=self.device)
-        self.static_block_tables    = torch.empty(cuda_graph_max_block_len     , dtype=torch.int, device=self.device)
-        self.static_cu_blocks_lens  = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
-        self.static_logits          = torch.empty((cuda_graph_max_batch_size   , self.vocab_size), dtype=self.dtype, device=self.device)
-        for batch_size in range(1, cuda_graph_max_batch_size, 1):
-            print(f'cuda capture batch_size {batch_size}')
-            input_ids = self.static_input_ids[:batch_size]
-            position_ids = self.static_position_ids[:batch_size]
-            input_params = InputParameters(
-                num_sequences = batch_size, 
-                q_cu_seq_lens = self.static_q_cu_seq_lens[:batch_size+1], 
-                kv_cu_seq_lens = self.static_kv_cu_seq_lens[:batch_size+1], 
-                new_cache_slots = self.static_new_cache_slots[:batch_size], 
-                block_tables = self.static_block_tables, 
-                cu_blocks_lens = self.static_cu_blocks_lens[:batch_size+1]
-            )
-            # Run the model a few times without capturing the graph.
-            # This is to make sure that the captured graph does not include the
-            # kernel launches for initial benchmarking (e.g., Triton autotune).
-            # Note one iteration is not enough for torch.jit.script
-            self.model(input_ids, position_ids, self.kv_caches, input_params)
-            self.model(input_ids, position_ids, self.kv_caches, input_params)
-            torch.cuda.synchronize()
-
-            g = torch.cuda.CUDAGraph()
-            with torch.cuda.graph(g):
-                self.static_logits[:batch_size] = self.model(input_ids, position_ids, self.kv_caches, input_params)
-            torch.cuda.synchronize()
-            self.graphs[batch_size] = g
+        self.model_runner = CudaGraphModelRunner(model_runner=self.model, dtype=self.dtype,device=self.device,block_size=self.block_size, vocab_size=self.tokenizer.vocab_size, kv_caches=self.kv_caches, cuda_graph_max_batch_size=64, cuda_graph_max_seq_len=1024)
         
-        # 5. batch policy
+        # 4. batch policy
         self.sequence_id_allocator: int = 0
         self.max_tokens_per_batch : int = 1024
         self.chunk_size           : int = 256
@@ -204,22 +165,7 @@ class LLMEngine:
         )
         
         # 3. forward
-        all_sequence_is_decode: bool = len(batch_sequences) == len(token_ids)
-        num_sequences = input_params.num_sequences
-        if all_sequence_is_decode and num_sequences in self.graphs:
-            g = self.graphs[num_sequences]
-            self.static_input_ids[: num_sequences].copy_(input_ids)
-            self.static_position_ids[: num_sequences].copy_(position_ids)
-            self.static_q_cu_seq_lens[: num_sequences + 1].copy_(input_params.q_cu_seq_lens)
-            self.static_kv_cu_seq_lens[: num_sequences + 1].copy_(input_params.kv_cu_seq_lens)
-            self.static_new_cache_slots[: num_sequences].copy_(input_params.new_cache_slots)
-            self.static_block_tables[: input_params.block_tables.shape[-1]].copy_(input_params.block_tables)
-            self.static_cu_blocks_lens[: num_sequences + 1].copy_(input_params.cu_blocks_lens)
-            g.replay()
-            logits = self.static_logits[: num_sequences, :]
-        else:
-            logits = self.model(input_ids, position_ids, self.kv_caches, input_params)
-
+        logits = self.model_runner.forward(input_ids, position_ids, self.kv_caches, input_params)
         for sequence, q_seq_len in zip(batch_sequences, q_seq_lens):
             sequence.n_kv_cache_tokens += q_seq_len
         
