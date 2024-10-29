@@ -41,13 +41,15 @@ class LLMEngine:
         self.decode_queue : queue.Queue = queue.Queue()
 
     def add_request(self, prompt: str) -> int:
+        # now it's user responsibility to not pass in prompt length greater than model can forward
         self.sequence_id_allocator += 1
         token_ids = self.tokenizer.encode(prompt)
         sequence = Sequence(
             id = self.sequence_id_allocator, 
             token_ids = token_ids, 
             num_prompt_tokens = len(token_ids), 
-            eos_token_id = self.tokenizer.eos_token_id
+            eos_token_id = self.tokenizer.eos_token_id, 
+            max_seq_len  = self.config.n_positions
         ) 
         self.new_queue.put(sequence)
 
@@ -170,14 +172,15 @@ class LLMEngine:
             sequence.n_kv_cache_tokens += q_seq_len
         
         # 4. sample
-        sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to(torch.device('cpu'))
+        if len(selected_token_ids) > 0:
+            sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to(torch.device('cpu'))
 
-        i = 0
-        for sequence in batch_sequences:
-            if sequence.is_decode:
-                token_id = sample_token_ids[i].item()
-                i += 1
-                sequence.token_ids.append(token_id)
+            i = 0
+            for sequence in batch_sequences:
+                if sequence.is_decode:
+                    token_id = sample_token_ids[i].item()
+                    i += 1
+                    sequence.token_ids.append(token_id)
             
         # 5. put sequnce batch to queue and free finished
         decode_output: list[Sequence] = []

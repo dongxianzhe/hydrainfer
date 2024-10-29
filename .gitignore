@@ -14,3 +14,5 @@ commands
 benchmark/dataset/sharegpt_gpt4.jsonl
 benchmark/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 **/*.log
+**/*.perf*
+**/*.pth

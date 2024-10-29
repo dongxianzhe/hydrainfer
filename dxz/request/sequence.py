@@ -11,10 +11,11 @@ class Sequence:
     # stop criterian
     max_tokens: int = 50
     eos_token_id:int = 0
+    max_seq_len:int = 1024
 
     @property
     def is_finished(self) -> bool:
-        return self.token_ids[-1] == self.eos_token_id or (len(self.token_ids) - self.num_prompt_tokens) == self.max_tokens
+        return self.token_ids[-1] == self.eos_token_id or (len(self.token_ids) - self.num_prompt_tokens) == self.max_tokens or len(self.token_ids) > self.max_seq_len
 
     @property
     def is_prefill(self) -> bool:
