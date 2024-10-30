@@ -13,9 +13,10 @@ class LlamaSdpaAttention(nn.Module):
         super().__init__()
         self.config = config
         self.q_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-        self.k_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-        self.v_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=False)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+
         self.rotary_emb = RotaryEmbedding(
             rotary_dim=config.head_dim,
             max_position_embeddings=config.max_position_embeddings,
