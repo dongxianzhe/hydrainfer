@@ -29,7 +29,7 @@ class RotaryEmbedding(nn.Module):
         cos_sin = torch.cat([emd.cos(), emd.sin()], dim=-1)
         # cos_sin (max_position_embedding, rotary_dim * 2)
         # [ca, ca, cb, cb, sa, sa, sb, sb] or [ca, cb, ca, cb, sa, sb, sa, sb]
-        self.register_buffer(name='cos_sin_cache', tensor=cos_sin)
+        self.register_buffer(name='cos_sin_cache', tensor=cos_sin, persistent=False)
     
     def forward(self, query: Tensor, key: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
         # query (num_tokens, n_qo_heads, head_dim)
