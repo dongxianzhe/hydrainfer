@@ -1,7 +1,6 @@
 import torch
-from transformers import GPT2Tokenizer
-from dxz.model.gpt2 import GPT2LMHeadModel
-from dxz.model.gpt2 import InputParameters
+from dxz.model.parameters import InputParameters
+from dxz.model.model_loader import load_model_tokenizer
 from dxz.memory.kv_cache import KVCache
 from dxz.request.sequence import Sequence
 from dxz.memory.block_allocator import BlockAllocator
@@ -13,24 +12,23 @@ class LLMEngine:
         self.device = torch.device('cuda:0')
         self.dtype = torch.half
         # 1. init model
-        self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-        self.model = GPT2LMHeadModel.from_pretrained('gpt2')
-        self.model.to(self.dtype)
-        self.model.to(self.device)
-        self.model.eval()
-        self.config = self.model.config
+        # self.model, self.tokenizer, self.n_kv_heads, self.head_size, self.n_layers, self.max_seq_len = load_model_tokenizer(model_name= 'gpt2', dtype=self.dtype, device=self.device)
+        self.model, self.tokenizer, self.n_kv_heads, self.head_size, self.n_layers, self.max_seq_len = load_model_tokenizer(model_name='meta-llama/Llama-2-7b-hf', dtype=self.dtype, device=self.device)
+        print(f'model info: n_kv_heads  {self.n_kv_heads} head_size   {self.head_size} n_layers    {self.n_layers} max_seq_len {self.max_seq_len}')
+        print()
         # 2. init kv cache
         self.block_size = 16
-        self.head_size = self.config.n_embd // self.config.n_head
-        self.num_blocks = 4 * 1024 * 1024 * 1024 // 2 // self.config.n_embd // self.block_size // self.config.n_layer
+        self.num_blocks = 4 * 1024 * 1024 * 1024 // 2 // self.n_layers // self.block_size // self.n_kv_heads // self.head_size 
         self.kv_caches = []
-        for _ in range(self.config.n_layer):
-            key_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=self.dtype)
-            value_cache = torch.empty(self.num_blocks, self.block_size, self.config.n_head, self.head_size, device=self.device, dtype=self.dtype)
+        for _ in range(self.n_layers):
+            key_cache = torch.empty(self.num_blocks, self.block_size, self.n_kv_heads, self.head_size, device=self.device, dtype=self.dtype)
+            value_cache = torch.empty(self.num_blocks, self.block_size, self.n_kv_heads, self.head_size, device=self.device, dtype=self.dtype)
             self.kv_caches.append(KVCache(key_cache, value_cache))
         self.allocator = BlockAllocator(self.num_blocks)
+        print(f'kv cache info block_size {self.block_size} num blocks {self.num_blocks}')
         # 3. capture cuda graph for fast decode
-        self.model_runner = CudaGraphModelRunner(model_runner=self.model, dtype=self.dtype,device=self.device,block_size=self.block_size, vocab_size=self.tokenizer.vocab_size, kv_caches=self.kv_caches, cuda_graph_max_batch_size=64, cuda_graph_max_seq_len=1024)
+        self.model_runner = self.model
+        # self.model_runner = CudaGraphModelRunner(model_runner=self.model, dtype=self.dtype,device=self.device,block_size=self.block_size, vocab_size=self.tokenizer.vocab_size, kv_caches=self.kv_caches, cuda_graph_max_batch_size=64, cuda_graph_max_seq_len=1024)
         
         # 4. batch policy
         self.sequence_id_allocator: int = 0
@@ -49,7 +47,7 @@ class LLMEngine:
             token_ids = token_ids, 
             num_prompt_tokens = len(token_ids), 
             eos_token_id = self.tokenizer.eos_token_id, 
-            max_seq_len  = self.config.n_positions
+            max_seq_len  = self.max_seq_len
         ) 
         self.new_queue.put(sequence)
 

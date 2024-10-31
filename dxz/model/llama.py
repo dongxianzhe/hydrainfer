@@ -110,6 +110,7 @@ class LlamaModel(nn.Module):
 class LlamaForCausalLM(nn.Module):
     def __init__(self, config: LlamaConfig):
         super().__init__()
+        self.config = config
         self.model = LlamaModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     

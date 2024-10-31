@@ -35,9 +35,9 @@ prompts = [
     ]
 
 def test_forward():
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     # engine
     llm_engine = LLMEngine()
+    tokenizer = llm_engine.tokenizer
     for prompt in prompts:
         seq_id = llm_engine.add_request(prompt)
     
@@ -67,8 +67,8 @@ def test_input():
 
 
 def test_batch_policy():
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
     llm_engine = LLMEngine()
+    tokenizer = llm_engine.tokenizer
     num_requests = 10000
     for i in range(num_requests):
         seq_id = llm_engine.add_request(prompts[0])
@@ -80,6 +80,6 @@ def test_batch_policy():
     assert len(sequences) == num_requests
 
 if __name__ == '__main__':
-    # test_forward()
+    test_forward()
     # test_input()
-    test_batch_policy()
+    # test_batch_policy()

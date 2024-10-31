@@ -97,7 +97,7 @@ class GPT2LMHeadModel(nn.Module):
     
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str):
-        assert pretrained_model_name_or_path == 'gpt2', '{pretrained_model_name_or_path} is not support'
+        assert pretrained_model_name_or_path == 'gpt2', f'{pretrained_model_name_or_path} is not support'
         from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
         model_ref = GPT2LMHeadModelRef.from_pretrained(pretrained_model_name_or_path)
         model = cls(model_ref.config)
