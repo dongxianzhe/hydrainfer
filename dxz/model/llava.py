@@ -1,138 +1,94 @@
 import torch
-from torch import nn
-from transformers import LlavaConfig
+from torch import nn, Tensor
+from transformers import LlavaConfig, LlamaConfig
+from dxz.model.parameters import InputParameters
+from dxz.memory.kv_cache import KVCache
+from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm
+from dxz.model.clip import CLIPVisionModel
+from typing import Optional
+import math
 
-class CLIPSdpaAttention(nn.Module):
-    def __init__(self, config: LlavaConfig):
+class LlamaModel(nn.Module):
+    def __init__(self, config: LlamaConfig):
         super().__init__()
-        self.k_proj = nn.Linear(config.vision_config.hidden_size, config.vision_config.hidden_size, bias=True)
-        self.v_proj = nn.Linear(config.vision_config.hidden_size, config.vision_config.hidden_size, bias=True)
-        self.q_proj = nn.Linear(config.vision_config.hidden_size, config.vision_config.hidden_size, bias=True)
-        self.out_proj = nn.Linear(config.vision_config.hidden_size, config.vision_config.hidden_size, bias=True)
+        self.embed_tokens = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
+        self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.norm = LlamaRMSNorm(config)
+    
+    def forward(self, input_embeds: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
+        hidden_states = input_embeds
+        for i, layer in enumerate(self.layers):
+            hidden_states = layer(hidden_states, position_ids, kv_caches[i], input_params)
+        return self.norm(hidden_states)
 
-class CLIPMLP(nn.Module):
-    def __init__(self, config: LlavaConfig):
+class LlamaForCausalLM(nn.Module):
+    def __init__(self, config: LlamaConfig):
         super().__init__()
-        self.fc1 = nn.Linear(config.vision_config.hidden_size, config.vision_config.intermediate_size, bias=True)
-        self.fc2 = nn.Linear(config.vision_config.intermediate_size, config.vision_config.hidden_size, bias=True)
-
-class CLIPEncoderLayer(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.self_attn = CLIPSdpaAttention(config)
-        self.layer_norm1 = nn.LayerNorm(config.vision_config.hidden_size, eps=config.vision_config.layer_norm_eps)
-        self.mlp = CLIPMLP(config)
-        self.layer_norm2 = nn.LayerNorm(config.vision_config.hidden_size, eps=config.vision_config.layer_norm_eps)
-
-class CLIPEncoder(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.vision_config.num_hidden_layers)])
-
-class CLIPVisionEmbeddings(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.embed_dim = config.vision_config.hidden_size
-        self.image_size = config.vision_config.image_size
-        self.patch_size = config.vision_config.patch_size
-
-        self.class_embedding = nn.Parameter(torch.randn(self.embed_dim))
-
-        self.patch_embedding = nn.Conv2d(
-            in_channels=config.vision_config.num_channels,
-            out_channels=self.embed_dim,
-            kernel_size=self.patch_size,
-            stride=self.patch_size,
-            bias=False,
-        )
-
-        self.num_patches = (self.image_size // self.patch_size) ** 2
-        self.num_positions = self.num_patches + 1
-        self.position_embedding = nn.Embedding(self.num_positions, self.embed_dim)
-        self.register_buffer("position_ids", torch.arange(self.num_positions).expand((1, -1)), persistent=False)
-
-    # def forward(self, pixel_values: torch.FloatTensor) -> torch.Tensor:
-    #     batch_size = pixel_values.shape[0]
-    #     target_dtype = self.patch_embedding.weight.dtype
-    #     patch_embeds = self.patch_embedding(pixel_values.to(dtype=target_dtype))  # shape = [*, width, grid, grid]
-    #     patch_embeds = patch_embeds.flatten(2).transpose(1, 2)
-
-    #     class_embeds = self.class_embedding.expand(batch_size, 1, -1)
-    #     embeddings = torch.cat([class_embeds, patch_embeds], dim=1)
-    #     embeddings = embeddings + self.position_embedding(self.position_ids)
-    #     return embeddings
-
-class CLIPVisionTransformer(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.embeddings = CLIPVisionEmbeddings(config)
-        self.pre_layrnorm = nn.LayerNorm(config.vision_config.hidden_size, eps=config.vision_config.layer_norm_eps)
-        self.encoder = CLIPEncoder(config)
-        self.post_layernorm = nn.LayerNorm(config.vision_config.hidden_size, eps=config.vision_config.layer_norm_eps)
-
-class CLIPVisionModel(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.vision_model = CLIPVisionTransformer(config)
+        self.config = config
+        self.model = LlamaModel(config)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+    
+    def forward(self, input_embeds: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
+        hidden_state = self.model(input_embeds, position_ids, kv_caches, input_params)
+        logits = self.lm_head(hidden_state)
+        return logits
 
 class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: LlavaConfig):
         super().__init__()
         self.linear_1 = nn.Linear(config.vision_config.hidden_size, config.text_config.hidden_size, bias=True)
         self.linear_2 = nn.Linear(config.text_config.hidden_size, config.text_config.hidden_size, bias=True)
-
-class LlamaSdpaAttention(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.q_proj = nn.Linear(config.text_config.hidden_size, config.text_config.hidden_size, bias=False)
-        self.k_proj = nn.Linear(config.text_config.hidden_size, config.text_config.hidden_size, bias=False)
-        self.v_proj = nn.Linear(config.text_config.hidden_size, config.text_config.hidden_size, bias=False)
-        self.o_proj = nn.Linear(config.text_config.hidden_size, config.text_config.hidden_size, bias=False)
-
-class LlamaMLP(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.gate_proj = nn.Linear(config.text_config.hidden_size, config.text_config.intermediate_size, bias=False)
-        self.up_proj   = nn.Linear(config.text_config.hidden_size, config.text_config.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(config.text_config.intermediate_size, config.text_config.hidden_size, bias=False)
-
-class LlamaRMSNorm(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(config.text_config.hidden_size))
-        self.variance_epsilon = config.text_config.rms_norm_eps
-
-    # def forward(self, hidden_states):
-    #     input_dtype = hidden_states.dtype
-    #     hidden_states = hidden_states.to(torch.float32)
-    #     variance = hidden_states.pow(2).mean(-1, keepdim=True)
-    #     hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-    #     return self.weight * hidden_states.to(input_dtype)
-
-class LlamaDecoderLayer(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.self_attn = LlamaSdpaAttention(config)
-        self.mlp = LlamaMLP(config)
-        self.input_layernorm = LlamaRMSNorm(config)
-        self.post_attention_layernorm = LlamaRMSNorm(config)
-
-class LlamaModel(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.embed_tokens = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.text_config.hidden_size)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.text_config.num_hidden_layers)])
-        self.norm = LlamaRMSNorm(config)
-
-class LlamaForCausalLM(nn.Module):
-    def __init__(self, config: LlavaConfig):
-        super().__init__()
-        self.model = LlamaModel(config)
-        self.lm_head = nn.Linear(config.text_config.hidden_size, config.vocab_size, bias=False)
+        self.act = nn.GELU()
+    
+    def forward(self, image_features: Tensor) -> Tensor:
+        # image_features (n_images, n_tokens, vision_hidden_size)
+        hidden_states = self.linear_1(image_features)
+        hidden_states = self.act(hidden_states)
+        hidden_states = self.linear_2(hidden_states)
+        return hidden_states
 
 class LlavaForConditionalGeneration(nn.Module):
     def __init__(self, config: LlavaConfig):
         super().__init__()
-        self.vision_tower = CLIPVisionModel(config)
+        self.config = config
+        # assert config.vision_feature_select_strategy == 'default'
+        self.vision_tower = CLIPVisionModel(config.vision_config)
         self.multi_modal_projector = LlavaMultiModalProjector(config)
-        self.language_model = LlamaForCausalLM(config)
+        self.language_model = LlamaForCausalLM(config.text_config)
+    
+    def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], position_ids: Tensor, kv_caches: Tensor, input_params: InputParameters) -> Tensor:
+        # 1. compute input embeds
+        input_embeds = self.language_model.model.embed_tokens(input_ids) # (n_tokens, n_embeds)
+
+        if pixel_values is not None:
+            # 2. compute image embeds
+            _, _, all_hidden_states = self.vision_tower(pixel_values)
+            hidden_states = all_hidden_states[self.config.vision_feature_layer] # (n_images, 577, 1024)
+            selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
+            image_features = self.multi_modal_projector(selected_image_feature)
+
+            # 3. merge embeds
+            image_token_mask = input_ids == self.config.image_token_index 
+            new_token_position = torch.cumsum(image_token_mask * (576 - 1) + 1, dim=-1) - 1
+
+            n_tokens = input_ids.shape[0] + image_features.shape[0] * (image_features.shape[1] - 1)
+
+            text_overwrite_idx = new_token_position[~image_token_mask]
+
+            merged_embed = torch.zeros(size=(n_tokens, self.config.text_config.hidden_size), dtype=input_embeds.dtype)
+            merged_embed[text_overwrite_idx, :] = input_embeds[~image_token_mask, :]
+
+            image_overwrite_mask = torch.ones(size=(n_tokens, ), dtype=torch.bool)
+            image_overwrite_mask[text_overwrite_idx] = False
+            merged_embed[image_overwrite_mask, :] = image_features.reshape(-1, self.config.text_config.hidden_size)
+
+        if pixel_values is not None:
+            position_ids = torch.arange(n_tokens, dtype=torch.int, device=input_ids.device) # todo check prefill or decode
+
+        # 4. compute logits
+        if pixel_values is not None:
+            logits = self.language_model(merged_embed, position_ids, kv_caches, input_params)
+        else:
+            logits = self.language_model(input_embeds, position_ids, kv_caches, input_params)
+
+        return logits
