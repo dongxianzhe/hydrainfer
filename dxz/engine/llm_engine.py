@@ -12,8 +12,8 @@ class LLMEngine:
         self.device = torch.device('cuda:0')
         self.dtype = torch.half
         # 1. init model
-        # self.model, self.tokenizer, self.n_kv_heads, self.head_size, self.n_layers, self.max_seq_len = load_model_tokenizer(model_name= 'gpt2', dtype=self.dtype, device=self.device)
-        self.model, self.tokenizer, self.n_kv_heads, self.head_size, self.n_layers, self.max_seq_len = load_model_tokenizer(model_name='meta-llama/Llama-2-7b-hf', dtype=self.dtype, device=self.device)
+        self.model, self.tokenizer, self.n_kv_heads, self.head_size, self.n_layers, self.max_seq_len = load_model_tokenizer(model_name= 'gpt2', dtype=self.dtype, device=self.device)
+        # self.model, self.tokenizer, self.n_kv_heads, self.head_size, self.n_layers, self.max_seq_len = load_model_tokenizer(model_name='meta-llama/Llama-2-7b-hf', dtype=self.dtype, device=self.device)
         print(f'model info: n_kv_heads  {self.n_kv_heads} head_size   {self.head_size} n_layers    {self.n_layers} max_seq_len {self.max_seq_len}')
         print()
         # 2. init kv cache
@@ -28,7 +28,7 @@ class LLMEngine:
         print(f'kv cache info block_size {self.block_size} num blocks {self.num_blocks}')
         # 3. capture cuda graph for fast decode
         self.model_runner = self.model
-        # self.model_runner = CudaGraphModelRunner(model_runner=self.model, dtype=self.dtype,device=self.device,block_size=self.block_size, vocab_size=self.tokenizer.vocab_size, kv_caches=self.kv_caches, cuda_graph_max_batch_size=64, cuda_graph_max_seq_len=1024)
+        self.model_runner = CudaGraphModelRunner(model_runner=self.model, dtype=self.dtype,device=self.device,block_size=self.block_size, vocab_size=self.tokenizer.vocab_size, kv_caches=self.kv_caches, cuda_graph_max_batch_size=64, cuda_graph_max_seq_len=self.max_seq_len)
         
         # 4. batch policy
         self.sequence_id_allocator: int = 0
@@ -140,8 +140,10 @@ class LLMEngine:
         cu_blocks_lens    : list[int] = [0]
         new_cache_slots   : list[int] = []
         selected_token_ids: list[int] = []
+        kv_seq_lens       : list[int] = []
         for sequence, q_seq_len in zip(batch_sequences, q_seq_lens):
             kv_seq_len = sequence.n_kv_cache_tokens + q_seq_len
+            kv_seq_lens.append(kv_seq_len)
             for i in range(sequence.n_kv_cache_tokens, kv_seq_len):
                 token_ids.append(sequence.token_ids[i])
                 positions.append(i)
@@ -161,7 +163,9 @@ class LLMEngine:
             kv_cu_seq_lens = torch.tensor(kv_cu_seq_lens, dtype=torch.int, device=self.device), 
             new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.device), 
             block_tables = torch.tensor(block_tables, dtype=torch.int, device=self.device), 
-            cu_blocks_lens = torch.tensor(cu_blocks_lens, dtype=torch.int, device=self.device)
+            cu_blocks_lens = torch.tensor(cu_blocks_lens, dtype=torch.int, device=self.device), 
+            q_max_seq_len = max(q_seq_lens), 
+            kv_max_seq_len = max(kv_seq_lens)
         )
         
         # 3. forward

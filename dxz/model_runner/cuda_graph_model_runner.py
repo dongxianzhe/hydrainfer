@@ -26,7 +26,7 @@ class CudaGraphModelRunner:
         self.static_cu_blocks_lens  = torch.empty(cuda_graph_max_batch_size + 1, dtype=torch.int, device=self.device)
         self.static_logits          = torch.empty((cuda_graph_max_batch_size   , self.vocab_size), dtype=self.dtype, device=self.device)
 
-        batch_sizes = list(range(1, cuda_graph_max_batch_size, 1))
+        batch_sizes = list(range(1, cuda_graph_max_batch_size + 1, 1))
         print(f'cuda graph capture batch_sizes {batch_sizes}')
         for batch_size in batch_sizes:
             input_ids    = self.static_input_ids[:batch_size]
@@ -37,7 +37,9 @@ class CudaGraphModelRunner:
                 kv_cu_seq_lens  = self.static_kv_cu_seq_lens[:batch_size+1], 
                 new_cache_slots = self.static_new_cache_slots[:batch_size], 
                 block_tables    = self.static_block_tables, 
-                cu_blocks_lens  = self.static_cu_blocks_lens[:batch_size+1]
+                cu_blocks_lens  = self.static_cu_blocks_lens[:batch_size+1], 
+                q_max_seq_len   = 1,
+                kv_max_seq_len  = cuda_graph_max_seq_len
             )
             # Run the model a few times without capturing the graph.
             # This is to make sure that the captured graph does not include the

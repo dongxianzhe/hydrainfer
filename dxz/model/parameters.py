@@ -9,7 +9,9 @@ class InputParameters:
             kv_cu_seq_lens: Optional[Tensor]=None, 
             new_cache_slots: Optional[Tensor]=None,
             block_tables: Optional[Tensor]=None,
-            cu_blocks_lens: Optional[Tensor]=None
+            cu_blocks_lens: Optional[Tensor]=None, 
+            q_max_seq_len: int=1024, 
+            kv_max_seq_len: int=1024
            ):
 
         # total number of sequences in the batch
@@ -31,6 +33,10 @@ class InputParameters:
         # cumulative block length for each sequcne
         # IntTensor (n_seq + 1, )
         self.cu_blocks_lens = cu_blocks_lens
+        # maximum sequence length for query and kv
+        # used to help dispatch chooling the right kernel based on the length
+        self.q_max_seq_len = q_max_seq_len
+        self.kv_max_seq_len = kv_max_seq_len
     
     def to(self, device: torch.device):
         if self.q_cu_seq_lens   is not None: 
