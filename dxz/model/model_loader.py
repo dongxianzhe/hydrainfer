@@ -22,6 +22,16 @@ def load_model_tokenizer(model_name: str, dtype: torch.dtype, device: torch.devi
         head_size = model.config.head_dim
         n_layers = model.config.num_hidden_layers
         max_seq_len  = model.config.max_position_embeddings
+    elif model_name == 'fake':
+        from dxz.model.fake import FakeModel
+        from transformers import GPT2Tokenizer, GPT2Config
+        config = GPT2Config.from_pretrained('gpt2')
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        model = FakeModel(config)
+        n_kv_heads = model.config.n_head
+        head_size = model.config.n_embd // model.config.n_head
+        n_layers = model.config.n_layer
+        max_seq_len  = model.config.n_positions
     else:
         raise Exception(f'invalid model {model_name}')
     model.to(dtype)
