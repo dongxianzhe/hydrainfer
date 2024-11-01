@@ -5,7 +5,7 @@ from dxz.memory.kv_cache import KVCache
 from dxz.request.sequence import Sequence
 from dxz.memory.block_allocator import BlockAllocator
 from dxz.model_runner.cuda_graph_model_runner import CudaGraphModelRunner
-import queue
+from dxz.engine.continuous_batch import ContinuousBatch
 
 class LLMEngine:
     def __init__(self):
@@ -32,11 +32,7 @@ class LLMEngine:
         
         # 4. batch policy
         self.sequence_id_allocator: int = 0
-        self.max_tokens_per_batch : int = 1024
-        self.chunk_size           : int = 256
-        self.new_queue    : queue.Queue = queue.Queue()
-        self.prefill_queue: queue.Queue = queue.Queue()
-        self.decode_queue : queue.Queue = queue.Queue()
+        self.batch_policy = ContinuousBatch(max_tokens_per_batch = 1024, chunk_size = 256, allocator=self.allocator, block_size=self.block_size)
 
     def add_request(self, prompt: str) -> int:
         # now it's user responsibility to not pass in prompt length greater than model can forward
@@ -49,86 +45,14 @@ class LLMEngine:
             eos_token_id = self.tokenizer.eos_token_id, 
             max_seq_len  = self.max_seq_len
         ) 
-        self.new_queue.put(sequence)
+        self.batch_policy.add_new_sequence(sequence)
 
         return sequence.id
-    
-    def continous_batch(self):
-        done: bool = False
-        batch_num_tokens = 0
-        batch_sequences: list[Sequence] = []
-        q_seq_lens = []
-        while not self.decode_queue.empty():
-            sequence: Sequence = self.decode_queue.get()
-            
-            if len(sequence.block_table) * self.block_size < len(sequence.token_ids): # need allocate new block
-                blocks = self.allocator.allocate(1)
-                if len(blocks) == 0: # out of memory
-                    if not self.prefill_queue.empty(): # try to find an prefill sequence to preempt
-                        preempted_sequence:Sequence = self.prefill_queue.get()
-                        self.allocator.free(preempted_sequence.block_table)
-                        preempted_sequence.n_kv_cache_tokens = 0
-                        self.new_queue.put(preempted_sequence)
-                        blocks = self.allocator.allocate(1)
-                    elif not self.decode_queue.empty(): # try to find an decode sequence to preempt
-                        preempted_sequence:Sequence = self.prefill_queue.get()
-                        self.allocator.free(preempted_sequence.block_table)
-                        preempted_sequence.n_kv_cache_tokens = 0
-                        self.new_queue.put(preempted_sequence)
-                        blocks = self.allocator.allocate(1)
-                    else: # no sequence can be preempted, stop batch
-                        self.decode_queue.put(sequence)
-                        done = True
-                        break
-                sequence.block_table += blocks
-            
-            if batch_num_tokens + 1 <= self.max_tokens_per_batch:
-                # select this sequence
-                batch_num_tokens += 1 
-                batch_sequences.append(sequence)
-                q_seq_lens.append(1)
-
-            else: # this batch has too many tokens
-                done = True
-                break
-            
-        while not done and (not self.prefill_queue.empty() or not self.new_queue.empty()):
-            if not self.prefill_queue.empty():
-                sequence: Sequence = self.prefill_queue.get()
-            else:
-                sequence: Sequence = self.new_queue.get()
-            # compute chunk size
-            num_chunk_tokens = min(self.chunk_size, len(sequence.token_ids) - sequence.n_kv_cache_tokens, self.max_tokens_per_batch - batch_num_tokens)
-            if num_chunk_tokens == 0:
-                if sequence.is_new:
-                    self.new_queue.put(sequence)
-                else:
-                    self.prefill_queue.put(sequence)
-                done = True
-                break
-            
-            if len(sequence.block_table) * self.block_size <= sequence.n_kv_cache_tokens + num_chunk_tokens: # need allocate block
-                n_blocks = (sequence.n_kv_cache_tokens + num_chunk_tokens - len(sequence.block_table) * self.block_size + self.block_size - 1) // self.block_size
-                blocks = self.allocator.allocate(n_blocks)
-                if len(blocks) == 0: # out of memory
-                    self.prefill_queue.put(sequence)
-                    done = True
-                    break
-                else:
-                    sequence.block_table += blocks
-
-            # select this sequence
-            batch_num_tokens += num_chunk_tokens
-            batch_sequences.append(sequence)
-            q_seq_lens.append(num_chunk_tokens)
-        
-        return batch_sequences, q_seq_lens
-
 
     @torch.inference_mode()
     def step(self) -> tuple[list[Sequence], list[Sequence]]:
         # 1. batch and allocate memory
-        batch_sequences, q_seq_lens = self.continous_batch()
+        batch_sequences, q_seq_lens = self.batch_policy.batch()
         if len(batch_sequences) == 0:
             return [], []
         # 2. prepare input
@@ -189,10 +113,10 @@ class LLMEngine:
         finished_output: list[Sequence] = []
         for sequence in batch_sequences:
             if sequence.is_prefill_but_not_new:
-                self.prefill_queue.put(sequence)
+                self.batch_policy.add_prefill_sequence(sequence)
             elif sequence.is_decode_but_not_finished:
                 decode_output.append(sequence)
-                self.decode_queue.put(sequence)
+                self.batch_policy.add_decode_sequence(sequence)
             elif sequence.is_finished:
                 finished_output.append(sequence)
                 self.allocator.free(sequence.block_table)
