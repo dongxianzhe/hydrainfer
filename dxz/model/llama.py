@@ -1,7 +1,8 @@
+import os
 import torch
 from torch import nn, Tensor
 from transformers import LlamaConfig
-from transformers import LlamaForCausalLM as LlamaForCausalLMRef
+import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
@@ -26,18 +27,16 @@ class LlamaSdpaAttention(nn.Module):
                 ),
             interleaved=False
             )
-        if self.config.torch_dtype == 'float16':
-            self.attention = FlashAttention(
-                n_qo_heads=config.num_attention_heads,
-                n_kv_heads=config.num_key_value_heads,
-                head_dim=config.head_dim
-            )
-        else:
-            self.attention = Attention(
-                n_qo_heads=config.num_attention_heads,
-                n_kv_heads=config.num_key_value_heads,
-                head_dim=config.head_dim
-                )
+        self.attention = FlashAttention(
+            n_qo_heads=config.num_attention_heads,
+            n_kv_heads=config.num_key_value_heads,
+            head_dim=config.head_dim
+        )
+        # self.attention = Attention(
+        #     n_qo_heads=config.num_attention_heads,
+        #     n_kv_heads=config.num_key_value_heads,
+        #     head_dim=config.head_dim
+        #     )
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor:
         query = self.q_proj(hidden_states)
@@ -120,11 +119,32 @@ class LlamaForCausalLM(nn.Module):
         return logits
     
     @classmethod
-    def from_pretrained(cls, pretrained_model_name_or_path: str):
-        assert pretrained_model_name_or_path == "meta-llama/Llama-2-7b-hf", f'{pretrained_model_name_or_path} is not support'
-        model_ref = LlamaForCausalLMRef.from_pretrained(pretrained_model_name_or_path)
-        model = cls(model_ref.config)
-        state_dict_ref = model_ref.state_dict()
-        for name, weight in model.state_dict().items():
-            weight.data.copy_(state_dict_ref[name])
+    def from_safetensor(cls, model_weights_path: str, dtype: torch.dtype, device: torch.device):
+        # 1. create model
+        config = LlamaConfig.from_pretrained(model_weights_path)
+        torch.set_default_dtype(dtype)
+        with torch.device(device):
+            model = cls(config)
+        torch.set_default_dtype(torch.float)
+
+        # 2. load weights
+        state_dict = model.state_dict()
+        loaded_set = set()
+        for entry in os.scandir(model_weights_path):
+            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
+                print(f'load safetensor from {entry.path}')
+                for name, weight in safetensors.torch.load_file(entry.path).items():
+                    if name.endswith('.self_attn.rotary_emb.inv_freq'):
+                        continue
+                    state_dict[name].data.copy_(weight)
+                    loaded_set.add(name)
+        model.load_state_dict(state_dict)
+        model.eval()
+
+        # 3. verify
+        assert len(loaded_set) == len(state_dict)
+
         return model
+
+if __name__ == '__main__':
+    model = LlamaForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf", torch.half, torch.device('cuda:0'))
