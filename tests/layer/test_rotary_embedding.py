@@ -62,7 +62,7 @@ def apply_rotary_emb_ref(query:Tensor, key:Tensor, positions:Tensor, head_dim:in
         return query_ref, key_ref
 
 @pytest.mark.parametrize("device", [torch.device('cpu'), torch.device('cuda:0')])
-@pytest.mark.parametrize("dtype", [torch.float])
+@pytest.mark.parametrize("dtype", [torch.float, torch.half])
 @pytest.mark.parametrize("num_tokens", [1, 2, 8, 16])
 @pytest.mark.parametrize("n_heads", [32])
 @pytest.mark.parametrize("n_kv_heads", [32, 8, 1])

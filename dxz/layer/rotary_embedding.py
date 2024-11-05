@@ -32,6 +32,7 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer(name='cos_sin_cache', tensor=cos_sin, persistent=False)
     
     def forward(self, query: Tensor, key: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
+        dtype = query.dtype
         # query (num_tokens, n_qo_heads, head_dim)
         # key   (num_tokens, n_kv_heads, head_dim)
         # position_ids (num_tokens, )
@@ -67,7 +68,9 @@ class RotaryEmbedding(nn.Module):
             # counterclock
             query_rotary = (query_rotary * cos) + (self.rotate_half(query_rotary) * sin)
             key_rotary = (key_rotary * cos) + (self.rotate_half(key_rotary) * sin)
-        return (torch.cat([query_rotary, query_pass], dim=-1), torch.cat([key_rotary, key_pass], dim=-1))
+        query = torch.cat([query_rotary, query_pass], dim=-1)
+        key = torch.cat([key_rotary, key_pass], dim=-1)
+        return query.to(dtype), key.to(dtype)
         
     def rotate_every_two(self, x: Tensor) -> Tensor:
         # (n_tokens, n_heads, head_dim)
