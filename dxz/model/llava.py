@@ -1,3 +1,5 @@
+import os
+import safetensors.torch
 import torch
 from torch import nn, Tensor
 from transformers import LlavaConfig, LlamaConfig
@@ -57,6 +59,14 @@ class LlavaForConditionalGeneration(nn.Module):
         self.language_model = LlamaForCausalLM(config.text_config)
     
     def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], position_ids: Tensor, kv_caches: Tensor, input_params: InputParameters) -> Tensor:
+        # prefill state
+        #     position_ids is None
+        #     pixel_values is not None
+        # decode state
+        #     position_ids is not None
+        #     pixel_values is None
+        device = input_ids.device
+
         # 1. compute input embeds
         input_embeds = self.language_model.model.embed_tokens(input_ids) # (n_tokens, n_embeds)
 
@@ -75,7 +85,7 @@ class LlavaForConditionalGeneration(nn.Module):
 
             text_overwrite_idx = new_token_position[~image_token_mask]
 
-            merged_embed = torch.zeros(size=(n_tokens, self.config.text_config.hidden_size), dtype=input_embeds.dtype)
+            merged_embed = torch.zeros(size=(n_tokens, self.config.text_config.hidden_size), dtype=input_embeds.dtype, device=device)
             merged_embed[text_overwrite_idx, :] = input_embeds[~image_token_mask, :]
 
             image_overwrite_mask = torch.ones(size=(n_tokens, ), dtype=torch.bool)
@@ -92,3 +102,30 @@ class LlavaForConditionalGeneration(nn.Module):
             logits = self.language_model(input_embeds, position_ids, kv_caches, input_params)
 
         return logits
+    
+    @classmethod
+    def from_safetensor(cls, model_weights_path: str, dtype: torch.dtype, device: torch.device):
+        # 1. create model
+        config = LlavaConfig.from_pretrained(model_weights_path)
+        torch.set_default_dtype(dtype)
+        with torch.device(device):
+            model = cls(config)
+        torch.set_default_dtype(torch.float)
+
+        # 2. load weights
+        state_dict = model.state_dict()
+        loaded_set = set()
+        for entry in os.scandir(model_weights_path):
+            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
+                print(f'load safetensor from {entry.path}')
+                for name, weight in safetensors.torch.load_file(entry.path).items():
+                    state_dict[name].data.copy_(weight)
+                    loaded_set.add(name)
+        
+        model.load_state_dict(state_dict)
+        model.eval()
+
+        # 3. verify
+        assert len(loaded_set) == len(state_dict)
+
+        return model
