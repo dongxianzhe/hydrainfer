@@ -1,11 +1,42 @@
 import torch
 from dxz.memory.kv_cache import KVCache
 from dxz.model.parameters import InputParameters
-from dxz.layer.attention import TorchCausalGroupedQueryPageAttention, FlashCausalGroupedQueryPageAttention
 from typing import List, Tuple
 from itertools import accumulate
-from dxz.memory.block_allocator import BlockAllocator
 import pytest
+
+@pytest.mark.parametrize("batch_size", [1, 4, 15, 16])
+@pytest.mark.parametrize("seq_len", [1, 14, 111, 576])
+@pytest.mark.parametrize("head_dim", [64, 128, 256])
+@pytest.mark.parametrize("n_heads", [8, 4, 2, 1])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("device", [torch.device('cuda:0')])
+@torch.inference_mode()
+def test_attention(
+    batch_size: int, 
+    seq_len: int, 
+    head_dim: int, 
+    n_heads: int, 
+    dtype: torch.dtype, 
+    device: torch.device
+):
+    from dxz.layer.attention import TorchMultiHeadAttention
+    from dxz.layer.attention import FlashMultiHeadAttention
+    hidden_size = n_heads * head_dim
+
+    attention_ref = TorchMultiHeadAttention(n_heads=n_heads, head_dim=head_dim)
+    attention = FlashMultiHeadAttention(n_heads=n_heads, head_dim=head_dim)
+
+    q = torch.randn(size=(batch_size, seq_len, hidden_size), dtype=dtype, device=device)
+    k = torch.randn(size=(batch_size, seq_len, hidden_size), dtype=dtype, device=device)
+    v = torch.randn(size=(batch_size, seq_len, hidden_size), dtype=dtype, device=device)
+
+    o = attention(q, k, v)
+    o_ref = attention_ref(q, k, v)
+    print(f'o.view(-1)[:10]    : {o.view(-1)[:10]}')
+    print(f'o_ref.view(-1)[:10]: {o_ref.view(-1)[:10]}')
+    assert o.shape == o_ref.shape
+    assert torch.allclose(o, o_ref, atol=1e-2, rtol=1e-2)
 
 @pytest.mark.parametrize("seq_lens", [[(1, 100), (15, 15), (111, 234), (1, 1024)]])
 @pytest.mark.parametrize("num_heads", [(8, 8), (8, 4), (8, 2), (8, 1)])
@@ -14,7 +45,7 @@ import pytest
 @pytest.mark.parametrize("block_size", [16])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
 @torch.inference_mode
-def test_flash_attention(
+def test_causal_attention(
     seq_lens: List[Tuple[int, int]],
     num_heads: Tuple[int, int],
     head_size: int,
@@ -22,6 +53,8 @@ def test_flash_attention(
     n_blocks: int,
     block_size: int,
 ):
+    from dxz.layer.attention import TorchCausalGroupedQueryPageAttention, FlashCausalGroupedQueryPageAttention
+    from dxz.memory.block_allocator import BlockAllocator
     device = torch.device('cuda:0')
     # compute some mesc things
     seed = 42  
