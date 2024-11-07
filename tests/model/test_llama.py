@@ -25,9 +25,7 @@ def test_llama2_7b_correctness():
 
     n_blocks = 100
     block_size = 16
-    kv_caches = [KVCache(
-        torch.zeros(size=(n_blocks, block_size, config.num_key_value_heads, config.head_dim), dtype=dtype, device=device), 
-        torch.zeros(size=(n_blocks, block_size, config.num_key_value_heads, config.head_dim), dtype=dtype, device=device)) for _ in range(config.num_hidden_layers)]
+    kv_caches = [KVCache(n_blocks, block_size, config.num_key_value_heads, config.head_dim, dtype=dtype, device=device) for _ in range(config.num_hidden_layers)]
 
     token_ids = tokenizer.encode(prompt)
     input_ids_ref = torch.tensor(token_ids, dtype=torch.int)
@@ -82,9 +80,7 @@ def test_llama3_8b_instruct_correctness():
 
     n_blocks = 100
     block_size = 16
-    kv_caches = [KVCache(
-        torch.zeros(size=(n_blocks, block_size, config.num_key_value_heads, config.head_dim), dtype=dtype, device=device), 
-        torch.zeros(size=(n_blocks, block_size, config.num_key_value_heads, config.head_dim), dtype=dtype, device=device)) for _ in range(config.num_hidden_layers)]
+    kv_caches = [KVCache(n_blocks, block_size, config.num_key_value_heads, config.head_dim, dtype=dtype, device=device) for _ in range(config.num_hidden_layers)]
 
     messages = [
         {"role": "system", "content": "You are a pirate chatbot who always responds in pirate speak!"},

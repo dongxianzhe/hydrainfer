@@ -34,14 +34,10 @@ n_tokens = 10
 
 input_ids = torch.randint(0, config.vocab_size, size=(n_tokens, ), dtype=torch.int)
 position_ids = torch.arange(n_tokens, dtype=torch.int)
-kv_caches = []
 num_block = 100
 block_size = 16
 head_dim = config.hidden_size // config.num_attention_heads
-for i in range(config.num_hidden_layers):
-    k_cache = torch.empty(num_block, block_size, config.num_key_value_heads, head_dim)
-    v_cache = torch.empty(num_block, block_size, config.num_key_value_heads, head_dim)
-    kv_caches.append(KVCache(k_cache, v_cache))
+kv_caches = [KVCache(num_block, block_size, config.num_key_value_heads, head_dim, dtype=torch.float, device=torch.device('cpu')) for _ in range(config.num_hidden_layers)]
 
 input_params = InputParameters(
     num_sequences = 1, 

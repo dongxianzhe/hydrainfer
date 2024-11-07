@@ -37,9 +37,7 @@ def test_forward():
     logits_ref = model_ref(input_ids=input_ids, position_ids=position_ids)['logits']
     next_token_id_ref = torch.argmax(logits_ref[-1, :])
 
-    kv_caches = [KVCache(
-        torch.zeros(size=(100, 16, config.n_head, config.n_embd // config.n_head), dtype=dtype, device=device), 
-        torch.zeros(size=(100, 16, config.n_head, config.n_embd // config.n_head), dtype=dtype, device=device)) for _ in range(config.n_layer)]
+    kv_caches = [KVCache(100, 16, config.n_head, config.n_embd // config.n_head, dtype, device) for _ in range(config.n_layer)]
 
     input_params = InputParameters(
         num_sequences = 1, 
@@ -75,9 +73,7 @@ def test_generate():
     prompt = "Okay, let's rewrite this. We need some conversation between Jack and his mother immediately after - perhaps over dinner back at their house? She is concerned, but not doubting him too much, and he has to convince her to let him come back to the museum?"
     output_text_ref = "He is not going to let her go, and he is not going to let her go. He is going to let her go, and he is going to let her go. He is going to let her go, and he is going to let"
 
-    kv_caches = [KVCache(
-        torch.zeros(size=(100, 16, config.n_head, config.n_embd // config.n_head), dtype=dtype, device=device), 
-        torch.zeros(size=(100, 16, config.n_head, config.n_embd // config.n_head), dtype=dtype, device=device)) for _ in range(config.n_layer)]
+    kv_caches = [KVCache(100, 16, config.n_head, config.n_embd // config.n_head, dtype=dtype, device=device)for _ in range(config.n_layer)]
     token_ids = tokenizer.encode(prompt)
     n_prompt_tokens = len(token_ids)
     # prefill

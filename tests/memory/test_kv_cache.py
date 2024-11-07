@@ -1,6 +1,7 @@
 import torch
 import pytest
 from dxz.memory.kv_cache import KVCache
+import copy
 
 @pytest.mark.parametrize("num_blocks", [100])
 @pytest.mark.parametrize("block_size", [4, 8, 16])
@@ -19,19 +20,16 @@ def test_set_kv_cache(
     dtype: torch.dtype, 
     device: torch.device
 ):
-    kv_cache = KVCache(
-        torch.zeros(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device), 
-        torch.zeros(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device)
-    )
+    kv_cache = KVCache(num_blocks, block_size, num_kv_heads, head_size, dtype, device)
+    kv_cache_ref = copy.deepcopy(kv_cache)
+    key_cache, value_cache = kv_cache.get_kv_cache()
+    key_cache_ref, value_cache_ref = kv_cache_ref.get_kv_cache()
+
     slot_ids = torch.randperm(num_blocks, dtype=torch.int, device=device)[:n_tokens] # random select n_tokens different number in [0, num_blocks)
     key   = torch.randn(size=(n_tokens, num_kv_heads, head_size), dtype=dtype, device=device)
     value = torch.randn(size=(n_tokens, num_kv_heads, head_size), dtype=dtype, device=device)
     kv_cache.set_kv_cache(slot_ids, key, value)
-
-    key_cache, value_cache = kv_cache.get_kv_cache()
-
-    key_cache_ref   = torch.zeros(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device) 
-    value_cache_ref = torch.zeros(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device)
+    
     for i in range(n_tokens):
         slot_id = slot_ids[i]
         block_id = slot_id // block_size

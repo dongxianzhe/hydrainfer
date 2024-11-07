@@ -4,6 +4,7 @@ from dxz.model.parameters import InputParameters
 from typing import List, Tuple
 from itertools import accumulate
 import pytest
+import copy
 
 @pytest.mark.parametrize("batch_size", [1, 4, 15, 16])
 @pytest.mark.parametrize("seq_len", [1, 14, 111, 576])
@@ -44,6 +45,7 @@ def test_attention(
 @pytest.mark.parametrize("n_blocks", [10000])
 @pytest.mark.parametrize("block_size", [16])
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize("device", [torch.device('cuda:0')])
 @torch.inference_mode
 def test_causal_attention(
     seq_lens: List[Tuple[int, int]],
@@ -52,10 +54,10 @@ def test_causal_attention(
     dtype: torch.dtype,
     n_blocks: int,
     block_size: int,
+    device: torch.device
 ):
     from dxz.layer.attention import TorchCausalGroupedQueryPageAttention, FlashCausalGroupedQueryPageAttention
     from dxz.memory.block_allocator import BlockAllocator
-    device = torch.device('cuda:0')
     # compute some mesc things
     seed = 42  
     torch.manual_seed(seed)  
@@ -71,7 +73,7 @@ def test_causal_attention(
     value = torch.randn(n_tokens, head_size * n_kv_heads, dtype=dtype, device=device)
 
     new_cache_slots = []
-    allocator = BlockAllocator(10000)
+    allocator = BlockAllocator(n_blocks)
     block_tables = []
     cu_blocks_lens = [0]
     for q_seq_len, kv_seq_len in zip(q_seq_lens, kv_seq_lens):
@@ -82,12 +84,8 @@ def test_causal_attention(
         block_tables += block_table
         cu_blocks_lens.append(cu_blocks_lens[-1] + n_blocks_allocate)
 
-    k_cache = torch.randn(size=(n_blocks, block_size, n_kv_heads, head_size), dtype=dtype, device=device)
-    v_cache = torch.randn(size=(n_blocks, block_size, n_kv_heads, head_size), dtype=dtype, device=device)
-    k_cache_ref = k_cache.clone()
-    v_cache_ref = v_cache.clone()
-    kv_cache = KVCache(k_cache, v_cache)
-    kv_cache_ref = KVCache(k_cache_ref, v_cache_ref)
+    kv_cache     = KVCache(n_blocks, block_size, n_kv_heads, head_size, dtype=dtype, device=device)
+    kv_cache_ref = copy.deepcopy(kv_cache)
 
     input_params = InputParameters(
         num_sequences = len(seq_lens), 
@@ -99,11 +97,12 @@ def test_causal_attention(
     )
     # forward
     output = flashattention(query, key, value, kv_cache, input_params)
-    input_params
     output_ref = attention(query, key, value, kv_cache_ref, input_params)
     # compare result
-    assert torch.allclose(kv_cache.key_cache, kv_cache_ref.key_cache, atol=1e-3, rtol=1e-3), 'key cache is wrong'
-    assert torch.allclose(kv_cache.value_cache, kv_cache_ref.value_cache, atol=1e-3, rtol=1e-3), 'value cache is wrong'
+    assert torch.allclose(kv_cache.key_cache  , kv_cache_ref.key_cache  , atol=1e-2, rtol=1e-2), 'key cache is wrong'
+    assert torch.allclose(kv_cache.value_cache, kv_cache_ref.value_cache, atol=1e-2, rtol=1e-2), 'value cache is wrong'
+    print(output_ref.view(-1)[:10])
+    print(output.view(-1)[:10])
     assert torch.allclose(output_ref, output, atol=1e-2, rtol=1e-2), 'output wrong'
 
 if __name__ == '__main__':

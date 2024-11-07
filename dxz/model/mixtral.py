@@ -6,7 +6,7 @@ from typing import Optional
 from dxz.memory.kv_cache import KVCache
 from dxz.model.parameters import InputParameters
 from dxz.layer.rotary_embedding import compute_default_inv_freq, RotaryEmbedding
-from dxz.layer.attention import Attention
+from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
 
 class MixtralRMSNorm(nn.Module):
     def __init__(self, hidden_size: int, eps: float=1e-6):
@@ -112,7 +112,7 @@ class MixtralAttention(nn.Module):
             interleaved = False, 
         )
 
-        self.attention = Attention(n_qo_heads=self.num_heads, n_kv_heads=self.num_key_value_heads, head_dim=self.head_dim)
+        self.attention = TorchCausalGroupedQueryPageAttention(n_qo_heads=self.num_heads, n_kv_heads=self.num_key_value_heads, head_dim=self.head_dim)
     
     def forward(self, h: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor:
         q = self.q_proj(h)

@@ -49,10 +49,7 @@ def test_llava1_5_7b_hf():
     num_key_value_heads = model.config.text_config.num_key_value_heads
     head_dim = model.config.text_config.head_dim
     n_layers = model.config.text_config.num_hidden_layers
-    kv_caches = [KVCache(
-            torch.empty(size=(n_blocks, block_size, num_key_value_heads, head_dim), dtype=dtype, device=device), 
-            torch.empty(size=(n_blocks, block_size, num_key_value_heads, head_dim), dtype=dtype, device=device), 
-        ) for _ in range(n_layers)]
+    kv_caches = [KVCache(n_blocks, block_size, num_key_value_heads, head_dim, dtype=dtype, device=device) for _ in range(n_layers)]
 
     # 5. prefill
     input_ids = torch.tensor(token_ids, dtype=torch.int, device=device)

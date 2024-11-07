@@ -8,18 +8,15 @@ except:
     set_kv_cache_kernel = None
 
 class KVCache:
-    # todo pass in kv shape and option instead
-    def __init__(self, key_cache: Tensor, value_cache: Tensor):
-        # key_cache   (num_blocks, block_size, num_kv_heads, head_size)
-        # value_cache (num_blocks, block_size, num_kv_heads, head_size)
-        assert key_cache.shape == value_cache.shape
-        assert key_cache.device == value_cache.device
-        assert key_cache.dim() == 4
-
-        self.key_cache = key_cache
-        self.value_cache = value_cache
-        self.num_blocks, self.block_size, self.num_kv_heads, self.head_size = key_cache.shape
-        self.device = key_cache.device
+    def __init__(self, num_blocks: int, block_size: int, num_kv_heads: int, head_size: int, dtype: torch.dtype, device: torch.device):
+        self.num_blocks   = num_blocks
+        self.block_size   = block_size
+        self.num_kv_heads = num_kv_heads
+        self.head_size    = head_size
+        self.dtype        = dtype
+        self.device       = device
+        self.key_cache   = torch.randn(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device)
+        self.value_cache = torch.randn(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device)
     
     def get_kv_cache(self) -> tuple[Tensor, Tensor]:
         return (self.key_cache, self.value_cache)
