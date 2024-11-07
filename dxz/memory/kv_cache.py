@@ -1,6 +1,12 @@
 import torch
 from torch import Tensor
 
+try:
+    from dxz._C.kernel.kv_cache_kernels import set_kv_cache as set_kv_cache_kernel
+except:
+    print('import set_kv_cache failed')
+    set_kv_cache_kernel = None
+
 class KVCache:
     # todo pass in kv shape and option instead
     def __init__(self, key_cache: Tensor, value_cache: Tensor):
@@ -13,9 +19,7 @@ class KVCache:
         self.key_cache = key_cache
         self.value_cache = value_cache
         self.num_blocks, self.block_size, self.num_kv_heads, self.head_size = key_cache.shape
-
-    def empty(self) -> bool:
-        return self.key_cache is None or self.value_cache is None
+        self.device = key_cache.device
     
     def get_kv_cache(self) -> tuple[Tensor, Tensor]:
         return (self.key_cache, self.value_cache)
@@ -29,12 +33,18 @@ class KVCache:
         assert slot_ids.shape[0] == values.shape[0]
         assert slot_ids.device == keys.device
         assert slot_ids.device == values.device
-        # todo fused kernel
-        slot_ids = slot_ids.to(torch.device('cpu'))
-        num_tokens = slot_ids.shape[0]
-        for i in range(num_tokens):
-            block_id = slot_ids[i] // self.block_size
-            block_offset = slot_ids[i] % self.block_size
-            self.key_cache[block_id, block_offset, :, :] = keys[i, :, :]
-            self.value_cache[block_id, block_offset, :, :] = values[i, :, :]
-        slot_ids = slot_ids.to(keys.device)
+        if self.device.type == 'cuda':
+            set_kv_cache_kernel(
+                slot_ids,
+                keys,
+                values,
+                self.key_cache,
+                self.value_cache,
+            )
+        else:
+            num_tokens = slot_ids.shape[0]
+            for i in range(num_tokens):
+                block_id = slot_ids[i] // self.block_size
+                block_offset = slot_ids[i] % self.block_size
+                self.key_cache[block_id, block_offset, :, :] = keys[i, :, :]
+                self.value_cache[block_id, block_offset, :, :] = values[i, :, :]

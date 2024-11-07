@@ -3,11 +3,6 @@ from torch import nn, Tensor
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 import math
-try:
-    from dxz._C.kernel.kv_cache_kernels import set_kv_cache
-except:
-    print('set_kv_cache import failed')
-    set_kv_cache = None
 
 try:
     from dxz._C.kernel.flash_attn import mha_varlen_fwd
@@ -103,15 +98,12 @@ class FlashCausalGroupedQueryPageAttention(nn.Module):
         value = value.view(n_tokens, self.n_kv_heads, self.head_dim)
 
         # 2. append new kv cache
-        # input_params.to(torch.device('cpu'))
         key_cache, value_cache = kv_cache.get_kv_cache()
-        set_kv_cache(
+        kv_cache.set_kv_cache(
             input_params.new_cache_slots, # slot_ids: Tensor,  # [n_tokens]
             key, # keys: Tensor,      # [n_tokens, n_kv_heads, head_dim]
             value, # values: Tensor,    # [n_tokens, n_kv_heads, head_dim]
-            key_cache, # key_cache: Tensor,  # [n_blocks, block_size, n_heads, head_dim]
-            value_cache# value_cache: Tensor
-        ) 
+        )
 
         # 3. compute for each sequence with flash attn
         output=torch.empty_like(query)
@@ -156,12 +148,7 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
         # 2. append new kv cache
         # input_params.to(torch.device('cpu'))
         key_cache, value_cache = kv_cache.get_kv_cache()
-        block_size = kv_cache.block_size
-        for i, slot_id in enumerate(input_params.new_cache_slots):
-            block_id = slot_id // block_size
-            block_offset = slot_id  % block_size
-            key_cache[block_id, block_offset, :, :] = key[i, :, :]
-            value_cache[block_id, block_offset, :, :] = value[i, :, :]
+        kv_cache.set_kv_cache(input_params.new_cache_slots, key,value)
 
         # 3. compute for each sequence with pytorch
         outputs = []
