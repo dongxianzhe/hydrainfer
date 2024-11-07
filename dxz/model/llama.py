@@ -6,8 +6,8 @@ import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
-from dxz.layer.attention import Attention
-from dxz.layer.attention import FlashAttention
+from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
+from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
 
 class LlamaSdpaAttention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -27,16 +27,11 @@ class LlamaSdpaAttention(nn.Module):
                 ),
             interleaved=False
             )
-        self.attention = FlashAttention(
+        self.attention = FlashCausalGroupedQueryPageAttention(
             n_qo_heads=config.num_attention_heads,
             n_kv_heads=config.num_key_value_heads,
             head_dim=config.head_dim
         )
-        # self.attention = Attention(
-        #     n_qo_heads=config.num_attention_heads,
-        #     n_kv_heads=config.num_key_value_heads,
-        #     head_dim=config.head_dim
-        #     )
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor:
         query = self.q_proj(hidden_states)

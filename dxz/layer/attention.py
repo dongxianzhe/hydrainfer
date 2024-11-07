@@ -2,7 +2,6 @@ import torch
 from torch import nn, Tensor
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
-from dxz.layer.rotary_embedding import RotaryEmbedding
 import math
 try:
     from dxz._C.kernel.kv_cache_kernels import set_kv_cache
@@ -16,7 +15,7 @@ except ImportError:
     print('flash attention import failed')
     mha_varlen_fwd = None
 
-class FlashAttention(nn.Module):
+class FlashCausalGroupedQueryPageAttention(nn.Module):
     def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
         super().__init__()
         assert n_qo_heads % n_kv_heads == 0, f"n_qo_heads {n_qo_heads} is not divisible by n_kv_heads {n_kv_heads}"
@@ -68,7 +67,7 @@ class FlashAttention(nn.Module):
         )
         return output.view(-1, self.n_qo_heads * self.head_dim)
 
-class Attention(nn.Module):
+class TorchCausalGroupedQueryPageAttention(nn.Module):
     def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
         super().__init__()
         assert n_qo_heads % n_kv_heads == 0, f"n_qo_heads {n_qo_heads} is not divisible by n_kv_heads {n_kv_heads}"

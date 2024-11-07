@@ -8,7 +8,7 @@ from transformers import GPT2Config
 from dxz.model.parameters import InputParameters
 from dxz.layer.activation import NewGELUActivation
 from dxz.memory.kv_cache import KVCache
-from dxz.layer.attention import FlashAttention
+from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
 
 class GPT2Attention(nn.Module):
     def __init__(self, config: GPT2Config):
@@ -16,7 +16,7 @@ class GPT2Attention(nn.Module):
         self.config = config
         self.c_attn = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=True)
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
-        self.atten = FlashAttention(
+        self.atten = FlashCausalGroupedQueryPageAttention(
             n_qo_heads=config.n_head,
             n_kv_heads=config.n_head,
             head_dim=config.hidden_size // config.n_head
