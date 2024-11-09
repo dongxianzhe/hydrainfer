@@ -17,3 +17,4 @@ benchmark/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 **/*.perf*
 **/*.pth
 **/*.jpg
+clearn
