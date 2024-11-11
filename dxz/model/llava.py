@@ -59,44 +59,23 @@ class LlavaForConditionalGeneration(nn.Module):
         self.language_model = LlamaForCausalLM(config.text_config)
     
     def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], position_ids: Tensor, kv_caches: Tensor, input_params: InputParameters) -> Tensor:
-        # prefill state
-        #     position_ids is None
-        #     pixel_values is not None
-        # decode state
-        #     position_ids is not None
-        #     pixel_values is None
-        device = input_ids.device
+        # input_ids    (n_tokens + m_tokens) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
+        # pixel_values (n_images, n_channels, height, width)
+        # position_ids (n_tokens + m_tokens)
 
         # 1. compute input embeds
         input_embeds = self.input_embed(input_ids) # (n_tokens, n_embeds)
+        image_overwrite_mask = input_ids == self.config.image_token_index
 
         if pixel_values is not None:
             # 2. compute image embeds
             image_features = self.image_embed(pixel_values)
 
             # 3. merge embeds
-            image_token_mask = input_ids == self.config.image_token_index 
-            new_token_position = torch.cumsum(image_token_mask * (576 - 1) + 1, dim=-1) - 1
-
-            n_tokens = input_ids.shape[0] + image_features.shape[0] * (image_features.shape[1] - 1)
-
-            text_overwrite_idx = new_token_position[~image_token_mask]
-
-            merged_embed = torch.zeros(size=(n_tokens, self.config.text_config.hidden_size), dtype=input_embeds.dtype, device=device)
-            merged_embed[text_overwrite_idx, :] = input_embeds[~image_token_mask, :]
-
-            image_overwrite_mask = torch.ones(size=(n_tokens, ), dtype=torch.bool)
-            image_overwrite_mask[text_overwrite_idx] = False
-            merged_embed[image_overwrite_mask, :] = image_features.reshape(-1, self.config.text_config.hidden_size)
-
-        if pixel_values is not None:
-            position_ids = torch.arange(n_tokens, dtype=torch.int, device=input_ids.device) # todo check prefill or decode
+            embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
 
         # 4. compute logits
-        if pixel_values is not None:
-            logits = self.language_model(merged_embed, position_ids, kv_caches, input_params)
-        else:
-            logits = self.language_model(input_embeds, position_ids, kv_caches, input_params)
+        logits = self.language_model(input_embeds, position_ids, kv_caches, input_params)
 
         return logits
     
@@ -140,3 +119,11 @@ class LlavaForConditionalGeneration(nn.Module):
         selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
         image_features = self.multi_modal_projector(selected_image_feature)
         return image_features
+
+    def merge_embed(self, input_embeds: Tensor, image_features: Tensor, image_overwrite_mask: Tensor) -> Tensor:
+        # input_embeds   (n_tokens + m_tokens, hidden_size) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
+        # image_features (n_images, 576, hidden_size) n_image * 576 should equal to m_tokens
+        # image_over_write_idx = (n_tokens + m_tokens, )
+        print(input_embeds.shape, image_overwrite_mask.shape, image_features.shape)
+        input_embeds[image_overwrite_mask, :] = image_features
+        return input_embeds

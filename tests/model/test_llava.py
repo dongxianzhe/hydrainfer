@@ -36,11 +36,20 @@ def test_llava1_5_7b_hf():
         images=images
     )
     token_ids = inputs.input_ids[0]
+    print(f'len(token_ids) {len(token_ids)}')
+    def insert_image_tokens(token_ids: list[int]) -> list[int]:
+        inserted_token_ids = []
+        for token_id in token_ids:
+            if token_id == model.config.image_token_index:
+                inserted_token_ids.extend([model.config.image_token_index] * (model.get_num_image_token_ids() - 1))
+            inserted_token_ids.append(token_id)
+        return inserted_token_ids
+    token_ids = insert_image_tokens(token_ids)
+    print(f'len(token_ids) {len(token_ids)}')
+
     pixel_values = inputs.pixel_values 
     pixel_values = torch.tensor(pixel_values, dtype=dtype, device=device)
-    n_images = pixel_values.shape[0]
-    num_image_features = 576
-    n_prompt_tokens = len(token_ids) + n_images * (num_image_features - 1)
+    n_prompt_tokens = len(token_ids)
     n_kv_cache_tokens = 0
     output_ids = []
 
@@ -54,7 +63,7 @@ def test_llava1_5_7b_hf():
     # 5. prefill
     input_ids = torch.tensor(token_ids, dtype=torch.int, device=device)
     pixel_values = torch.tensor(pixel_values, dtype=dtype, device=device)
-    position_ids = None
+    position_ids = torch.arange(len(token_ids), dtype=torch.int ,device=device)
     input_params = InputParameters(
         num_sequences = 1,
         q_cu_seq_lens = torch.tensor([0, n_prompt_tokens], dtype=torch.int, device=device), 
@@ -95,7 +104,6 @@ def test_llava1_5_7b_hf():
 
     output_text = tokenizer.decode(output_ids)
     print(f'output_text: {output_text}')
-
 
 if __name__ == '__main__':
     test_llava1_5_7b_hf()
