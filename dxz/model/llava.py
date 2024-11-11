@@ -124,6 +124,5 @@ class LlavaForConditionalGeneration(nn.Module):
         # input_embeds   (n_tokens + m_tokens, hidden_size) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
         # image_features (n_images, 576, hidden_size) n_image * 576 should equal to m_tokens
         # image_over_write_idx = (n_tokens + m_tokens, )
-        print(input_embeds.shape, image_overwrite_mask.shape, image_features.shape)
         input_embeds[image_overwrite_mask, :] = image_features
         return input_embeds
