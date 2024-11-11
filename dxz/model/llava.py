@@ -68,14 +68,11 @@ class LlavaForConditionalGeneration(nn.Module):
         device = input_ids.device
 
         # 1. compute input embeds
-        input_embeds = self.language_model.model.embed_tokens(input_ids) # (n_tokens, n_embeds)
+        input_embeds = self.input_embed(input_ids) # (n_tokens, n_embeds)
 
         if pixel_values is not None:
             # 2. compute image embeds
-            _, _, all_hidden_states = self.vision_tower(pixel_values)
-            hidden_states = all_hidden_states[self.config.vision_feature_layer] # (n_images, 577, 1024)
-            selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
-            image_features = self.multi_modal_projector(selected_image_feature)
+            image_features = self.image_embed(pixel_values)
 
             # 3. merge embeds
             image_token_mask = input_ids == self.config.image_token_index 
@@ -129,3 +126,17 @@ class LlavaForConditionalGeneration(nn.Module):
         assert len(loaded_set) == len(state_dict)
 
         return model
+
+    def get_num_image_token_ids(self) -> int:
+        return 576
+
+    def input_embed(self, input_ids: Tensor) -> Tensor:
+        input_embeds = self.language_model.model.embed_tokens(input_ids)
+        return input_embeds
+
+    def image_embed(self, pixel_values: Tensor) -> Tensor:
+        _, _, all_hidden_states = self.vision_tower(pixel_values)
+        hidden_states = all_hidden_states[self.config.vision_feature_layer] # (n_images, 577, 1024)
+        selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
+        image_features = self.multi_modal_projector(selected_image_feature)
+        return image_features
