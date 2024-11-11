@@ -1,3 +1,4 @@
+from tqdm import tqdm
 import torch
 from transformers import AutoTokenizer, AutoProcessor
 from typing import Literal
@@ -66,11 +67,14 @@ class MLLMEngine:
         for input in inputs:
             self.add_request(input)
 
+        pbar = tqdm(total=len(inputs))
         output_texts: list[str] = []
         while len(output_texts) < len(inputs): 
             decode_output, finished_output = self.step()
             for sequence in finished_output:
                 output_texts.append(sequence.prompt + self.tokenizer.decode(sequence.token_ids[sequence.num_prompt_tokens:], skip_special_tokens=True))
+            pbar.update(len(finished_output))
+        pbar.close()
         return output_texts
     
     def add_request(self, input):
