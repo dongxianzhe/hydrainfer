@@ -1,13 +1,5 @@
-include(cc_binary)
 include(pybind_extension)
-# cc_binary(
-#   NAME
-#     reduce_sum
-#   SRCS
-#     "reduce_sum.cu"
-#   DEPS
-#     torch
-# )
+include(cc_library)
 
 pybind_extension(
 NAME
@@ -24,4 +16,15 @@ DEPS
     torch
     torch_python # ${TORCH_INSTALL_PREFIX}/lib can find it
     Python::Module
+)
+
+cc_library(
+  NAME 
+    reduce_kernels
+  HDRS 
+    reduce_sum.cuh
+  SRCS 
+    reduce_sum.cu
+  DEPS
+    torch
 )
