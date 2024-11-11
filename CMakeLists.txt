@@ -1,7 +1,50 @@
 cmake_minimum_required(VERSION 3.26)
 
+if (DEFINED ENV{VCPKG_DEFAULT_BINARY_CACHE})
+  file(MAKE_DIRECTORY $ENV{VCPKG_DEFAULT_BINARY_CACHE})
+  message(STATUS "Using VCPKG_DEFAULT_BINARY_CACHE: $ENV{VCPKG_DEFAULT_BINARY_CACHE}")
+endif()
+# configure vcpkg
+# have to set CMAKE_TOOLCHAIN_FILE before first project call.
+if (DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      CACHE STRING "Vcpkg toolchain file")
+  message(STATUS "VCPKG_ROOT found, using vcpkg at $ENV{VCPKG_ROOT}")
+else()
+  include(FetchContent)
+  if (DEFINED ENV{DEPENDENCES_ROOT})
+    set(VCPKG_SOURCE_DIR $ENV{DEPENDENCES_ROOT}/vcpkg-src)
+  else()
+    set(VCPKG_SOURCE_DIR ${FETCHCONTENT_BASE_DIR}/vcpkg-src)
+  endif()
+  message(STATUS "FETCHCONTENT_BASE_DIR: ${FETCHCONTENT_BASE_DIR}")
+
+  if (USE_CXX11_ABI)
+    FetchContent_Declare(vcpkg
+      GIT_REPOSITORY "https://github.com/microsoft/vcpkg.git"
+      GIT_TAG "2024.02.14"
+      SOURCE_DIR ${VCPKG_SOURCE_DIR}
+    )
+  else()
+    FetchContent_Declare(vcpkg
+      GIT_REPOSITORY "https://github.com/vectorch-ai/vcpkg.git"
+      GIT_TAG "ffc42e97c866ce9692f5c441394832b86548422c" # disable cxx11_abi
+      SOURCE_DIR ${VCPKG_SOURCE_DIR}
+    )
+    message(STATUS "Using custom vcpkg with cxx11_abi disabled")
+  endif()
+  FetchContent_MakeAvailable(vcpkg)
+
+  message(STATUS "Downloading and using vcpkg at ${vcpkg_SOURCE_DIR}")
+  # note that CMAKE_TOOLCHAIN_FILE must set before project or it will not work
+  set(CMAKE_TOOLCHAIN_FILE ${vcpkg_SOURCE_DIR}/scripts/buildsystems/vcpkg.cmake
+      CACHE STRING "Vcpkg toolchain file")
+  message(STATUS "CMAKE_TOOLCHAIN_FILE ${CMAKE_TOOLCHAIN_FILE}")
+endif()
+
 project(
     "dxz"
+    LANGUAGES C CXX CUDA
 )
 
 option(USE_CXX11_ABI "Use the new C++-11 ABI, which is not backwards compatible." ON)
@@ -24,7 +67,7 @@ find_package(CUDAToolkit REQUIRED)
 # 3. python
 find_package(Python REQUIRED COMPONENTS Interpreter Development)  # used by link pybind11 in torch library
 
-# 3. torch package
+# 4. torch package
 include(FetchContent)
 message(STATUS "CUDAToolkit_VERSION ${CUDAToolkit_VERSION}") # CUDAToolkit_VERSION is set after find_package(CUDAToolkit)
 if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL 12.4) 
@@ -85,5 +128,10 @@ add_compile_definitions(TORCH_CUDA=1)
 message(STATUS "CMAKE_CXX_FLAGS: ${CMAKE_CXX_FLAGS}")
 message(STATUS "CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
 
+# 5. find other package from vcpkg
+
+find_package(benchmark CONFIG REQUIRED)
+
+# 7. add subdirectory
 add_subdirectory(csrc)
 add_subdirectory(third_party)
