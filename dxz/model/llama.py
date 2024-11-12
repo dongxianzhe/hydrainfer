@@ -8,6 +8,7 @@ from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
 from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
+from dxz._C.kernel.norm import rms_norm
 
 class LlamaSdpaAttention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -63,11 +64,9 @@ class LlamaRMSNorm(nn.Module):
         self.variance_epsilon = config.rms_norm_eps
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
+        output = torch.empty_like(hidden_states)
+        rms_norm(output, hidden_states, self.weight, self.variance_epsilon)
+        return output
 
 class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -140,6 +139,3 @@ class LlamaForCausalLM(nn.Module):
         assert len(loaded_set) == len(state_dict)
 
         return model
-
-if __name__ == '__main__':
-    model = LlamaForCausalLM.from_pretrained("meta-llama/Llama-2-7b-hf", torch.half, torch.device('cuda:0'))

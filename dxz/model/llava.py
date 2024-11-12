@@ -7,7 +7,7 @@ from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm
 from typing import Optional
-from dxz.model.clip import CLIPVisionEmbeddings, CLIPEncoderLayer
+from dxz.model.clip import CLIPEncoderLayer, CLIPVisionEmbeddings
 
 class CLIPEncoder(nn.Module):
     def __init__(self, config: CLIPVisionConfig):
