@@ -27,18 +27,20 @@ def main(args: argparse.Namespace):
         start = time.perf_counter()
         outputs = llm.generate(inputs, sampling_params=sampling_params)
         end = time.perf_counter()
+
     elif args.backend == 'dxz':
         from dxz.engine.mllm_engine import MLLMEngine, MLLMEngineConfig
         config = MLLMEngineConfig()
         llm = MLLMEngine(config)
 
         start = time.perf_counter()
-        llm.generate(inputs)
+        outputs = llm.generate(inputs)
         end = time.perf_counter()
 
     # 3. show result
-    # for output in outputs:
-    #     print(output.metrics)
+    if args.output_text:
+        for output in outputs:
+            print(output)
     print(f'total time {end - start: 3}')
 
 if __name__ == '__main__':
@@ -55,5 +57,12 @@ if __name__ == '__main__':
         default=100,
         help="Number of prompts to process.",
     )
+    parser.add_argument(
+        '--output-text',
+        action='store_true',
+        default=False,
+        help='output generated text'
+    )
     args = parser.parse_args()
+
     main(args)
