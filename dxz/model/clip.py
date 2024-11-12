@@ -12,24 +12,17 @@ class CLIPSdpaAttention(nn.Module):
         self.out_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
         self.n_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads 
+        # from dxz.layer.attention import TorchMultiHeadAttention
+        # self.attention = TorchMultiHeadAttention(self.n_heads, self.head_dim)
+        from dxz.layer.attention import FlashMultiHeadAttention
+        self.attention = FlashMultiHeadAttention(self.n_heads, self.head_dim)
     
     def forward(self, hidden_states: Tensor) -> Tensor:
         batch_size, n_tokens, embed_dim = hidden_states.size()
         query = self.q_proj(hidden_states)
         key   = self.k_proj(hidden_states)
         value = self.v_proj(hidden_states)
-        query = query.view(-1, n_tokens, self.n_heads, self.head_dim).transpose(1, 2).contiguous().to(torch.float)
-        key   =   key.view(-1, n_tokens, self.n_heads, self.head_dim).transpose(1, 2).contiguous().to(torch.float)
-        value = value.view(-1, n_tokens, self.n_heads, self.head_dim).transpose(1, 2).contiguous().to(torch.float)
-        query = query.view(-1, n_tokens, self.head_dim)
-        key   =   key.view(-1, n_tokens, self.head_dim)
-        value = value.view(-1, n_tokens, self.head_dim)
-        query *= 1. / math.sqrt(self.head_dim)
-        score = torch.bmm(query, key.transpose(1, 2)) # (batch_size * n_heads, n_tokens, n_tokens)
-        score = torch.softmax(score, dim=-1) # (batch_size * n_heads, n_tokens, n_tokens)
-        o = torch.bmm(score, value) # (batch_size * n_heads, n_tokens, head_dim)
-        o = o.view(batch_size, self.n_heads, n_tokens, self.head_dim).transpose(1, 2).contiguous() # (batch_size, n_tokens, n_heads, head_dim)
-        o = o.view(batch_size, n_tokens, embed_dim).to(hidden_states.dtype)
+        o = self.attention(query, key, value)
         o = self.out_proj(o)
         return o
 
