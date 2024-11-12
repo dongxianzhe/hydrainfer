@@ -2,13 +2,48 @@ import os
 import safetensors.torch
 import torch
 from torch import nn, Tensor
-from transformers import LlavaConfig, LlamaConfig
+from transformers import LlavaConfig, LlamaConfig, CLIPVisionConfig
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm
-from dxz.model.clip import CLIPVisionModel
 from typing import Optional
-import math
+from dxz.model.clip import CLIPVisionEmbeddings, CLIPEncoderLayer
+
+class CLIPEncoder(nn.Module):
+    def __init__(self, config: CLIPVisionConfig):
+        super().__init__()
+        self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
+    
+    def forward(self, hidden_states: Tensor, vision_feature_layer: int) -> Tensor:
+        # for _, encoder_layer in enumerate(self.layers[:vision_feature_layer + 1]): #
+        for _, encoder_layer in enumerate(self.layers[:(vision_feature_layer + len(self.layers)) % len(self.layers) + 1]): #
+            hidden_states = encoder_layer(hidden_states)
+        return hidden_states
+
+class CLIPVisionTransformer(nn.Module):
+    def __init__(self, config: CLIPVisionConfig):
+        super().__init__()
+        self.embeddings = CLIPVisionEmbeddings(config)
+        self.pre_layrnorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.encoder = CLIPEncoder(config)
+        self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+    
+    def forward(self, pixel_values: Tensor, vision_feature_layer: int) -> Tensor:
+        # pixel_values (batch_size, channels, width, height)
+        hidden_states = self.embeddings(pixel_values) # (batch_size, n_tokens, hidden_size)
+        hidden_states = self.pre_layrnorm(hidden_states)
+        hidden_states = self.encoder(hidden_states, vision_feature_layer)
+        return hidden_states
+
+class CLIPVisionModel(nn.Module):
+    def __init__(self, config: CLIPVisionConfig):
+        super().__init__()
+        self.vision_model = CLIPVisionTransformer(config)
+
+    def forward(self, pixel_values: Tensor, vision_feature_layer: int) -> Tensor:
+        # pixel_values (n_pictures, n_channels, width, height)
+        return self.vision_model(pixel_values, vision_feature_layer)
+
 
 class LlamaModel(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -114,8 +149,7 @@ class LlavaForConditionalGeneration(nn.Module):
         return input_embeds
 
     def image_embed(self, pixel_values: Tensor) -> Tensor:
-        _, _, all_hidden_states = self.vision_tower(pixel_values)
-        hidden_states = all_hidden_states[self.config.vision_feature_layer] # (n_images, 577, 1024)
+        hidden_states = self.vision_tower(pixel_values, self.config.vision_feature_layer)
         selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
         image_features = self.multi_modal_projector(selected_image_feature)
         return image_features
