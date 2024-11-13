@@ -1,3 +1,4 @@
+from dxz.utils.profiler import profile
 import os
 import torch
 from torch import nn, Tensor
@@ -9,6 +10,7 @@ from dxz.memory.kv_cache import KVCache
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
 from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
 from dxz._C.kernel.norm import rms_norm
+from dxz._C.kernel.activation import silu
 
 class LlamaSdpaAttention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -51,10 +53,9 @@ class LlamaMLP(nn.Module):
         self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.up_proj   = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-        self.act_fn = nn.SiLU() 
     
     def forward(self, hidden_states: Tensor) -> Tensor:
-        down_proj = self.down_proj(self.act_fn(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
+        down_proj = self.down_proj(silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
         return down_proj
 
 class LlamaRMSNorm(nn.Module):
