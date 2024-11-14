@@ -55,6 +55,7 @@ class LlamaModel(nn.Module):
     def forward(self, input_embeds: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
         hidden_states = input_embeds
         for i, layer in enumerate(self.layers):
+            input_params.layer_id = i
             hidden_states = layer(hidden_states, position_ids, kv_caches[i], input_params)
         return self.norm(hidden_states)
 

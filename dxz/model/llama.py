@@ -1,4 +1,3 @@
-from dxz.utils.profiler import profile
 import os
 import torch
 from torch import nn, Tensor
@@ -98,6 +97,7 @@ class LlamaModel(nn.Module):
     def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
         hidden_states = self.embed_tokens(input_ids)
         for i, layer in enumerate(self.layers):
+            input_params.layer_id = i
             hidden_states = layer(hidden_states, position_ids, kv_caches[i], input_params)
         return self.norm(hidden_states)
 

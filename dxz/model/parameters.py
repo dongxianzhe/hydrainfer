@@ -37,6 +37,8 @@ class InputParameters:
         # used to help dispatch chooling the right kernel based on the length
         self.q_max_seq_len = q_max_seq_len
         self.kv_max_seq_len = kv_max_seq_len
+
+        self.layer_id = 0 # set when foward
     
     def to(self, device: torch.device):
         if self.q_cu_seq_lens   is not None: 
