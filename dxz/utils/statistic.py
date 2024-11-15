@@ -15,10 +15,8 @@ def attention_score_heatmap(score: Tensor, name: str='attention_score_heatmap', 
     cmap = plt.get_cmap("Reds")
     plt.figure(figsize=(fig_size, fig_size))
 
-    log_norm = LogNorm(vmin=0.0007, vmax=score.max())
+    log_norm = LogNorm(vmin=0.000001, vmax=score.max())
     
-    print(log_norm(score))
-
     ax = seaborn.heatmap(score,
                 cmap=cmap,  # custom color map
                 norm=log_norm,
