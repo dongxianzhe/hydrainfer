@@ -1,6 +1,7 @@
+import copy
 import torch
 from torch import nn, Tensor
-from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
+from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
 import pytest
 from torch.nn import functional as F
 
@@ -63,25 +64,28 @@ def apply_rotary_emb_ref(query:Tensor, key:Tensor, positions:Tensor, head_dim:in
 
 @pytest.mark.parametrize("device", [torch.device('cpu'), torch.device('cuda:0')])
 @pytest.mark.parametrize("dtype", [torch.float, torch.half])
-@pytest.mark.parametrize("num_tokens", [1, 2, 8, 16])
+@pytest.mark.parametrize("num_tokens", [1, 2, 8, 16, 596])
 @pytest.mark.parametrize("n_heads", [32])
 @pytest.mark.parametrize("n_kv_heads", [32, 8, 1])
 @pytest.mark.parametrize("head_dim", [128])
 @pytest.mark.parametrize("theta", [100000., 500000.])
 @pytest.mark.parametrize("interleaved", [False, True])
 @pytest.mark.parametrize("max_position_embeddings", [4096, 8192])
-def test_rotary_correctness(device, dtype, num_tokens, n_heads, n_kv_heads, head_dim, theta, interleaved, max_position_embeddings):
-    rotary_embedding = RotaryEmbedding(
+@torch.inference_mode()
+def test_rotaryref_correctness(device, dtype, num_tokens, n_heads, n_kv_heads, head_dim, theta, interleaved, max_position_embeddings):
+    rotary_embedding = RotaryEmbeddingRef(
         rotary_dim=head_dim, # rotary all elements
         max_position_embeddings=max_position_embeddings,
         inv_freq=compute_default_inv_freq(rotary_dim=head_dim, theta=theta),
         interleaved=interleaved
         )
+    rotary_embedding.to(dtype)
     rotary_embedding.to(device)
-    query = torch.randn(size=(num_tokens, n_heads, head_dim), device=device)
-    key = torch.randn(size=(num_tokens, n_kv_heads, head_dim), device=device)
+    query = torch.randn(size=(num_tokens, n_heads, head_dim), dtype=dtype, device=device)
+    key = torch.randn(size=(num_tokens, n_kv_heads, head_dim), dtype=dtype, device=device)
     position_ids = torch.randint(0, max_position_embeddings, size=(num_tokens, ), dtype=torch.int, device=device)
-    query_output, key_output = rotary_embedding(query, key, position_ids)
+    query_output, key_output = copy.deepcopy(query), copy.deepcopy(key)
+    query_output, key_output = rotary_embedding(query_output, key_output, position_ids)
 
     # ref
     query = query.to(torch.device('cpu'))
@@ -100,8 +104,55 @@ def test_rotary_correctness(device, dtype, num_tokens, n_heads, n_kv_heads, head
 
     query_output = query_output.to(torch.device('cpu'))
     key_output = key_output.to(torch.device('cpu'))
-    assert torch.allclose(query_ref, query_output, rtol=1e-3, atol=1e-5) 
-    assert torch.allclose(key_ref, key_output, rtol=1e-3, atol=1e-5) 
+    assert torch.allclose(query_ref, query_output, rtol=1e-2, atol=1e-2), f"{query_ref[:10].view(-1)} {query_output.view(-1)[:10]}"
+    assert torch.allclose(key_ref, key_output, rtol=1e-2, atol=1e-2), f"{key_ref[:10].view(-1)} {key.view(-1)[:10]}"
+
+
+@pytest.mark.parametrize("device", [torch.device('cuda:0')])
+@pytest.mark.parametrize("dtype", [torch.float, torch.half])
+@pytest.mark.parametrize("num_tokens", [1, 2, 8, 16, 596])
+@pytest.mark.parametrize("n_heads", [32])
+@pytest.mark.parametrize("n_kv_heads", [32, 8, 1])
+@pytest.mark.parametrize("head_dim", [128])
+@pytest.mark.parametrize("theta", [100000., 500000.])
+@pytest.mark.parametrize("interleaved", [False, True])
+@pytest.mark.parametrize("max_position_embeddings", [4096, 8192])
+@torch.inference_mode()
+def test_rotary_correctness(device, dtype, num_tokens, n_heads, n_kv_heads, head_dim, theta, interleaved, max_position_embeddings):
+    rotary_embedding = RotaryEmbedding(
+        rotary_dim=head_dim, # rotary all elements
+        max_position_embeddings=max_position_embeddings,
+        inv_freq=compute_default_inv_freq(rotary_dim=head_dim, theta=theta),
+        interleaved=interleaved
+        )
+    rotary_embedding.to(dtype)
+    rotary_embedding.to(device)
+    query = torch.randn(size=(num_tokens, n_heads, head_dim), dtype=dtype, device=device)
+    key = torch.randn(size=(num_tokens, n_kv_heads, head_dim), dtype=dtype, device=device)
+    position_ids = torch.randint(0, max_position_embeddings, size=(num_tokens, ), dtype=torch.int, device=device)
+    query_output, key_output = copy.deepcopy(query), copy.deepcopy(key)
+    query_output, key_output = rotary_embedding(query_output, key_output, position_ids)
+
+    # ref
+    query = query.to(torch.device('cpu'))
+    key = key.to(torch.device('cpu'))
+    position_ids = position_ids.to(torch.device('cpu'))
+
+    query_ref, key_ref = apply_rotary_emb_ref(
+        query = query, 
+        key = key, 
+        positions = position_ids, 
+        head_dim = head_dim, 
+        max_position_embeddings = max_position_embeddings, 
+        theta = theta, 
+        interleaved = interleaved
+    )
+
+    query_output = query_output.to(torch.device('cpu'))
+    key_output = key_output.to(torch.device('cpu'))
+    assert torch.allclose(query_ref, query_output, rtol=1e-2, atol=1e-2), f"{query_ref[:10].view(-1)} {query_output.view(-1)[:10]}"
+    assert torch.allclose(key_ref, key_output, rtol=1e-2, atol=1e-2), f"{key_ref[:10].view(-1)} {key.view(-1)[:10]}"
+ 
 
 if __name__ == "__main__":
-    pytest.main([__file__])
+    pytest.main([__file__, '-x', '-s'])

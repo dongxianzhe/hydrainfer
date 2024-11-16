@@ -3,7 +3,7 @@ import torch
 from torch import nn, Tensor
 from transformers import LlamaConfig
 import safetensors.torch
-from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
+from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention

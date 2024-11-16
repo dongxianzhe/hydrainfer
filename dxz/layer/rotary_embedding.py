@@ -1,5 +1,6 @@
 import torch
 from torch import nn, Tensor
+from dxz._C.kernel import position_embedding
 
 def compute_default_inv_freq(rotary_dim: int, theta: float) -> Tensor:
     # return [a, b] (rotary_dim / 2, )
@@ -7,7 +8,7 @@ def compute_default_inv_freq(rotary_dim: int, theta: float) -> Tensor:
     slice = torch.arange(0, rotary_dim, 2, dtype=torch.float)
     return 1. / torch.pow(theta, slice / rotary_dim)
 
-class RotaryEmbedding(nn.Module):
+class RotaryEmbeddingRef(nn.Module):
     def __init__(self, rotary_dim: int, max_position_embeddings: int, inv_freq: Tensor, interleaved: bool):
         super().__init__()
         # rotary_dim <= head_dim, rotary rotary_dim elements
@@ -43,7 +44,7 @@ class RotaryEmbedding(nn.Module):
 
         # cos_sin (num_tokens, rotary_dim * 2)
         cos_sin = torch.nn.functional.embedding(position_ids, self.cos_sin_cache)[:, None, :]
-        cos,sin = cos_sin.chunk(chunks=2, dim=-1) # cos(num_tokens, 1, head_dim) sin(num_tokens, 1, head_dim)
+        cos,sin = cos_sin.chunk(chunks=2, dim=-1)
         if self.interleaved:
             # rotary_dim = 4
             # cos [ca, ca, cb, cb]
@@ -86,3 +87,31 @@ class RotaryEmbedding(nn.Module):
         # [0, 1, 2, 3] => [-2, -3, 0, 1]
         x1, x2 = x.chunk(chunks=2, dim=-1) # [0, 1] [2, 3]
         return torch.cat([-x2, x1], dim=-1) # [-2, -3, 0, 1]
+
+class RotaryEmbedding(nn.Module):
+    def __init__(self, rotary_dim: int, max_position_embeddings: int, inv_freq: Tensor, interleaved: bool):
+        super().__init__()
+        # rotary_dim <= head_dim, rotary rotary_dim elements
+        # interleaved = True means adjacent two elements rotary as a pair
+        self.rotary_dim              = rotary_dim
+        self.max_position_embeddings = max_position_embeddings
+        self.inv_freq                = inv_freq # (rotary_dim / 2)
+        self.interleaved             = interleaved
+
+        t = torch.arange(self.max_position_embeddings, dtype=torch.float) # (max_position_embeddings)
+        freqs = torch.einsum("i,j->ij", t, self.inv_freq) # (max_position_embedding, rotary_dim / 2)
+
+        cos_sin = torch.cat([freqs.cos()[:, None, :], freqs.sin()[:, None, :]], dim=1)
+        # cos_sin (max_position_embedding, 2, rotary_dim / 2)
+        self.register_buffer(name='cos_sin_cache', tensor=cos_sin, persistent=False)
+    
+    def forward(self, query: Tensor, key: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
+        # modify query and key inplace 
+        position_embedding.apply_rotary_pos_emb(
+            query, 
+            key, 
+            position_ids, 
+            self.cos_sin_cache, 
+            self.rotary_dim, 
+            self.interleaved)
+        return query, key
