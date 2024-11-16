@@ -135,6 +135,7 @@ class LlavaForConditionalGeneration(nn.Module):
                     loaded_set.add(name)
         
         model.load_state_dict(state_dict)
+        model.to(dtype)
         model.eval()
 
         # 3. verify

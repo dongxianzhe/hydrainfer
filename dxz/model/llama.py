@@ -134,6 +134,7 @@ class LlamaForCausalLM(nn.Module):
                     state_dict[name].data.copy_(weight)
                     loaded_set.add(name)
         model.load_state_dict(state_dict)
+        model.to(dtype)
         model.eval()
 
         # 3. verify
