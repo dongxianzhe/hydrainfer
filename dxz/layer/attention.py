@@ -3,7 +3,7 @@ from torch import nn, Tensor
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 import math
-from dxz.utils.statistic import attention_score_heatmap
+from dxz.utils.statistic import attention_score_heatmap, histogram
 from dxz.utils import attention_utils
 from dxz.utils.attention_utils import sparsity
 
@@ -185,16 +185,22 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
             mask = (x - y) > (k_seq_len - q_seq_len)
             scores.masked_fill_(mask=mask, value=float('-inf'))
 
-            # plot atention score
-            if scores.shape[1] == scores.shape[2]: # prefill stage
-                print(f'layer{input_params.layer_id} scores.shape {scores.shape}')
+            # # plot atention score
+            # if scores.shape[1] == scores.shape[2]: # prefill stage
+            #     print(f'layer{input_params.layer_id} scores.shape {scores.shape}')
 
-                attention_utils.sparsity(scores, mask, 0)
-                for head_id in range(scores.shape[0]):
-                    attention_score_heatmap(score=scores[head_id], name=f'attention_score_layer{input_params.layer_id}_head{head_id}', fig_size=50)
-            # meausure sparsity
-            if scores.shape[1] == scores.shape[2]:
-                print(f'sparsity {sparsity(scores, mask, 0.01)}')
+            #     attention_utils.sparsity(scores, mask, 0)
+            #     for head_id in range(scores.shape[0]):
+            #         attention_score_heatmap(score=scores[head_id], name=f'attention_score_layer{input_params.layer_id}_head{head_id}', fig_size=50)
+
+            # # meausure sparsity
+            # if scores.shape[1] == scores.shape[2]:
+            #     print(f'sparsity {sparsity(scores, mask, 0.01)}')
+
+            # # plot score distrubtion
+            # if scores.shape[1] == scores.shape[2]:
+            #     print(f'scores.shape {scores.shape}')
+            #     histogram(data=scores, fig_size=5, range=(-25, 10), bins=100, name=f'distribution_attention_score_layer{input_params.layer_id}')
 
             # softmax
             scores = torch.softmax(scores, dim=-1)
