@@ -1,3 +1,4 @@
+from typing import Union, Optional
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import torch
@@ -5,9 +6,23 @@ from torch import Tensor
 import numpy
 import seaborn
 
-def histogram(data: list[float]):
-    plt.hist(data, bins=30, color='skyblue', edgecolor='black')
-    plt.savefig('histogram.png')
+def histogram(data: Union[list[float], Tensor], range:Optional[tuple[int, int]]=None, fig_size: int=5, bins: int=30, name: str='histogram'):
+    if isinstance(data, Tensor):
+        # torch.type() return a str, like torch.cuda.FloatTensor, torch.cuda.IntTensor, torch.FloatTensor, torch.IntTensor
+        if data.type().endswith('FloatTensor'):
+            data = data.view(-1).to(torch.float).to(torch.device('cpu')).detach()
+        elif data.type().endswith('torch.IntTensor'):
+            data = data.view(-1).to(torch.int).to(torch.device('cpu')).detach()
+        else:
+            raise RuntimeError(f'invalid data.type(): {data.type()}')
+
+    plt.figure(figsize=(fig_size, fig_size))
+    plt.hist(data, range=range, bins=bins, color='skyblue', edgecolor='black')
+    plt.xticks(fontsize=10)
+    plt.yticks(fontsize=10)
+    plt.title(name)
+    plt.savefig(name)
+    plt.close()
 
 def lognorm_attention_score_heatmap(score: Tensor, name: str='attention_score_heatmap', fig_size:int=5, vmin=None, vmax=None):
     assert score.dim() == 2, "score should be a matrix"
