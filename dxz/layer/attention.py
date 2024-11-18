@@ -185,6 +185,10 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
             mask = (x - y) > (k_seq_len - q_seq_len)
             scores.masked_fill_(mask=mask, value=float('-inf'))
 
+            # # save attention score data
+            # if scores.shape[1] == scores.shape[2]:
+            #     torch.save(scores, f'layer{input_params.layer_id}.pt')
+
             # # plot atention score
             # if scores.shape[1] == scores.shape[2]: # prefill stage
             #     print(f'layer{input_params.layer_id} scores.shape {scores.shape}')
