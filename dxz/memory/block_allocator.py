@@ -14,6 +14,6 @@ class BlockAllocator:
         blocks, self.free_blocks = self.free_blocks[-n_blocks:], self.free_blocks[:-n_blocks]
         return blocks
     
-    def free(self, blocks: list[int]) -> bool:
+    def free(self, blocks: list[int]):
         self.free_blocks += blocks
         assert len(self.free_blocks) <= self.total_blocks
