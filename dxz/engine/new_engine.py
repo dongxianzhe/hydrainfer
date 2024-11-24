@@ -247,14 +247,14 @@ class Compiler:
         return instructions, n_virtual_kv_caches
 
     def interpret_next_instruction(self, instruction: Instruction, token_id: int) -> Instruction:
-        instruction = Fill(
+        next_instruction = Fill(
             token_ids = [token_id],
             position_ids = [instruction.position_ids[-1] + 1], 
-            cache_ids = [[cache_id + 1 for cache_id in layer_cache_ids] for layer_cache_ids in instruction.cache_ids], 
+            cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in instruction.cache_ids], 
             kv_cache_ids = instruction.kv_cache_ids,
             sample = True
             )
-        return instruction
+        return next_instruction
 
 class NoBatchPolicy:
     def __init__(self):
@@ -332,6 +332,7 @@ class NewEngine:
         output_texts: list[str] = []
         while len(self.finished) < len(inputs):
             self.step()
+        for sequence in self.finished:
             output_texts.append(self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True))
         return output_texts
 
@@ -420,17 +421,20 @@ class NewEngine:
             i = 0
             for sequence, instruction in zip(sequences, instructions):
                 if (isinstance(instruction, Fill) or isinstance(instruction, ImageFill)) and instruction.sample:
-                    token_id = sample_token_ids[i]
+                    next_token_id = sample_token_ids[i]
+                    print(f'next_token_id {next_token_id}')
                     i += 1
-                    instruction = self.compiler.interpret_next_instruction(instruction=instruction, token_id=token_id)
-                    sequence.append_instruction(instruction)
-
+                    next_instruction = self.compiler.interpret_next_instruction(instruction=instruction, token_id=next_token_id)
+                    sequence.append_instruction(next_instruction)
+                    sequence.output_token_ids.append(next_token_id)
+                    print(f'append instruction {next_instruction}')
         # 5. scheduler sequence
         for sequence in sequences:
             if sequence.is_finished():
                 self.finished.append(sequence)
 
 if __name__ == '__main__':
+    
     image_path = f'/home/xzd/projects/dxz/benchmark/dataset/cherry_blossom.jpg'
     image = Image.open(image_path)
     question = "What is the content of this image?"

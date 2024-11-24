@@ -26,10 +26,10 @@ class KVCache:
         # slot_ids (num_slots, ) int
         # keys (num_slots, num_heads, head_dim)
         # values (num_slots, num_heads, head_dim)
-        assert slot_ids.shape[0] == keys.shape[0]
-        assert slot_ids.shape[0] == values.shape[0]
-        assert slot_ids.device == keys.device
-        assert slot_ids.device == values.device
+        assert slot_ids.shape[0] == keys.shape[0], f"{slot_ids.shape} {keys.shape}"
+        assert slot_ids.shape[0] == values.shape[0], f"{slot_ids.shape} {values.shape}"
+        assert slot_ids.device == keys.device, f"{slot_ids.device} {keys.device}"
+        assert slot_ids.device == values.device, f"{slot_ids.device} {values.device}"
         if self.device.type == 'cuda':
             set_kv_cache_kernel(
                 slot_ids,
