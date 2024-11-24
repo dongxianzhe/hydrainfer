@@ -62,7 +62,7 @@ class VirtualKVCache:
             False means set failed due to not enough memory
         """
         # 1. try to allocate memory if block is not enough
-        n_tokens = max(virtual_cache_ids)
+        n_tokens = max(virtual_cache_ids) + 1
         n_blocks = (n_tokens + self.block_size - 1) // self.block_size
         if len(self.block_tables) < n_blocks:
             self.block_tables += self.mmu.allocate(n_blocks - len(self.block_tables))
@@ -349,7 +349,7 @@ class NewEngine:
         sequences, instructions = self.batch_policy.batch(self.running)
 
         token_ids         : list[int] = []
-        positions         : list[int] = []
+        position_ids         : list[int] = []
         q_seq_lens        : list[int] = []
         selected_token_ids: list[int] = []
 
@@ -364,13 +364,14 @@ class NewEngine:
                 token_ids += instruction.token_ids
                 if instruction.sample:
                     selected_token_ids.append(len(token_ids) - 1)
-                positions += instruction.position_ids
+                position_ids += instruction.position_ids
                 q_seq_lens.append(len(instruction.token_ids))
                 for layer_id, (vcids, vid) in enumerate(zip(instruction.cache_ids, instruction.kv_cache_ids)):
                     sequence.virtual_kv_caches[vid].set(vcids)
-                    for vid in vcids:
-                        block_id = vid // self.memory_config.block_size
-                        block_offset = vid % self.memory_config.block_size
+                    print(f'sequence.virtual_kv_caches[vid].n_kv_cache_tokens {sequence.virtual_kv_caches[vid].n_kv_cache_tokens}')
+                    for vcid in vcids:
+                        block_id = vcid // self.memory_config.block_size
+                        block_offset = vcid % self.memory_config.block_size
                         slot_id = sequence.virtual_kv_caches[vid].block_tables[block_id] * self.memory_config.block_size + block_offset
                         new_cache_slots[layer_id].append(slot_id)
                     kv_seq_lens[layer_id].append(sequence.virtual_kv_caches[vid].n_kv_cache_tokens)
@@ -397,11 +398,11 @@ class NewEngine:
                 layer_id=layer_id, 
             ))
         input_params = InputParameters(
-            num_sequences=len(sequences), 
             layer_input_params=layer_input_params
         )
+        input_params.print()
         input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
-        position_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.devcie)
+        position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
         if len(images):
             pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:

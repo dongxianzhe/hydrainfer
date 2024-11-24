@@ -3,6 +3,11 @@ from torch import Tensor
 from typing import Optional
 
 class InputParameters:
+    """
+    if layers have different kv cache management, layer_input_params will not be none and other params be none
+
+    if all layers have same kv cache management, layer_input_params will be none, and others will not be none
+    """
     def __init__(self,
             num_sequences: int = 0,
             q_cu_seq_lens: Optional[Tensor]=None,
@@ -54,3 +59,36 @@ class InputParameters:
             self.block_tables    = self.block_tables.to(device)
         if self.cu_blocks_lens  is not None: 
             self.cu_blocks_lens  = self.cu_blocks_lens.to(device)
+        if self.layer_input_params is not None:
+            for input_params in self.layer_input_params:
+                input_params.to(device)
+
+    def print(self):
+        print(f'-----------------------------input_params-------------------------------')
+        if self.layer_input_params is None:
+            print(f'num_sequences        : {self.num_sequences}')
+            print(f'q_cu_seq_lens.shape  : {self.q_cu_seq_lens.shape}')
+            print(f'kv_cu_seq_lens.shape : {self.kv_cu_seq_lens.shape}')
+            print(f'new_cache_slots.shape: {self.new_cache_slots.shape}')
+            print(f'block_tables.shape   : {self.block_tables.shape}')
+            print(f'cu_blocks_lens.shape : {self.cu_blocks_lens.shape}')
+            print(f'q_cu_seq_lens[:8]    : {self.q_cu_seq_lens[:8]}')
+            print(f'kv_cu_seq_lens[:8]   : {self.kv_cu_seq_lens[:8]}')
+            print(f'new_cache_slots[:8]  : {self.new_cache_slots[:8]}')
+            print(f'block_tables[:8]     : {self.block_tables[:8]}')
+            print(f'cu_blocks_lens[:8]   : {self.cu_blocks_lens[:8]}')
+        else:
+            for layer_id, input_params in enumerate(self.layer_input_params):
+                print(f'------------------------layer{layer_id}--------------------------')
+                print(f'num_sequences        : {input_params.num_sequences}')
+                print(f'q_cu_seq_lens.shape  : {input_params.q_cu_seq_lens.shape}')
+                print(f'kv_cu_seq_lens.shape : {input_params.kv_cu_seq_lens.shape}')
+                print(f'new_cache_slots.shape: {input_params.new_cache_slots.shape}')
+                print(f'block_tables.shape   : {input_params.block_tables.shape}')
+                print(f'cu_blocks_lens.shape : {input_params.cu_blocks_lens.shape}')
+                print(f'q_cu_seq_lens[:8]    : {input_params.q_cu_seq_lens[:8]}')
+                print(f'kv_cu_seq_lens[:8]   : {input_params.kv_cu_seq_lens[:8]}')
+                print(f'new_cache_slots[:8]  : {input_params.new_cache_slots[:8]}')
+                print(f'block_tables[:8]     : {input_params.block_tables[:8]}')
+                print(f'cu_blocks_lens[:8]   : {input_params.cu_blocks_lens[:8]}')
+        print(f'-----------------------------input_params-------------------------------')
