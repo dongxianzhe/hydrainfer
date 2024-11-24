@@ -1,60 +1,45 @@
 from torch import Tensor
 
 class Instruction:
-    def __init__(self):
-        pass
+    pass
 
-class Prefill(Instruction):
-    def __init__(self, token_ids: list[int]):
+class Fill(Instruction):
+    def __init__(self, token_ids: list[int], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool):
+        # cache_ids (n_layers, n_tokens)
+        # kv_caches (n_layers, )
         super().__init__()
         self.token_ids = token_ids
+        self.position_ids = position_ids
+        self.cache_ids = cache_ids
+        self.kv_cache_ids = kv_cache_ids
+        self.sample = sample
 
-class BlockPrefill(Instruction):
-    def __init__(self, token_ids: list[int]):
-        super().__init__()
-        self.token_ids = token_ids 
+    def __repr__(self):
+        return f"Fill {self.token_ids} {self.position_ids} {self.kv_cache_ids}"
 
-class ImagePrefill(Instruction):
-    def __init__(self, token_ids: list[int], pixel_values: Tensor):
+class ImageFill(Instruction):
+    def __init__(self, images: list[Tensor], token_ids: list[int], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool):
         super().__init__()
+        self.images    = images
         self.token_ids = token_ids
-        self.pixel_values = pixel_values
+        self.position_ids = position_ids
+        self.cache_ids = cache_ids
+        self.kv_cache_ids = kv_cache_ids
+        self.sample = sample
 
-class ImageBlockPrefill(Instruction):
-    def __init__(self, token_ids: list[int], pixel_values: Tensor):
+    def __repr__(self):
+        return f"ImageFill {self.token_ids[:3]}...{self.token_ids[-3:]} {self.position_ids[:3]}...{self.position_ids[-3:]} {self.kv_cache_ids}"
+
+class Mov(Instruction):
+    def __init__(self, src_cache_ids: list[list[int]], dst_cache_ids: list[list[int]], src_kv_cache_ids: list[int], dst_kv_cache_ids: list[int]):
         super().__init__()
-        self.token_ids = token_ids
-        self.pixel_values = pixel_values
+        self.src_cache_ids = src_cache_ids
+        self.dst_cache_ids = dst_cache_ids
+        self.src_kv_cache_ids = src_kv_cache_ids
+        self.dst_kv_cache_ids = dst_kv_cache_ids
 
-class Decode(Instruction):
-    def __init__(self, token_id: int):
+class Merge(Instruction):
+    def __init__(self, kv_cache1_ids: list[int], kv_cache2_ids: list[int]):
         super().__init__()
-        self.token_id = token_id 
-
-class Return(Instruction):
-    def __init__(self):
-        pass
-
-class Compiler:
-    def __init__(self, image_token_id: int):
-        self.image_token_id = image_token_id
-
-    def compile(self, token_ids: list[int], pixel_values: Tensor) -> list[Instruction]:
-        instructions: list[Instruction] = []
-        i = 0
-        while i < len(token_ids):
-            if token_ids[i] == self.image_token_id:
-                j = i
-                while j < len(token_ids) and token_ids[j] == self.image_token_id:
-                    j += 1
-                instructions.append(ImagePrefill(token_ids[i:j], pixel_values))
-                i = j
-            else:
-                j = i
-                while j < len(token_ids) and token_ids[j] != self.image_token_id:
-                    j += 1
-                instructions.append(Prefill(token_ids[i:j]))
-                i = j
-        
-        instructions.append(Return())
-        return instructions
+        self.kv_cache1_ids = kv_cache1_ids
+        self.kv_cache2_ids = kv_cache2_ids
