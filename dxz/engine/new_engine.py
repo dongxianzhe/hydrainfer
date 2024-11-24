@@ -249,9 +249,8 @@ class Compiler:
     def interpret_next_instruction(self, instruction: Instruction, token_id: int) -> Instruction:
         instruction = Fill(
             token_ids = [token_id],
-            
             position_ids = [instruction.position_ids[-1] + 1], 
-            cache_ids = [cache_id + 1 for cache_id in instruction.cache_ids], 
+            cache_ids = [[cache_id + 1 for cache_id in layer_cache_ids] for layer_cache_ids in instruction.cache_ids], 
             kv_cache_ids = instruction.kv_cache_ids,
             sample = True
             )
