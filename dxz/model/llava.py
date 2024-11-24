@@ -59,7 +59,7 @@ class LlamaModel(nn.Module):
                 input_params.layer_id = i
                 hidden_states = layer(hidden_states, position_ids, kv_caches[i], input_params)
             else:
-                hidden_states = layer(hidden_states, position_ids, kv_caches, input_params)
+                hidden_states = layer(hidden_states, position_ids, kv_caches, input_params.layer_input_params[i])
         return self.norm(hidden_states)
 
 class LlamaForCausalLM(nn.Module):

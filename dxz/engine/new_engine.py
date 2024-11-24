@@ -198,7 +198,7 @@ class Compiler:
         return inserted_token_ids
 
     def code_generate(self, token_ids: list[int], images: list[Image.Image]) -> tuple[list[Instruction], int]:
-        pixel_values = [self.processor(
+        images = [self.processor(
             text="", 
             images=image, 
             return_tensors="pt"
@@ -403,12 +403,12 @@ class NewEngine:
         input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
         position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
         if len(images):
-            pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.config.dtype, device=self.config.device)
+            pixel_values = torch.cat(images, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:
             pixel_values = None
         # 3. execute
         print(f'input_ids.shape   : {input_ids.shape}')
-        if pixel_values:
+        if pixel_values is not None:
             print(f'pixel_values.shape: {pixel_values.shape}')
         print(f'position_ids.shape: {position_ids.shape}')
         print(f'input_ids[:8]     : {input_ids[:8]}')
