@@ -6,7 +6,7 @@ from transformers import LlavaConfig, LlamaConfig, CLIPVisionConfig
 from dxz.model.parameters import InputParameters
 from dxz.memory.kv_cache import KVCache
 from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm
-from typing import Optional
+from typing import Optional, Union
 from dxz.model.clip import CLIPEncoderLayer, CLIPVisionEmbeddings
 
 class CLIPEncoder(nn.Module):
@@ -52,11 +52,14 @@ class LlamaModel(nn.Module):
         self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config)
     
-    def forward(self, input_embeds: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
+    def forward(self, input_embeds: Tensor, position_ids: Tensor, kv_caches: Union[KVCache, list[KVCache]], input_params: InputParameters) -> Tensor:
         hidden_states = input_embeds
         for i, layer in enumerate(self.layers):
-            input_params.layer_id = i
-            hidden_states = layer(hidden_states, position_ids, kv_caches[i], input_params)
+            if input_params.layer_input_params is None:
+                input_params.layer_id = i
+                hidden_states = layer(hidden_states, position_ids, kv_caches[i], input_params)
+            else:
+                hidden_states = layer(hidden_states, position_ids, kv_caches, input_params)
         return self.norm(hidden_states)
 
 class LlamaForCausalLM(nn.Module):
@@ -66,7 +69,7 @@ class LlamaForCausalLM(nn.Module):
         self.model = LlamaModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_embeds: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
+    def forward(self, input_embeds: Tensor, position_ids: Tensor, kv_caches: Union[KVCache, list[KVCache]], input_params: InputParameters) -> Tensor:
         hidden_state = self.model(input_embeds, position_ids, kv_caches, input_params)
         logits = self.lm_head(hidden_state)
         return logits
@@ -94,7 +97,7 @@ class LlavaForConditionalGeneration(nn.Module):
         self.multi_modal_projector = LlavaMultiModalProjector(config)
         self.language_model = LlamaForCausalLM(config.text_config)
     
-    def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], position_ids: Tensor, kv_caches: Tensor, input_params: InputParameters) -> Tensor:
+    def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], position_ids: Tensor, kv_caches: Union[KVCache, list[KVCache]], input_params: InputParameters) -> Tensor:
         # input_ids    (n_tokens + m_tokens) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
         # pixel_values (n_images, n_channels, height, width)
         # position_ids (n_tokens + m_tokens)

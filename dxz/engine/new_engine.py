@@ -400,7 +400,6 @@ class NewEngine:
         input_params = InputParameters(
             layer_input_params=layer_input_params
         )
-        input_params.print()
         input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
         position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
         if len(images):
@@ -408,6 +407,13 @@ class NewEngine:
         else:
             pixel_values = None
         # 3. execute
+        print(f'input_ids.shape   : {input_ids.shape}')
+        if pixel_values:
+            print(f'pixel_values.shape: {pixel_values.shape}')
+        print(f'position_ids.shape: {position_ids.shape}')
+        print(f'input_ids[:8]     : {input_ids[:8]}')
+        print(f'position_ids[:8]  : {position_ids[:8]}')
+        input_params.print()
         logits = self.model_runner(input_ids, pixel_values, position_ids, self.mmu.kv_cache, input_params)
         # 4. sample
         if len(selected_token_ids) > 0:
