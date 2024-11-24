@@ -11,7 +11,9 @@ class InputParameters:
             block_tables: Optional[Tensor]=None,
             cu_blocks_lens: Optional[Tensor]=None, 
             q_max_seq_len: int=1024, 
-            kv_max_seq_len: int=1024
+            kv_max_seq_len: int=1024, 
+            layer_id: int = 0,
+            layer_input_params: list["InputParameters"] = None
            ):
 
         # total number of sequences in the batch
@@ -38,7 +40,8 @@ class InputParameters:
         self.q_max_seq_len = q_max_seq_len
         self.kv_max_seq_len = kv_max_seq_len
 
-        self.layer_id = 0 # set when foward
+        self.layer_id = layer_id # set when foward or in layer_input_params
+        self.layer_input_params = layer_input_params
     
     def to(self, device: torch.device):
         if self.q_cu_seq_lens   is not None: 
