@@ -417,11 +417,11 @@ class NewEngine:
         logits = self.model_runner(input_ids, pixel_values, position_ids, self.mmu.kv_cache, input_params)
         # 4. sample
         if len(selected_token_ids) > 0:
-            sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).to_list()
+            sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
             i = 0
             for sequence, instruction in zip(sequences, instructions):
                 if (isinstance(instruction, Fill) or isinstance(instruction, ImageFill)) and instruction.sample:
-                    token_id = sample_token_ids[i].item()
+                    token_id = sample_token_ids[i]
                     i += 1
                     instruction = self.compiler.interpret_next_instruction(instruction=instruction, token_id=token_id)
                     sequence.append_instruction(instruction)
