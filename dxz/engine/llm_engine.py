@@ -11,6 +11,8 @@ from transformers import PreTrainedTokenizer
 from dxz.model.downloader import download_hf_model
 from dxz.entrypoint.async_stream import AsyncStream
 
+"""this file is deprecated"""
+
 @dataclass
 class Sequence:
     id: int = 0
