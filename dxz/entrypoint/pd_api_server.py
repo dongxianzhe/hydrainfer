@@ -4,7 +4,7 @@ import uvicorn
 
 import ray
 
-from dxz.engine.async_llm_engine import AsyncLLMEngine
+from dxz.engine.llm_engine import AsyncLLMEngine
 import asyncio
 
 app = FastAPI()

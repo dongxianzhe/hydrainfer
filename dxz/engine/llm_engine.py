@@ -1,11 +1,184 @@
+import asyncio
+import queue
+from dataclasses import dataclass, field
 import torch
+from torch import nn
 from dxz.model.parameters import InputParameters
-from dxz.model.model_loader import load_model_tokenizer
 from dxz.memory.kv_cache import KVCache
-from dxz.request.sequence import Sequence
 from dxz.memory.block_allocator import BlockAllocator
 from dxz.model_runner.cuda_graph_model_runner import CudaGraphModelRunner
-from dxz.engine.continuous_batch import ContinuousBatch
+from transformers import PreTrainedTokenizer
+from dxz.model.downloader import download_hf_model
+from dxz.entrypoint.async_stream import AsyncStream
+
+@dataclass
+class Sequence:
+    id: int = 0
+    token_ids: list[int] = field(default_factory=list)
+    num_prompt_tokens: int = 0 # the number of prompt tokens
+    n_kv_cache_tokens: int = 0 # the number of tokens already in kv cache
+
+    block_table: list[int] = field(default_factory=list)
+    # stop criterian
+    max_tokens: int = 50
+    eos_token_id:int = 0
+    max_seq_len:int = 1024
+
+    @property
+    def is_finished(self) -> bool:
+        return self.token_ids[-1] == self.eos_token_id or (len(self.token_ids) - self.num_prompt_tokens) == self.max_tokens or len(self.token_ids) > self.max_seq_len
+
+    @property
+    def is_prefill(self) -> bool:
+        return self.n_kv_cache_tokens < self.num_prompt_tokens
+    
+    @property
+    def is_prefill_but_not_new(self) -> bool:
+        return self.n_kv_cache_tokens < self.num_prompt_tokens and not self.is_new
+
+    @property
+    def is_decode(self) -> bool:
+        return self.n_kv_cache_tokens >= self.num_prompt_tokens
+    
+    @property
+    def is_decode_but_not_finished(self) -> bool:
+        return self.n_kv_cache_tokens >= self.num_prompt_tokens and not self.is_finished
+
+    @property
+    def is_new(self) -> bool:
+        return self.n_kv_cache_tokens == 0
+
+class ContinuousBatch:
+    def __init__(self, max_tokens_per_batch: int, chunk_size: int, allocator: BlockAllocator, block_size: int):
+        self.max_tokens_per_batch = max_tokens_per_batch
+        self.chunk_size           = chunk_size
+        self.new_queue    : queue.Queue = queue.Queue()
+        self.prefill_queue: queue.Queue = queue.Queue()
+        self.decode_queue : queue.Queue = queue.Queue()
+        self.allocator = allocator
+        self.block_size = block_size
+    
+    def add_new_sequence(self, sequence: Sequence):
+        self.new_queue.put(sequence)
+
+    def add_prefill_sequence(self, sequence: Sequence):
+        self.prefill_queue.put(sequence)
+    
+    def add_decode_sequence(self, sequence: Sequence):
+        self.decode_queue.put(sequence)
+
+    def batch(self):
+        done: bool = False
+        batch_num_tokens = 0
+        batch_sequences: list[Sequence] = []
+        q_seq_lens = []
+        while not self.decode_queue.empty():
+            sequence: Sequence = self.decode_queue.get()
+            
+            if len(sequence.block_table) * self.block_size < len(sequence.token_ids): # need allocate new block
+                blocks = self.allocator.allocate(1)
+                if len(blocks) == 0: # out of memory
+                    if not self.prefill_queue.empty(): # try to find an prefill sequence to preempt
+                        preempted_sequence:Sequence = self.prefill_queue.get()
+                        self.allocator.free(preempted_sequence.block_table)
+                        preempted_sequence.n_kv_cache_tokens = 0
+                        self.new_queue.put(preempted_sequence)
+                        blocks = self.allocator.allocate(1)
+                    elif not self.decode_queue.empty(): # try to find an decode sequence to preempt
+                        preempted_sequence:Sequence = self.prefill_queue.get()
+                        self.allocator.free(preempted_sequence.block_table)
+                        preempted_sequence.n_kv_cache_tokens = 0
+                        self.new_queue.put(preempted_sequence)
+                        blocks = self.allocator.allocate(1)
+                    else: # no sequence can be preempted, stop batch
+                        self.decode_queue.put(sequence)
+                        done = True
+                        break
+                sequence.block_table += blocks
+            
+            if batch_num_tokens + 1 <= self.max_tokens_per_batch:
+                # select this sequence
+                batch_num_tokens += 1 
+                batch_sequences.append(sequence)
+                q_seq_lens.append(1)
+
+            else: # this batch has too many tokens
+                done = True
+                break
+            
+        while not done and (not self.prefill_queue.empty() or not self.new_queue.empty()):
+            if not self.prefill_queue.empty():
+                sequence: Sequence = self.prefill_queue.get()
+            else:
+                sequence: Sequence = self.new_queue.get()
+            # compute chunk size
+            num_chunk_tokens = min(self.chunk_size, len(sequence.token_ids) - sequence.n_kv_cache_tokens, self.max_tokens_per_batch - batch_num_tokens)
+            if num_chunk_tokens == 0:
+                if sequence.is_new:
+                    self.new_queue.put(sequence)
+                else:
+                    self.prefill_queue.put(sequence)
+                done = True
+                break
+            
+            if len(sequence.block_table) * self.block_size <= sequence.n_kv_cache_tokens + num_chunk_tokens: # need allocate block
+                n_blocks = (sequence.n_kv_cache_tokens + num_chunk_tokens - len(sequence.block_table) * self.block_size + self.block_size - 1) // self.block_size
+                blocks = self.allocator.allocate(n_blocks)
+                if len(blocks) == 0: # out of memory
+                    self.prefill_queue.put(sequence)
+                    done = True
+                    break
+                else:
+                    sequence.block_table += blocks
+
+            # select this sequence
+            batch_num_tokens += num_chunk_tokens
+            batch_sequences.append(sequence)
+            q_seq_lens.append(num_chunk_tokens)
+        
+        return batch_sequences, q_seq_lens
+
+def load_model_tokenizer(model_name: str, dtype: torch.dtype, device: torch.device) -> tuple[nn.Module, PreTrainedTokenizer]:
+    if model_name == 'gpt2':
+        from dxz.model.gpt2 import GPT2LMHeadModel
+        from transformers import GPT2Tokenizer
+        model = GPT2LMHeadModel.from_pretrained(model_name)
+        tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+        n_kv_heads = model.config.n_head
+        head_size = model.config.n_embd // model.config.n_head
+        n_layers = model.config.n_layer
+        max_seq_len  = model.config.n_positions
+        model.to(dtype)
+        model.to(device)
+        model.eval()
+        return model, tokenizer, n_kv_heads, head_size, n_layers, max_seq_len
+    elif model_name == 'meta-llama/Llama-2-7b-hf':
+        from dxz.model.llama import LlamaForCausalLM
+        from transformers import LlamaTokenizer
+        model_weights_path = download_hf_model(repo_id=model_name)
+        model = LlamaForCausalLM.from_safetensor(model_weights_path, dtype=dtype, device=device)
+        tokenizer = LlamaTokenizer.from_pretrained(model_weights_path)
+        n_kv_heads = model.config.num_key_value_heads
+        head_size = model.config.head_dim
+        n_layers = model.config.num_hidden_layers
+        max_seq_len  = model.config.max_position_embeddings
+        return model, tokenizer, n_kv_heads, head_size, n_layers, max_seq_len
+    elif model_name == 'fake':
+        from dxz.model.fake import FakeModel
+        from transformers import GPT2Tokenizer, GPT2Config
+        config = GPT2Config.from_pretrained('gpt2')
+        tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        model = FakeModel(config)
+        n_kv_heads = model.config.n_head
+        head_size = model.config.n_embd // model.config.n_head
+        n_layers = model.config.n_layer
+        max_seq_len  = model.config.n_positions
+        model.to(dtype)
+        model.to(device)
+        model.eval()
+        return model, tokenizer, n_kv_heads, head_size, n_layers, max_seq_len
+    else:
+        raise Exception(f'invalid model {model_name}')
 
 class LLMEngine:
     def __init__(self):
@@ -120,3 +293,40 @@ class LLMEngine:
                 raise Exception
         
         return decode_output, finished_output
+
+class AsyncLLMEngine:
+    def __init__(self) -> None:
+        self.llm_engine = LLMEngine()
+        self.is_stream_output:dict[int, bool]        = {} # sequence.id -> wheather stream output
+        self.output_streams  :dict[int, AsyncStream] = {} # sequence.id -> output generator
+
+    def generate(self, prompt: str, stream: bool) -> AsyncStream:
+        id = self.llm_engine.add_request(prompt)
+
+        output_stream = AsyncStream()
+        self.is_stream_output[id] = stream
+        self.output_streams  [id] = output_stream
+        return output_stream
+
+    async def loop(self):
+        while True:
+            decode, finished = self.llm_engine.step() 
+
+            tokenizer = self.llm_engine.tokenizer
+            for sequence in decode:
+                if self.is_stream_output[sequence.id]:
+                    output_text = tokenizer.decode(sequence.token_ids[-1])
+                    output_stream = self.output_streams[sequence.id]
+                    output_stream.put(output_text)
+            for sequence in finished:
+                if self.is_stream_output[sequence.id]:
+                    output_text = tokenizer.decode(sequence.token_ids[-1])
+                else:
+                    output_text = tokenizer.decode(sequence.token_ids)
+                output_stream = self.output_streams[sequence.id]
+                output_stream.put(output_text)
+                output_stream.put(StopAsyncIteration())
+                del self.is_stream_output[sequence.id]
+                del self.output_streams[sequence.id]
+
+            await asyncio.sleep(0)

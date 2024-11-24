@@ -4,7 +4,7 @@ import json
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
-from dxz.engine.async_llm_engine import AsyncLLMEngine
+from dxz.engine.llm_engine import AsyncLLMEngine
 from contextlib import asynccontextmanager
 import asyncio
 from typing import AsyncGenerator
