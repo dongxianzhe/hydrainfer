@@ -1,3 +1,4 @@
+from torch import Tensor
 from dataclasses import dataclass
 from transformers import AutoTokenizer, AutoProcessor
 from dxz.engine.isa import Instruction, Fill, ImageFill
@@ -18,8 +19,9 @@ class Compiler:
         self.processor = self.config.processor
         self.image_token_id = self.config.image_token_id
         self.num_image_tokens = self.config.num_image_tokens
+        self.code_generator = VanillaCodeGenerator(config)
 
-    def tokenize(self, prompt: str) -> list[int]:
+    def tokenize(self, prompt: str, images: list[Image.Image]) -> tuple[list[int], list[Tensor]]:
         token_ids = self.tokenizer.encode(prompt)
 
         inserted_token_ids = []
@@ -28,24 +30,77 @@ class Compiler:
                 inserted_token_ids.extend([self.image_token_id] * (self.num_image_tokens - 1))
             inserted_token_ids.append(token_id)
         
-        return inserted_token_ids
-
-    def code_generate(self, token_ids: list[int], images: list[Image.Image]) -> tuple[list[Instruction], int]:
         images = [self.processor(
             text="", 
             images=image, 
             return_tensors="pt"
         )['pixel_values'] for image in images]
+        return inserted_token_ids, images
 
+    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+        return self.code_generator.code_generate(token_ids, pixel_values)
+
+    def compile(self, prompt: str, images: list[Image.Image]) -> list[Instruction]:
+        token_ids, pixel_values = self.tokenize(prompt, images)
+        instructions, n_virtual_kv_caches =  self.code_generate(token_ids, pixel_values)
+        return instructions, n_virtual_kv_caches
+
+    def interpret_next_instruction(self, params: "DecodeParams") -> Instruction:
+        return self.code_generator.interpret_next_instruction(params)
+
+class DecodeParams:
+    def __init__(self, curr_instruction: Instruction, next_token_id: int):
+        self.curr_instruction = curr_instruction
+        self.next_token_id = next_token_id
+
+class VanillaCodeGenerator:
+    """ 
+        full attention 
+        no chunk prefill
+    """
+    def __init__(self, config: CompilerConfig):
+        self.config = config
+
+    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+        instructions: list[Instruction] = []
+        instructions.append(ImageFill(
+            images = pixel_values, 
+            token_ids = token_ids,
+            position_ids = list(range(0, len(token_ids))), 
+            cache_ids = [list(range(0, len(token_ids))) for _ in range(self.config.n_layers)], 
+            kv_cache_ids = list(range(self.config.n_layers)), 
+            sample = True, 
+        ))
+        n_virtual_kv_caches = self.config.n_layers
+        return instructions, n_virtual_kv_caches
+
+    def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
+        return Fill(
+            token_ids = [params.next_token_id],
+            position_ids = [params.curr_instruction.position_ids[-1] + 1], 
+            cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
+            kv_cache_ids = params.curr_instruction.kv_cache_ids,
+            sample = True
+            )
+
+class MultiModalChunkPrefillCodeGenerator:
+    """ 
+        full attention 
+        image and text seperate chunk prefill
+    """
+    def __init__(self, config: CompilerConfig):
+        self.config = config
+
+    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
         i = 0
         while i < len(token_ids):
-            if token_ids[i] == self.image_token_id:
+            if token_ids[i] == self.config.image_token_id:
                 j = i
-                while j < len(token_ids) and token_ids[j] == self.image_token_id:
+                while j < len(token_ids) and token_ids[j] == self.config.image_token_id:
                     j += 1
                 instructions.append(ImageFill(
-                    images = images, 
+                    images = pixel_values, 
                     token_ids = token_ids[i:j],
                     position_ids = list(range(i, j)), 
                     cache_ids = [list(range(i, j)) for _ in range(self.config.n_layers)], 
@@ -55,7 +110,7 @@ class Compiler:
                 i = j
             else:
                 j = i
-                while j < len(token_ids) and token_ids[j] != self.image_token_id:
+                while j < len(token_ids) and token_ids[j] != self.config.image_token_id:
                     j += 1
                 instructions.append(Fill(
                     token_ids = token_ids[i:j], 
@@ -69,17 +124,11 @@ class Compiler:
         n_virtual_kv_caches = self.config.n_layers
         return instructions, n_virtual_kv_caches
 
-    def compile(self, prompt: str, images: list[Image.Image]) -> list[Instruction]:
-        token_ids = self.tokenize(prompt)
-        instructions, n_virtual_kv_caches =  self.code_generate(token_ids, images)
-        return instructions, n_virtual_kv_caches
-
-    def interpret_next_instruction(self, instruction: Instruction, token_id: int) -> Instruction:
-        next_instruction = Fill(
-            token_ids = [token_id],
-            position_ids = [instruction.position_ids[-1] + 1], 
-            cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in instruction.cache_ids], 
-            kv_cache_ids = instruction.kv_cache_ids,
+    def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
+        return Fill(
+            token_ids = [params.next_token_id],
+            position_ids = [params.curr_instruction.position_ids[-1] + 1], 
+            cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
+            kv_cache_ids = params.curr_instruction.kv_cache_ids,
             sample = True
             )
-        return next_instruction

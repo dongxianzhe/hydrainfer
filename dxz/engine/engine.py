@@ -10,7 +10,7 @@ from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import InputParameters
 from dxz.sequence.sequence import Sequence
-from dxz.memory.compiler import CompilerConfig, Compiler
+from dxz.memory.compiler import CompilerConfig, Compiler, DecodeParams
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig
 
 @dataclass
@@ -113,8 +113,9 @@ class Engine:
         instructions : list[Instruction]
         sequences, instructions = self.batch_policy.batch(self.running)
 
+        # 3. interpret instruction
         token_ids         : list[int] = []
-        position_ids         : list[int] = []
+        position_ids      : list[int] = []
         q_seq_lens        : list[int] = []
         selected_token_ids: list[int] = []
 
@@ -180,7 +181,7 @@ class Engine:
                 if (isinstance(instruction, Fill) or isinstance(instruction, ImageFill)) and instruction.sample:
                     next_token_id = sample_token_ids[i]
                     i += 1
-                    next_instruction = self.compiler.interpret_next_instruction(instruction=instruction, token_id=next_token_id)
+                    next_instruction = self.compiler.interpret_next_instruction(DecodeParams(curr_instruction=instruction, next_token_id=next_token_id))
                     sequence.append_instruction(next_instruction)
                     sequence.output_token_ids.append(next_token_id)
         # 5. scheduler sequence
