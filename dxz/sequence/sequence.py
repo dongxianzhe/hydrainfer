@@ -27,7 +27,11 @@ class Sequence:
             self.append_instruction_count += 1
 
     def is_finished(self) -> bool:
-        return self.pc >= len(self.instructions)
+        finished: bool = self.pc >= len(self.instructions)
+        if finished:
+            for kv_cache in self.virtual_kv_caches:
+                kv_cache.realloc(0)
+        return finished
 
     def print(self):
         print(f'---------------------------- sequence info --------------------------------')

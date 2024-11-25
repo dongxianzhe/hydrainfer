@@ -180,7 +180,7 @@ class MMETestPaper:
         ])
         return marks
 
-if __name__ == '__main__':
+def test_transformers():
     from tqdm import tqdm
     import torch
     from transformers import LlavaForConditionalGeneration, AutoProcessor
@@ -218,3 +218,23 @@ if __name__ == '__main__':
             print('unclear')
     marks = paper.mark_paper()
     print(marks)
+
+def test_engine():
+    from tqdm import tqdm
+    from dxz.engine.engine import Engine, EngineConfig
+    paper = MMETestPaper()
+    engine = Engine(EngineConfig())
+    for question in tqdm(paper.questions):
+        inputs = [{"prompt":f"USER: <image>\n{question['question']}?\nAnswer the question using a single word or phrase. ASSISTANT:", "multi_modal_data":{"image":question['image']}, "max_tokens":16}]
+        output_text = engine.generate(inputs)[0]
+        if "Yes" in output_text:
+            question['answer'] = "Yes"
+        elif "No" in output_text:
+            question['answer'] = "No"
+        else:
+            print('unclear')
+    marks = paper.mark_paper()
+    print(marks)
+
+if __name__ == '__main__':
+    test_engine()

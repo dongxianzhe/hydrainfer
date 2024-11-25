@@ -22,13 +22,41 @@ class EngineConfig:
     num_blocks  : int                                                   = 16
     block_size  : int                                                   = 16                          # kvcache block size
 
-class NoBatchPolicy:
+class SequenceScheduler:
     def __init__(self):
-        pass
+        self.waiting: list[Sequence] = []
+        self.running: list[Sequence] = []
+        self.finished: list[Sequence] = []
+    
+    def schedule_new(self, sequences: list[Sequence]):
+        self.waiting += sequences
+    
+    def schedule_running(self, sequences: list[Sequence]):
+        self.running += sequences
 
-    def batch(self, sequences: list[Sequence]) -> tuple[list[Sequence], list[Instruction]]:
-        assert len(sequences) == 1
-        return sequences, [sequences[0].next_instruction()]
+    def schedule_unfinished(self, sequences: list[Sequence]):
+        self.running += sequences
+    
+    def schedule_finished(self, sequences: list[Sequence]):
+        self.finished += sequences
+
+    def pop_finished(self) -> list[Sequence]:
+        finished = self.finished
+        self.finished = []
+        return finished
+
+    def step(self) -> tuple[list[Sequence], list[Instruction]]:
+        if len(self.running) == 0:
+            if len(self.waiting) != 0:
+                self.running.append(self.waiting.pop())
+            else:
+                return [], []
+        running = self.running
+        self.running = []
+        return running, [running[0].next_instruction()]
+
+    def __repr__(self):
+        return f'{len(self.waiting)} {len(self.running)} {len(self.finished)}'
 
 from tqdm import tqdm
 class Engine:
@@ -62,11 +90,7 @@ class Engine:
         self.compiler = Compiler(self.compiler_config)
         # 4. sequence
         self.sid_allocator = 0
-        self.waiting: list[Sequence] = []
-        self.running: list[Sequence] = []
-        self.finished: list[Sequence] = []
-        # 5. batch policy
-        self.batch_policy = NoBatchPolicy()
+        self.scheduler = SequenceScheduler()
 
     def generate(self, inputs):
         """ inputs example
@@ -92,26 +116,27 @@ class Engine:
                 max_seq_len = self.model_config.text_config.max_position_embeddings, 
             )
             self.sid_allocator += 1
-            self.waiting.append(sequence)
+            self.scheduler.schedule_new([sequence])
 
         output_texts: list[str] = []
-        while len(self.finished) < len(inputs):
+        finished: list[Sequence] = []
+        while len(finished) < len(inputs):
             self.step()
-        for sequence in self.finished:
+            finished += self.scheduler.pop_finished()
+
+        for sequence in finished:
             output_texts.append(self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True))
+
         return output_texts
 
     @torch.inference_mode()
     def step(self):
         # 1. scheduler sequence
-        if len(self.running) == 0:
-            if len(self.waiting) != 0:
-                self.running.append(self.waiting.pop())
-            return
         # 2. batch instruction
-        sequences    : list[Sequence]
-        instructions : list[Instruction]
-        sequences, instructions = self.batch_policy.batch(self.running)
+        sequences, instructions = self.scheduler.step()
+        assert len(sequences) == len(instructions)
+        if len(instructions) == 0:
+            return 
 
         # 3. interpret instruction
         token_ids         : list[int] = []
@@ -187,7 +212,9 @@ class Engine:
         # 5. scheduler sequence
         for sequence in sequences:
             if sequence.is_finished():
-                self.finished.append(sequence)
+                self.scheduler.schedule_finished([sequence])
+            else:
+                self.scheduler.schedule_unfinished([sequence])
 
 if __name__ == '__main__':
     

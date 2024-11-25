@@ -75,3 +75,20 @@ class VirtualKVCache:
             self.mmu.free([physical_block_id])
             del self.block_tables[virtual_block_id]
         return True
+
+    def realloc(self, n_tokens: int):
+        n_virtual_blocks = (n_tokens + self.block_size - 1) // self.block_size
+        self.mmu.free(self.block_tables[n_virtual_blocks:])
+        self.block_tables = self.block_tables[:n_virtual_blocks]
+
+if __name__ == '__main__':
+    device = torch.device('cuda:0')
+    src = torch.arange(9, dtype=torch.float, device=device).reshape(3, 3)
+    dst = torch.randn(size=(3, 3), dtype=torch.float, device=device)
+    print(src)
+    print(dst)
+    x = torch.tensor([0, 1, 1], dtype=torch.int, device=device)
+    y = torch.tensor([1, 0, 2], dtype=torch.int, device=device)
+    print(src[x, y])
+    dst[x, y] = src[x, y]
+    print(dst)

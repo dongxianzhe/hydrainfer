@@ -19,4 +19,4 @@ benchmark/dataset/ShareGPT_V3_unfiltered_cleaned_split.json
 **/*.jpg
 clearn
 tmp_dir
-benchmark/dataset/mme/*.parquet
+benchmark/mme/*.parquet
