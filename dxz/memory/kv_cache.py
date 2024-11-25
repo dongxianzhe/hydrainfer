@@ -45,3 +45,15 @@ class KVCache:
                 block_offset = slot_ids[i] % self.block_size
                 self.key_cache[block_id, block_offset, :, :] = keys[i, :, :]
                 self.value_cache[block_id, block_offset, :, :] = values[i, :, :]
+    
+    def move_kv_cache(self, src_slot_ids: Tensor, dst_slot_ids: Tensor):
+        assert src_slot_ids.numel() == dst_slot_ids.numel(), f'{src_slot_ids.numel()} {dst_slot_ids.numel()}'
+        assert src_slot_ids.dim() == 1, f'{src_slot_ids.dim()}'
+        assert src_slot_ids.dtype == torch.int, f'{src_slot_ids.dtype}'
+        assert dst_slot_ids.dim() == 1, f'{src_slot_ids.dim()}'
+        assert dst_slot_ids.dtype == torch.int, f'{dst_slot_ids.dtype}'
+
+        key_cache   = self.key_cache.view(self.num_blocks * self.block_size, self.num_kv_heads * self.head_size)
+        value_cache = self.value_cache.view(self.num_blocks * self.block_size, self.num_kv_heads * self.head_size)
+        key_cache[dst_slot_ids, :] = key_cache[src_slot_ids, :]
+        value_cache[dst_slot_ids, :] = value_cache[src_slot_ids, :]
