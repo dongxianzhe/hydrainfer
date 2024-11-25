@@ -13,7 +13,7 @@ class CompilerConfig:
     image_token_id: int
     num_image_tokens: int # number of tokens each image embedding
     n_layers: int
-    kv_cache_eviction_policy: Literal['vanilla', 'random', 'streamingllm'] = "vanilla"
+    kv_cache_eviction_policy: Literal['vanilla', 'random', 'streamingllm'] = "streamingllm"
     # streamingLLM params
     window_size: int = 12
     attention_sink_size: int = 4

@@ -50,6 +50,9 @@ class MemoryManagementUnit:
             slot_ids.append(slot_id)
         return slot_ids
 
+    def move_physical_kv_caches(self, src_slot_ids: list[int], dst_slot_ids: list[int]):
+        self.kv_cache.move_kv_cache(src_slot_ids, dst_slot_ids)
+
 class VirtualKVCache:
     def __init__(self, mmu: MemoryManagementUnit):
         self.config: MemoryConfig = mmu.config
