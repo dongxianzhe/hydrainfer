@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 from typing import Literal
-from dxz.engine.isa import Instruction, Fill, ImageFill
+from dxz.engine.isa import Instruction, Fill, ImageFill, Mov, ReAlloc
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import InputParameters

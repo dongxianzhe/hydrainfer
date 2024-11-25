@@ -38,6 +38,17 @@ class Mov(Instruction):
         self.src_kv_cache_ids = src_kv_cache_ids
         self.dst_kv_cache_ids = dst_kv_cache_ids
 
+    def __repr__(self):
+        return f"Mov {self.src_cache_ids} {self.dst_cache_ids} {self.src_cache_ids} {self.dst_cache_ids}"
+
+class ReAlloc(Instruction):
+    def __init__(self, n_tokens: list[int], kv_cache_ids: list[int]):
+        self.n_tokens     = n_tokens
+        self.kv_cache_ids = kv_cache_ids
+
+    def __repr__(self):
+        return f"ReAlloc {self.n_tokens} {self.kv_cache_ids}"
+
 class Merge(Instruction):
     def __init__(self, kv_cache1_ids: list[int], kv_cache2_ids: list[int]):
         super().__init__()
