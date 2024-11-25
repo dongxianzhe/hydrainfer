@@ -4,6 +4,9 @@ class Instruction:
     pass
 
 class Fill(Instruction):
+    pass
+
+class TextFill(Fill):
     def __init__(self, token_ids: list[int], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool):
         # cache_ids (n_layers, n_tokens)
         # kv_caches (n_layers, )
@@ -15,9 +18,9 @@ class Fill(Instruction):
         self.sample = sample
 
     def __repr__(self):
-        return f"Fill {self.token_ids} {self.position_ids} {self.kv_cache_ids}"
+        return f"TextFill {self.token_ids} {self.position_ids} {self.kv_cache_ids}"
 
-class ImageFill(Instruction):
+class ImageFill(Fill):
     def __init__(self, images: list[Tensor], token_ids: list[int], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool):
         super().__init__()
         self.images    = images

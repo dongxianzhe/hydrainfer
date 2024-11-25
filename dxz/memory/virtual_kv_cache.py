@@ -38,8 +38,17 @@ class MemoryManagementUnit:
     def free(self, blocks: list[int]) -> bool:
         return self.kv_cache_allocator.free(blocks)
 
-    def allocate_virtual_kv_cache(self) -> "VirtualKVCache":
-        return VirtualKVCache(self)
+    def allocate_virtual_kv_caches(self, n_virtual_kv_caches: int) -> list["VirtualKVCache"]:
+        return [VirtualKVCache(self) for _ in range(n_virtual_kv_caches)]
+
+    def v2p(self, cache_ids: list[int], block_table: list[int]) -> list[int]:
+        slot_ids: list[int] = []
+        for vcid in cache_ids:
+            block_id = vcid // self.config.block_size
+            block_offset = vcid % self.config.block_size
+            slot_id = block_table[block_id] * self.config.block_size + block_offset
+            slot_ids.append(slot_id)
+        return slot_ids
 
 class VirtualKVCache:
     def __init__(self, mmu: MemoryManagementUnit):

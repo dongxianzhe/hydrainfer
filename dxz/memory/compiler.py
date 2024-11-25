@@ -2,7 +2,7 @@ import random
 from torch import Tensor
 from dataclasses import dataclass
 from transformers import AutoTokenizer, AutoProcessor
-from dxz.engine.isa import Instruction, Fill, ImageFill, Mov, ReAlloc
+from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc
 from PIL import Image
 from typing import Literal
 
@@ -13,10 +13,16 @@ class CompilerConfig:
     image_token_id: int
     num_image_tokens: int # number of tokens each image embedding
     n_layers: int
-    kv_cache_eviction_policy: Literal['vanilla', 'random', 'streamingllm'] = "random"
+    kv_cache_eviction_policy: Literal['vanilla', 'random', 'streamingllm'] = "vanilla"
     # streamingLLM params
     window_size: int = 12
     attention_sink_size: int = 4
+
+@dataclass
+class CompilerOutput:
+    instructions: list[Instruction]
+    n_virtual_kv_caches: int
+    n_prompt_tokens: int
 
 class Compiler:
     def __init__(self, config: CompilerConfig):
@@ -51,16 +57,22 @@ class Compiler:
     def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
         return self.code_generator.code_generate(token_ids, pixel_values)
 
-    def compile(self, prompt: str, images: list[Image.Image]) -> list[Instruction]:
+    def compile(self, prompt: str, images: list[Image.Image]) -> CompilerOutput:
         token_ids, pixel_values = self.tokenize(prompt, images)
         instructions, n_virtual_kv_caches =  self.code_generate(token_ids, pixel_values)
-        return instructions, n_virtual_kv_caches
+        return CompilerOutput(
+            instructions = instructions, 
+            n_virtual_kv_caches = n_virtual_kv_caches, 
+            n_prompt_tokens = len(token_ids), 
+        )
 
     def interpret_next_instruction(self, params: "DecodeParams") -> Instruction:
         return self.code_generator.interpret_next_instruction(params)
 
+
 class DecodeParams:
-    def __init__(self, curr_instruction: Instruction, next_token_id: int):
+    def __init__(self, n_prompt_tokens: int, curr_instruction: Instruction, next_token_id: int):
+        self.n_prompt_tokens = n_prompt_tokens
         self.curr_instruction = curr_instruction
         self.next_token_id = next_token_id
 
@@ -86,7 +98,7 @@ class VanillaCodeGenerator:
         return instructions, n_virtual_kv_caches
 
     def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
-        return Fill(
+        return TextFill(
             token_ids = [params.next_token_id],
             position_ids = [params.curr_instruction.position_ids[-1] + 1], 
             cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
@@ -123,7 +135,7 @@ class MultiModalChunkPrefillCodeGenerator:
                 j = i
                 while j < len(token_ids) and token_ids[j] != self.config.image_token_id:
                     j += 1
-                instructions.append(Fill(
+                instructions.append(TextFill(
                     token_ids = token_ids[i:j], 
                     position_ids = list(range(i, j)), 
                     cache_ids = [list(range(i, j)) for _ in range(self.config.n_layers)], 
@@ -136,7 +148,7 @@ class MultiModalChunkPrefillCodeGenerator:
         return instructions, n_virtual_kv_caches
 
     def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
-        return Fill(
+        return TextFill(
             token_ids = [params.next_token_id],
             position_ids = [params.curr_instruction.position_ids[-1] + 1], 
             cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
@@ -195,7 +207,7 @@ class StreamingLLMCodeGenerator:
             next_cache_id = (window_offset + 1) % self.window_size + self.attention_sink_size
             cache_ids.append([next_cache_id])
 
-        instruction = Fill(
+        instruction = TextFill(
             token_ids = [params.next_token_id],
             position_ids = [params.curr_instruction.position_ids[-1] + 1], 
             cache_ids = cache_ids, 
@@ -208,6 +220,8 @@ class StreamingLLMCodeGenerator:
         return instruction
 
 class RandomCodeGenerator:
+    """
+    """
     def __init__(self, config: CompilerConfig):
         self.config = config
         self.window_size = self.config.window_size
@@ -232,10 +246,10 @@ class RandomCodeGenerator:
     def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
         cache_ids: list[int] = []
         for _ in range(len(params.curr_instruction.cache_ids)):
-            next_cache_id = random.randint(0, 576)
+            next_cache_id = random.randint(0, params.n_prompt_tokens - 1)
             cache_ids.append([next_cache_id])
 
-        instruction = Fill(
+        instruction = TextFill(
             token_ids = [params.next_token_id],
             position_ids = [params.curr_instruction.position_ids[-1] + 1], 
             cache_ids = cache_ids, 

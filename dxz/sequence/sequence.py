@@ -1,12 +1,13 @@
-from dxz.engine.isa import Instruction, Fill
+from dxz.engine.isa import Instruction, TextFill
 from dxz.memory.virtual_kv_cache import VirtualKVCache
+from dxz.memory.compiler import CompilerOutput
 
 class Sequence:
-    def __init__(self, sid: int, instructions: list[Instruction], virtual_kv_caches: list[VirtualKVCache], max_tokens: int, eos_token_id: int, max_seq_len: int):
+    def __init__(self, static_info: CompilerOutput, sid: int, instructions: list[Instruction], virtual_kv_caches: list[VirtualKVCache], max_tokens: int, eos_token_id: int, max_seq_len: int):
+        self.static_info = static_info
         self.sid: int = sid
         self.pc: int = 0
         self.instructions: list[Instruction] = instructions
-        self.n_virtual_kv_caches: int
         self.virtual_kv_caches: list[VirtualKVCache] = virtual_kv_caches
 
         self.output_token_ids: list[int] = []
@@ -20,8 +21,8 @@ class Sequence:
         self.pc += 1
         return inst
 
-    def append_instruction(self, instruction: Fill): # todo move to a proper place
-        assert isinstance(instruction, Fill) and len(instruction.token_ids) == 1
+    def append_instruction(self, instruction: TextFill): # todo move to a proper place
+        assert isinstance(instruction, TextFill) and len(instruction.token_ids) == 1
         if instruction.token_ids[-1] != self.eos_token_id and len(self.output_token_ids) < self.max_tokens:
             self.instructions.append(instruction)
             self.append_instruction_count += 1

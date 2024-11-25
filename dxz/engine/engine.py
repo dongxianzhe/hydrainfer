@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 from typing import Literal
-from dxz.engine.isa import Instruction, Fill, ImageFill, Mov, ReAlloc
+from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import InputParameters
@@ -103,14 +103,15 @@ class Engine:
         }, ...]
         """
         for input in inputs:
-            instructions, n_virtual_kv_caches = self.compiler.compile(
+            static_info = self.compiler.compile(
                 prompt = input['prompt'], 
                 images = [input['multi_modal_data']['image']], 
                 )
             sequence = Sequence(
+                static_info=static_info, 
                 sid = self.sid_allocator, 
-                instructions = instructions, 
-                virtual_kv_caches = [VirtualKVCache(self.mmu) for _ in range(n_virtual_kv_caches)], 
+                instructions = static_info.instructions, 
+                virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
                 max_tokens = input.get('max_tokens', 50), 
                 eos_token_id = self.tokenizer.eos_token_id, 
                 max_seq_len = self.model_config.text_config.max_position_embeddings, 
@@ -151,7 +152,7 @@ class Engine:
         blocks_lens       : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         new_cache_slots   : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         for sequence, instruction in zip(sequences, instructions):
-            if isinstance(instruction, Fill) or isinstance(instruction, ImageFill):
+            if isinstance(instruction, Fill):
                 token_ids += instruction.token_ids
                 if instruction.sample:
                     selected_token_ids.append(len(token_ids) - 1)
@@ -159,11 +160,8 @@ class Engine:
                 q_seq_lens.append(len(instruction.token_ids))
                 for layer_id, (vcids, vid) in enumerate(zip(instruction.cache_ids, instruction.kv_cache_ids)):
                     sequence.virtual_kv_caches[vid].set(vcids)
-                    for vcid in vcids:
-                        block_id = vcid // self.memory_config.block_size
-                        block_offset = vcid % self.memory_config.block_size
-                        slot_id = sequence.virtual_kv_caches[vid].block_tables[block_id] * self.memory_config.block_size + block_offset
-                        new_cache_slots[layer_id].append(slot_id)
+                    slot_ids = self.mmu.v2p(vcids, sequence.virtual_kv_caches[vid].block_tables)
+                    new_cache_slots[layer_id] += slot_ids
                     kv_seq_lens[layer_id].append(sequence.virtual_kv_caches[vid].n_kv_cache_tokens)
                     block_tables[layer_id] += sequence.virtual_kv_caches[vid].block_tables
                     blocks_lens[layer_id].append(len(sequence.virtual_kv_caches[vid].block_tables))
@@ -203,10 +201,10 @@ class Engine:
             sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
             i = 0
             for sequence, instruction in zip(sequences, instructions):
-                if (isinstance(instruction, Fill) or isinstance(instruction, ImageFill)) and instruction.sample:
+                if (isinstance(instruction, Fill)) and instruction.sample:
                     next_token_id = sample_token_ids[i]
                     i += 1
-                    next_instruction = self.compiler.interpret_next_instruction(DecodeParams(curr_instruction=instruction, next_token_id=next_token_id))
+                    next_instruction = self.compiler.interpret_next_instruction(DecodeParams(n_prompt_tokens=sequence.static_info.n_prompt_tokens, curr_instruction=instruction, next_token_id=next_token_id))
                     sequence.append_instruction(next_instruction)
                     sequence.output_token_ids.append(next_token_id)
         # 5. scheduler sequence
