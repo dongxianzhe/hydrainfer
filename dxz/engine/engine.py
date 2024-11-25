@@ -219,10 +219,15 @@ class Engine:
                 for dst_cache_ids, dst_kv_cache_id in zip(instruction.dst_cache_ids, instruction.dst_kv_cache_ids):
                     block_table = sequence.virtual_kv_caches[dst_kv_cache_id].block_tables
                     dst_slot_ids += self.mmu.v2p(dst_cache_ids, block_table)
-                assert len(src_slot_ids) == len(dst_cache_ids), f'{len(src_slot_ids)} {len(dst_cache_ids)}'
+                assert len(src_slot_ids) == len(dst_slot_ids), f'{len(src_slot_ids)} {len(dst_slot_ids)}'
+                src_slot_ids = torch.tensor(src_slot_ids, dtype=torch.int, device=self.config.device)
+                dst_slot_ids = torch.tensor(dst_slot_ids, dtype=torch.int, device=self.config.device)
                 self.mmu.move_physical_kv_caches(src_slot_ids, dst_slot_ids)
                 continue
-
+            if isinstance(instruction, ReAlloc):
+                for n_token, vid in zip(instruction.n_tokens, instruction.kv_cache_ids):
+                    sequence.virtual_kv_caches[vid].realloc(n_token)
+                continue
             raise Exception(f'unsupported instrction {type(instruction)}')
 
         # 5. scheduler sequence
@@ -247,11 +252,13 @@ if __name__ == '__main__':
         "multi_modal_data":{
             "image": image
         },
+        "max_tokens":50
     }]
 
     import time
     start = time.perf_counter()
     outputs = engine.generate(inputs)
     end = time.perf_counter()
+    print(prompt)
     print(outputs)
     print(f'total time {end - start: 3}')

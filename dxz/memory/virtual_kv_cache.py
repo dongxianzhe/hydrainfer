@@ -89,6 +89,12 @@ class VirtualKVCache:
         return True
 
     def realloc(self, n_tokens: int):
-        n_virtual_blocks = (n_tokens + self.block_size - 1) // self.block_size
-        self.mmu.free(self.block_tables[n_virtual_blocks:])
-        self.block_tables = self.block_tables[:n_virtual_blocks]
+        if n_tokens > self.n_kv_cache_tokens:
+            n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
+            self.block_tables += self.mmu.allocate(n_need_blocks - len(self.block_tables))
+            self.n_kv_cache_tokens = n_tokens
+        else:
+            n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
+            self.mmu.free(self.block_tables[n_need_blocks:])
+            self.block_tables = self.block_tables[:n_need_blocks]
+            self.n_kv_cache_tokens = n_tokens

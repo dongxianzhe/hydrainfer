@@ -18,7 +18,7 @@ class TextFill(Fill):
         self.sample = sample
 
     def __repr__(self):
-        return f"TextFill {self.token_ids} {self.position_ids} {self.kv_cache_ids}"
+        return f"TextFill {self.token_ids} {self.position_ids} {self.cache_ids} {self.kv_cache_ids}"
 
 class ImageFill(Fill):
     def __init__(self, images: list[Tensor], token_ids: list[int], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool):
@@ -31,7 +31,7 @@ class ImageFill(Fill):
         self.sample = sample
 
     def __repr__(self):
-        return f"ImageFill {self.token_ids[:3]}...{self.token_ids[-3:]} {self.position_ids[:3]}...{self.position_ids[-3:]} {self.kv_cache_ids}"
+        return f"ImageFill {self.token_ids[:3]}...{self.token_ids[-3:]} {self.position_ids[:3]}...{self.position_ids[-3:]} {self.cache_ids[:3]}...{self.cache_ids[-3:]} {self.kv_cache_ids}"
 
 class Mov(Instruction):
     def __init__(self, src_cache_ids: list[list[int]], dst_cache_ids: list[list[int]], src_kv_cache_ids: list[int], dst_kv_cache_ids: list[int]):
