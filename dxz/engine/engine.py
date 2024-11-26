@@ -21,6 +21,10 @@ class EngineConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'nobatch'                   #
     num_blocks  : int                                                   = 16
     block_size  : int                                                   = 16                          # kvcache block size
+    token_prunning_policy: Literal['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill'] = "streamingllm"
+    # streamingLLM params
+    window_size: int = 16
+    attention_sink_size: int = 4 
 
 class SequenceScheduler:
     def __init__(self):
@@ -86,6 +90,10 @@ class Engine:
             image_token_id = self.model_config.image_token_index, 
             num_image_tokens = 576, 
             n_layers = self.model_config.text_config.num_hidden_layers,
+            token_prunning_policy = self.config.token_prunning_policy, 
+            # streamingLLM params
+            window_size = self.config.window_size, 
+            attention_sink_size = self.config.attention_sink_size
         )
         self.compiler = Compiler(self.compiler_config)
         # 4. sequence
@@ -244,7 +252,12 @@ if __name__ == '__main__':
     question = "What is the content of this image?"
     prompt = f"USER: <image>\n{question}\nASSISTANT:"
 
-    config = EngineConfig()
+    # ['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill']
+    config = EngineConfig(
+        token_prunning_policy = "streamingllm", 
+        window_size = 128, 
+        attention_sink_size = 1, 
+    )
     engine = Engine(config)
 
     inputs = [{

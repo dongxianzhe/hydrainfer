@@ -16,7 +16,7 @@ class CompilerConfig:
     token_prunning_policy: Literal['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill'] = "block_prefill"
     # streamingLLM params
     window_size: int = 512
-    attention_sink_size: int = 4 
+    attention_sink_size: int = 5 
 
 @dataclass
 class CompilerOutput:
@@ -326,7 +326,7 @@ class BlockPrefillLLMCodeGenerator():
         instruction = TextFill(
             token_ids = [params.next_token_id],
             position_ids = [params.curr_instruction.position_ids[-1] + 1], 
-            cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
+            cache_ids = [[params.curr_instruction.position_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
             kv_cache_ids = self.image_kv_cache_ids, 
             sample = True
             )

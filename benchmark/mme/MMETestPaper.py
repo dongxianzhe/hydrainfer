@@ -223,10 +223,15 @@ def test_engine():
     from tqdm import tqdm
     from dxz.engine.engine import Engine, EngineConfig
     paper = MMETestPaper()
-    engine = Engine(EngineConfig())
+    engine = Engine(EngineConfig(
+        token_prunning_policy='block_prefill',
+        window_size=512,
+        attention_sink_size=4,
+    ))
     for question in tqdm(paper.questions):
         inputs = [{"prompt":f"USER: <image>\n{question['question']}?\nAnswer the question using a single word or phrase. ASSISTANT:", "multi_modal_data":{"image":question['image']}, "max_tokens":16}]
         output_text = engine.generate(inputs)[0]
+        print(output_text)
         if "Yes" in output_text:
             question['answer'] = "Yes"
         elif "No" in output_text:
