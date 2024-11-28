@@ -56,20 +56,14 @@ class VizwizTestPaper:
         self.test_questions: list[Question]
         self.val_questions: list[Question]
         self.test_questions, self.val_questions = datasets
-        # self.val_questions = self.val_questions[:10]
 
     def mark_paper(self):
         marks = {
-            "score": 0, 
+            "accuracy": 0, 
         }
         for question in self.val_questions:
-            right = False
-            for reference_answer in question.reference_answers:
-                if reference_answer in question.answer.lower():
-                    marks['score'] += 1
-            if not right:
-                print(f'{question.question_id} wrong: {question.reference_answers} {question.answer}')
-        marks["score"] /= len(self.val_questions) * 10
+            marks['accuracy'] += min(1, (question.reference_answers.count(question.answer.lower())) / 3)
+        marks["accuracy"] /= len(self.val_questions)
         return marks
 
 def test_transformers():
