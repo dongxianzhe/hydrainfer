@@ -21,3 +21,4 @@ clearn
 tmp_dir
 benchmark/mme/*.parquet
 benchmark/*/*.parquet
+**/*.pkl
