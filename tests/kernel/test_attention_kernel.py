@@ -4,7 +4,7 @@ import math
 import torch
 from torch import Tensor
 import pytest
-from flash_attn import flash_attn_func, flash_attn_qkvpacked_func, flash_attn_with_kvcache
+from flash_attn import flash_attn_func, flash_attn_qkvpacked_func, flash_attn_with_kvcache, flash_attn_kvpacked_func
 from dxz.memory.kv_cache import KVCache
 from dxz.memory.block_allocator import BlockAllocator
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
@@ -96,6 +96,21 @@ def test_fixedlength_nokvcache_attention(
             return_attn_probs=False,
         )
         assert torch.allclose(flash_attn_qkvpacked_func_out, out_ref, rtol=1e-3, atol=1e-3)
+
+        kv = torch.cat([k[:, :, None, :, :], v[:, :, None, :, :]], dim=2)
+        flash_attn_kvpacked_func_out = flash_attn_kvpacked_func(
+            q,
+            kv,
+            dropout_p=0.0,
+            softmax_scale=None,
+            causal=causal,
+            window_size=(-1, -1),  # -1 means infinite context window
+            softcap=0.0,  # 0.0 means deactivated
+            alibi_slopes=None,
+            deterministic=False,
+            return_attn_probs=False,
+        )
+        assert torch.allclose(flash_attn_kvpacked_func_out, out_ref, rtol=1e-3, atol=1e-3)
 
 
 # @pytest.mark.parametrize("seq_lens", [[(1, 100), (15, 15), (111, 234), (1000, 10000)]])
