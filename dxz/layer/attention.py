@@ -7,10 +7,16 @@ from dxz.utils.statistic import attention_score_heatmap, histogram
 from dxz.utils import attention_utils
 from dxz.utils.attention_utils import sparsity
 
+try :
+    import flash_attn
+except ImportError:
+    print('flash attention import failed')
+    flash_attn = None
+
 try:
     from dxz._C.kernel.flash_attn import mha_varlen_fwd
 except ImportError:
-    print('flash attention import failed')
+    print('flash attention mha_varlen_fwd import failed')
     mha_varlen_fwd = None
 
 class TorchMultiHeadAttention(nn.Module):
@@ -53,10 +59,30 @@ class FlashMultiHeadAttention(nn.Module):
         device = query.device
         dtype = query.dtype
 
-        query = query.view(-1, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-        key   =   key.view(-1, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-        value = value.view(-1, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-
+        # 1. try to use flash attention
+        if flash_attn:
+            query = query.view(batch_size, seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
+            key   =   key.view(batch_size, seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
+            value = value.view(batch_size, seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
+            o = flash_attn.flash_attn_func(
+                q = query,
+                k = key,
+                v = value,
+                dropout_p=0.0,
+                softmax_scale=None,
+                causal=False,
+                window_size=(-1, -1),  # -1 means infinite context window
+                softcap=0.0, # 0.0 means deactivated
+                alibi_slopes=None,
+                deterministic=False,
+                return_attn_probs=False,
+            )
+            o = o.view(batch_size, seq_len, hidden_size)
+            return o
+        # 2. try to use my flash attention
+        query = query.view(batch_size * seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
+        key   =   key.view(batch_size * seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
+        value = value.view(batch_size * seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
         o = torch.empty(size=(batch_size * seq_len, self.n_heads, self.head_dim), dtype=dtype, device=device)
         cu_seqlens_q = torch.arange(0, (batch_size + 1) * seq_len, seq_len, dtype=torch.int, device=device)
         cu_seqlens_k = torch.arange(0, (batch_size + 1) * seq_len, seq_len, dtype=torch.int, device=device)
