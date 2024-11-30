@@ -59,14 +59,15 @@ def test_fixedlength_nokvcache_attention(
         if causal:
             mask = torch.tril(torch.ones(size=(seq_len, seq_len), dtype=torch.bool, device=device))
             scores = torch.masked_fill(input=scores, mask=~mask, value=float('-inf'))
+        scores_presoftmax = scores
         scores = torch.softmax(scores, dim=-1)
         o = torch.bmm(scores, v)
         o = o.reshape(batch_size, num_heads[0], seq_len, head_dim)
         o = o.transpose(1, 2).contiguous().to(dtype)
-        return o
-    out_ref = ref_attention(q, k, v)
+        return o, scores_presoftmax.to(dtype), scores.to(dtype)
+    out_ref, scores_presoftmax, scores = ref_attention(q, k, v)
 
-    flash_attn_func_out = flash_attn_func(
+    flash_attn_func_out, flash_attn_func_softmax_lse, flash_attn_func_S_dmask = flash_attn_func(
         q,
         k,
         v,
@@ -77,9 +78,13 @@ def test_fixedlength_nokvcache_attention(
         softcap=0.0,
         alibi_slopes=None,
         deterministic=False,
-        return_attn_probs=False,
+        return_attn_probs=True,
     )
-    print(f'flash_attn_func_out: {flash_attn_func_out.view(-1)[:8]} out_ref: {out_ref.view(-1)[:8]}')
+    print(f'scores_presoftmax.shape {scores_presoftmax.shape}')
+    print(f'scores.shape {scores.shape}')
+    print(f'flash_attn_func_softmax_lse.shape {flash_attn_func_softmax_lse.shape}')
+    print(f'flash_attn_func_S_dmask.shape {flash_attn_func_S_dmask.shape}')
+    # assert torch.allclose(flash_attn_func_S_dmask, scores, rtol=1e-3, atol=1e-3)
     assert torch.allclose(flash_attn_func_out, out_ref, rtol=1e-3, atol=1e-3)
 
     if group_size == 1:
@@ -97,21 +102,42 @@ def test_fixedlength_nokvcache_attention(
         )
         assert torch.allclose(flash_attn_qkvpacked_func_out, out_ref, rtol=1e-3, atol=1e-3)
 
-        kv = torch.cat([k[:, :, None, :, :], v[:, :, None, :, :]], dim=2)
-        flash_attn_kvpacked_func_out = flash_attn_kvpacked_func(
-            q,
-            kv,
-            dropout_p=0.0,
-            softmax_scale=None,
-            causal=causal,
-            window_size=(-1, -1),  # -1 means infinite context window
-            softcap=0.0,  # 0.0 means deactivated
-            alibi_slopes=None,
-            deterministic=False,
-            return_attn_probs=False,
-        )
-        assert torch.allclose(flash_attn_kvpacked_func_out, out_ref, rtol=1e-3, atol=1e-3)
+    kv = torch.cat([k[:, :, None, :, :], v[:, :, None, :, :]], dim=2)
+    flash_attn_kvpacked_func_out = flash_attn_kvpacked_func(
+        q,
+        kv,
+        dropout_p=0.0,
+        softmax_scale=None,
+        causal=causal,
+        window_size=(-1, -1),  # -1 means infinite context window
+        softcap=0.0,  # 0.0 means deactivated
+        alibi_slopes=None,
+        deterministic=False,
+        return_attn_probs=False,
+    )
+    assert torch.allclose(flash_attn_kvpacked_func_out, out_ref, rtol=1e-3, atol=1e-3)
 
+# @pytest.mark.parametrize("seq_lens", [4, 16, 576, 577])
+# @pytest.mark.parametrize("num_heads", [(8, 8), (8, 4), (8, 1)])
+# @pytest.mark.parametrize("head_dim", [64, 128, 256])
+# @pytest.mark.parametrize("causal", [False, True])
+# @pytest.mark.parametrize("dtype", [torch.float16])
+# @pytest.mark.parametrize("device", [torch.device('cuda:0')])
+# @torch.inference_mode()
+# def test_varlength_nokvcache_attention(
+#     seq_lens: list[int], 
+#     num_heads: tuple[int, int], 
+#     head_dim: int, 
+#     causal: bool,
+#     dtype: torch.dtype,
+#     device: torch.device,
+# ):
+#     group_size = num_heads[0] // num_heads[1]
+
+#     sum_seq_lens = sum(seq_lens)
+#     q = torch.randn(size=(sum_seq_lens, num_heads[0], head_dim), dtype=dtype, device=device)
+#     k = torch.randn(size=(sum_seq_lens, num_heads[1], head_dim), dtype=dtype, device=device)
+#     v = torch.randn(size=(sum_seq_lens, num_heads[1], head_dim), dtype=dtype, device=device)
 
 # @pytest.mark.parametrize("seq_lens", [[(1, 100), (15, 15), (111, 234), (1000, 10000)]])
 # @pytest.mark.parametrize("num_heads", [(8, 8), (8, 4), (8, 2), (8, 1)])
