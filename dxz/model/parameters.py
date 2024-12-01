@@ -1,6 +1,8 @@
 import torch
 from torch import Tensor
 from typing import Optional
+from dxz.memory.kv_cache import KVCache
+
 
 class InputParameters:
     """
@@ -92,3 +94,21 @@ class InputParameters:
                 print(f'block_tables[:8]     : {input_params.block_tables[:8]}')
                 print(f'cu_blocks_lens[:8]   : {input_params.cu_blocks_lens[:8]}')
         print(f'-----------------------------input_params-------------------------------')
+
+from dataclasses import dataclass
+@dataclass
+class AttentionParameters:
+    kv_cache: KVCache
+    q_cu_seq_lens: Tensor
+    kv_cu_seq_lens: Tensor
+    new_cache_slots: Tensor
+    block_tables: Tensor
+    cu_blocks_lens: Tensor 
+    num_sequences: int
+    all_sequences_decode: bool
+    q_max_seq_len: int
+    kv_max_seq_len: int
+
+@dataclass
+class ModelParameters:
+    attention_params: list[AttentionParameters]

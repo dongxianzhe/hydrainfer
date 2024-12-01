@@ -4,8 +4,7 @@ from torch import nn, Tensor
 from transformers import LlamaConfig
 import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
-from dxz.model.parameters import InputParameters
-from dxz.memory.kv_cache import KVCache
+from dxz.model.parameters import ModelParameters
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
 from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
 from dxz._C.kernel.norm import rms_norm
@@ -35,7 +34,7 @@ class LlamaSdpaAttention(nn.Module):
             head_dim=config.head_dim
         )
     
-    def forward(self, hidden_states: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
         query = self.q_proj(hidden_states)
         key   = self.k_proj(hidden_states)
         value = self.v_proj(hidden_states)
@@ -43,7 +42,7 @@ class LlamaSdpaAttention(nn.Module):
         key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim)
         value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim)
         query, key = self.rotary_emb(query, key, position_ids)
-        hidden_states = self.attention(query, key, value, kv_cache, input_params)
+        hidden_states = self.attention(query, key, value, model_params)
         return self.o_proj(hidden_states)
 
 class LlamaMLP(nn.Module):
@@ -69,17 +68,18 @@ class LlamaRMSNorm(nn.Module):
         return output
 
 class LlamaDecoderLayer(nn.Module):
-    def __init__(self, config: LlamaConfig):
+    def __init__(self, config: LlamaConfig, layer_id: int):
         super().__init__()
+        self.layer_id = layer_id
         self.self_attn = LlamaSdpaAttention(config)
         self.mlp = LlamaMLP(config)
         self.input_layernorm = LlamaRMSNorm(config)
         self.post_attention_layernorm = LlamaRMSNorm(config)
     
-    def forward(self, hidden_states: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(hidden_states, position_ids, kv_cache, input_params)
+        hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id])
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
@@ -91,14 +91,13 @@ class LlamaModel(nn.Module):
     def __init__(self, config: LlamaConfig):
         super().__init__()
         self.embed_tokens = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config) for _ in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
         hidden_states = self.embed_tokens(input_ids)
         for i, layer in enumerate(self.layers):
-            input_params.layer_id = i
-            hidden_states = layer(hidden_states, position_ids, kv_caches[i], input_params)
+            hidden_states = layer(hidden_states, position_ids, model_params)
         return self.norm(hidden_states)
 
 class LlamaForCausalLM(nn.Module):
@@ -108,8 +107,8 @@ class LlamaForCausalLM(nn.Module):
         self.model = LlamaModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> Tensor:
-        hidden_state = self.model(input_ids, position_ids, kv_caches, input_params)
+    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
+        hidden_state = self.model(input_ids, position_ids, model_params)
         logits = self.lm_head(hidden_state)
         return logits
     

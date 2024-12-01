@@ -1,6 +1,6 @@
 import torch
 from torch import nn, Tensor
-from dxz.model.parameters import InputParameters
+from dxz.model.parameters import AttentionParameters
 from dxz.memory.kv_cache import KVCache
 import math
 from dxz.utils.statistic import attention_score_heatmap, histogram
@@ -115,7 +115,7 @@ class FlashCausalGroupedQueryPageAttention(nn.Module):
         self.n_kv_heads     = n_kv_heads
         self.head_dim       = head_dim
 
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, kv_cache: KVCache, input_params: InputParameters):
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, attention_params: AttentionParameters):
         # query (n_tokens, n_qo_heads * head_dim)
         # key/value (n_tokens, n_kv_heads * head_dim)
         # return (n_tokens, n_heads, head_dim)
@@ -127,9 +127,10 @@ class FlashCausalGroupedQueryPageAttention(nn.Module):
         value = value.view(n_tokens, self.n_kv_heads, self.head_dim)
 
         # 2. append new kv cache
+        kv_cache = attention_params.kv_cache
         key_cache, value_cache = kv_cache.get_kv_cache()
         kv_cache.set_kv_cache(
-            input_params.new_cache_slots, # slot_ids: Tensor,  # [n_tokens]
+            attention_params.new_cache_slots, # slot_ids: Tensor,  # [n_tokens]
             key, # keys: Tensor,      # [n_tokens, n_kv_heads, head_dim]
             value, # values: Tensor,    # [n_tokens, n_kv_heads, head_dim]
         )
@@ -141,13 +142,13 @@ class FlashCausalGroupedQueryPageAttention(nn.Module):
             query, 
             key_cache, 
             value_cache, 
-            input_params.q_cu_seq_lens, 
-            input_params.kv_cu_seq_lens, 
-            input_params.block_tables, 
-            input_params.cu_blocks_lens, 
+            attention_params.q_cu_seq_lens, 
+            attention_params.kv_cu_seq_lens, 
+            attention_params.block_tables, 
+            attention_params.cu_blocks_lens, 
             None,
-            input_params.q_max_seq_len,
-            input_params.kv_max_seq_len,
+            attention_params.q_max_seq_len,
+            attention_params.kv_max_seq_len,
             1. / math.sqrt(self.head_dim),
             0,
             -1,
@@ -164,7 +165,7 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
         self.n_kv_heads     = n_kv_heads
         self.head_dim       = head_dim
 
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, kv_cache: KVCache, input_params: InputParameters):
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, attention_params: AttentionParameters):
         # query (n_tokens, n_qo_heads * head_dim)
         # key/value (n_tokens, n_kv_heads * head_dim)
         # return (n_tokens, n_heads, head_dim)
@@ -175,19 +176,19 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
         value = value.view(n_tokens, self.n_kv_heads, self.head_dim)
 
         # 2. append new kv cache
-        # input_params.to(torch.device('cpu'))
+        kv_cache = attention_params.kv_cache
         key_cache, value_cache = kv_cache.get_kv_cache()
-        kv_cache.set_kv_cache(input_params.new_cache_slots, key,value)
+        kv_cache.set_kv_cache(attention_params.new_cache_slots, key,value)
 
         # 3. compute for each sequence with pytorch
         outputs = []
-        for i in range(input_params.num_sequences):
-            block_table = input_params.block_tables[input_params.cu_blocks_lens[i]: input_params.cu_blocks_lens[i + 1]]
+        for i in range(attention_params.num_sequences):
+            block_table = attention_params.block_tables[attention_params.cu_blocks_lens[i]: attention_params.cu_blocks_lens[i + 1]]
             key = key_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
             value = value_cache[block_table, :, :, :].reshape(-1, self.n_kv_heads, self.head_dim)
-            k = key[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i], :, :].to(torch.float)
-            v = value[: input_params.kv_cu_seq_lens[i + 1] - input_params.kv_cu_seq_lens[i],:, :].to(torch.float)
-            q = query[input_params.q_cu_seq_lens[i]: input_params.q_cu_seq_lens[i + 1], :, :].to(torch.float)
+            k = key[: attention_params.kv_cu_seq_lens[i + 1] - attention_params.kv_cu_seq_lens[i], :, :].to(torch.float)
+            v = value[: attention_params.kv_cu_seq_lens[i + 1] - attention_params.kv_cu_seq_lens[i],:, :].to(torch.float)
+            q = query[attention_params.q_cu_seq_lens[i]: attention_params.q_cu_seq_lens[i + 1], :, :].to(torch.float)
             # q (qo_seq_len, n_qo_heads, head_dim)
             # k (kv_seq_len, n_kv_heads, head_dim)
             # v (kv_seq_len, n_kv_heads, head_dim)
@@ -213,15 +214,15 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
 
             # # save attention score data
             # if scores.shape[1] == scores.shape[2]:
-            #     torch.save(scores, f'layer{input_params.layer_id}.pt')
+            #     torch.save(scores, f'layer{attention_params.layer_id}.pt')
 
             # # plot atention score
             # if scores.shape[1] == scores.shape[2]: # prefill stage
-            #     print(f'layer{input_params.layer_id} scores.shape {scores.shape}')
+            #     print(f'layer{attention_params.layer_id} scores.shape {scores.shape}')
 
             #     attention_utils.sparsity(scores, mask, 0)
             #     for head_id in range(scores.shape[0]):
-            #         attention_score_heatmap(score=scores[head_id], name=f'attention_score_layer{input_params.layer_id}_head{head_id}', fig_size=50)
+            #         attention_score_heatmap(score=scores[head_id], name=f'attention_score_layer{attention_params.layer_id}_head{head_id}', fig_size=50)
 
             # # meausure sparsity
             # if scores.shape[1] == scores.shape[2]:
@@ -230,7 +231,7 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
             # # plot score distrubtion
             # if scores.shape[1] == scores.shape[2]:
             #     print(f'scores.shape {scores.shape}')
-            #     histogram(data=scores, fig_size=5, range=(-25, 10), bins=100, name=f'distribution_attention_score_layer{input_params.layer_id}')
+            #     histogram(data=scores, fig_size=5, range=(-25, 10), bins=100, name=f'distribution_attention_score_layer{attention_params.layer_id}')
 
             # softmax
             scores = torch.softmax(scores, dim=-1)

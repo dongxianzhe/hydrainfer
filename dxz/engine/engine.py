@@ -8,7 +8,7 @@ from typing import Literal
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
-from dxz.model.parameters import InputParameters
+from dxz.model.parameters import AttentionParameters, ModelParameters
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler, DecodeParams
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig
@@ -177,31 +177,30 @@ class Engine:
                     images += instruction.images
 
         if len(token_ids):
-            layer_input_params: list[InputParameters] = []
+            attention_params: list[AttentionParameters] = []
             q_max_seq_len = max(q_seq_lens)
-            q_cu_seq_lens = torch.tensor(list(accumulate([0] + q_seq_lens)), dtype=torch.int, device=self.config.device)
+            q_cu_seq_lens = torch.tensor(list(accumulate(q_seq_lens, initial=0)), dtype=torch.int, device=self.config.device)
             for layer_id in range(self.model_config.text_config.num_hidden_layers):
-                layer_input_params.append(InputParameters(
-                    num_sequences = len(sequences), 
+                attention_params.append(AttentionParameters(
+                    kv_cache=self.mmu.kv_cache,
                     q_cu_seq_lens = q_cu_seq_lens, 
                     kv_cu_seq_lens = torch.tensor(list(accumulate([0] + kv_seq_lens[layer_id])), dtype=torch.int, device=self.config.device), 
                     new_cache_slots = torch.tensor(new_cache_slots[layer_id], dtype=torch.int ,device=self.config.device), 
                     block_tables = torch.tensor(block_tables[layer_id], dtype=torch.int, device=self.config.device), 
-                    cu_blocks_lens = torch.tensor(list(accumulate([0] + blocks_lens[layer_id])), dtype=torch.int, device=self.config.device), 
-                    q_max_seq_len = q_max_seq_len, 
-                    kv_max_seq_len = max(kv_seq_lens[layer_id]), 
-                    layer_id=layer_id, 
+                    cu_blocks_lens = torch.tensor(list(accumulate(blocks_lens[layer_id], initial=0)), dtype=torch.int, device=self.config.device), 
+                    num_sequences = len(sequences), 
+                    all_sequences_decode = False, 
+                    q_max_seq_len = q_max_seq_len,
+                    kv_max_seq_len = max(kv_seq_lens[layer_id])
                 ))
-            input_params = InputParameters(
-                layer_input_params=layer_input_params
-            )
+            model_params = ModelParameters(attention_params = attention_params)
             input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
             position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
             if len(images):
                 pixel_values = torch.cat(images, dim=0).to(dtype=self.config.dtype, device=self.config.device)
             else:
                 pixel_values = None
-            logits = self.model_runner(input_ids, pixel_values, position_ids, self.mmu.kv_cache, input_params)
+            logits = self.model_runner(input_ids, pixel_values, position_ids, model_params)
             if len(selected_token_ids) > 0:
                 sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
                 i = 0
@@ -254,7 +253,7 @@ if __name__ == '__main__':
 
     # ['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill']
     config = EngineConfig(
-        token_prunning_policy = "streamingllm", 
+        token_prunning_policy = "vanilla", 
         window_size = 128, 
         attention_sink_size = 1, 
     )

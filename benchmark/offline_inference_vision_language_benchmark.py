@@ -14,7 +14,7 @@ prompt = f"USER: <image>\n{question}\nASSISTANT:"
 # prompt = f"USER: \n{question}<image>\nASSISTANT:"
 
 # a prompt with image first after decoded
-prompt = f"USER: <image>\n{question}\nASSISTANT:The image features a tall tower with a spire, surrounded by a beautiful cherry blossom tree. The tree is filled with pink flowers, creating a picturesque scene. The tower stands tall in the background, with the blossoming tree in the foreground. The combination of the tower and the tree creates a captivating and serene atmosphere."
+# prompt = f"USER: <image>\n{question}\nASSISTANT:The image features a tall tower with a spire, surrounded by a beautiful cherry blossom tree. The tree is filled with pink flowers, creating a picturesque scene. The tower stands tall in the background, with the blossoming tree in the foreground. The combination of the tower and the tree creates a captivating and serene atmosphere."
 
 def main(args: argparse.Namespace):
     # 1. prepare input

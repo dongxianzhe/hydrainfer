@@ -10,7 +10,7 @@ from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.memory.kv_cache import KVCache
 from dxz.memory.block_allocator import BlockAllocator
-from dxz.model.parameters import InputParameters
+from dxz.model.parameters import ModelParameters, AttentionParameters
 from dataclasses import dataclass
 from dxz.memory.block_allocator import BlockAllocator
 
@@ -230,19 +230,32 @@ class MLLMEngine:
             pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:
             pixel_values = None
-        input_params = InputParameters(
-            num_sequences = len(batch_sequences), 
-            q_cu_seq_lens = torch.tensor(q_cu_seq_lens, dtype=torch.int, device=self.config.device), 
-            kv_cu_seq_lens = torch.tensor(kv_cu_seq_lens, dtype=torch.int, device=self.config.device), 
-            new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.config.device), 
-            block_tables = torch.tensor(block_tables, dtype=torch.int ,device=self.config.device), 
-            cu_blocks_lens = torch.tensor(cu_blocks_lens, dtype=torch.int, device=self.config.device), 
-            q_max_seq_len = max(q_seq_lens), 
-            kv_max_seq_len = max(kv_seq_lens)
+        
+        t_q_cu_seq_lens = torch.tensor(q_cu_seq_lens, dtype=torch.int, device=self.config.device)
+        t_kv_cu_seq_lens = torch.tensor(kv_cu_seq_lens, dtype=torch.int, device=self.config.device)
+        t_new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.config.device)
+        t_block_tables = torch.tensor(block_tables, dtype=torch.int ,device=self.config.device)
+        t_cu_blocks_lens = torch.tensor(cu_blocks_lens, dtype=torch.int, device=self.config.device)
+        q_max_seq_len = max(q_seq_lens)
+        kv_max_seq_len = max(kv_seq_lens)
+        
+        model_params = ModelParameters(
+            attention_params=[AttentionParameters(
+                kv_cache        = self.kv_caches[layer_id], 
+                q_cu_seq_lens   = t_q_cu_seq_lens, 
+                kv_cu_seq_lens  = t_kv_cu_seq_lens, 
+                new_cache_slots = t_new_cache_slots, 
+                block_tables    = t_block_tables, 
+                cu_blocks_lens  = t_cu_blocks_lens, 
+                q_max_seq_len   = q_max_seq_len, 
+                kv_max_seq_len  = kv_max_seq_len, 
+                num_sequences   = len(batch_sequences), 
+                all_sequences_decode = False, 
+            ) for layer_id in range(self.model_config.text_config.num_hidden_layers)]
         )
 
         # 3. forward
-        logits = self.model_runner.forward(input_ids, pixel_values, position_ids, self.kv_caches, input_params)
+        logits = self.model_runner.forward(input_ids, pixel_values, position_ids, model_params)
         for sequence, q_seq_len in zip(batch_sequences, q_seq_lens):
             sequence.n_kv_cache_tokens += q_seq_len
 

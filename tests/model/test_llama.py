@@ -4,7 +4,7 @@ from transformers import LlamaConfig, LlamaTokenizer
 from transformers import LlamaForCausalLM as LlamaForCausalLMRef
 from dxz.model.llama import LlamaForCausalLM
 from dxz.memory.kv_cache import KVCache
-from dxz.model.parameters import InputParameters
+from dxz.model.parameters import AttentionParameters, ModelParameters
 
 @torch.inference_mode()
 def test_llama2_7b_correctness():
@@ -32,24 +32,20 @@ def test_llama2_7b_correctness():
     position_ids_ref = torch.arange(len(token_ids), dtype=torch.int)
     input_ids = torch.tensor(token_ids, dtype=torch.int, device=device)
     position_ids = torch.arange(len(token_ids), dtype=torch.int, device=device)
-    input_params = InputParameters(
+    model_params = ModelParameters([AttentionParameters(
         num_sequences = 1, 
         q_cu_seq_lens = torch.tensor([0, len(token_ids)], dtype=torch.int ,device=device),
         kv_cu_seq_lens = torch.tensor([0, len(token_ids)], dtype=torch.int ,device=device),
         new_cache_slots = torch.arange(len(token_ids), dtype=torch.int, device=device),
         block_tables = torch.tensor([0, 1, 2 ,3 ,4 ,5 ,6 ,7], dtype=torch.int, device=device), 
-        cu_blocks_lens = torch.tensor([0, 8], dtype=torch.int, device=device)
-    )
-    print(f'input_ids                       : {input_ids}')
-    print(f'position_ids                    : {position_ids}')
-    print(f'input_params.num_sequences      : {input_params.num_sequences}')
-    print(f'input_params.q_cu_seq_lens      : {input_params.q_cu_seq_lens}')
-    print(f'input_params.kv_cu_seq_lens     : {input_params.kv_cu_seq_lens}')
-    print(f'input_params.new_cache_slots    : {input_params.new_cache_slots}')
-    print(f'input_params.block_tables       : {input_params.block_tables}')
-    print(f'input_params.cu_blocks_lens     : {input_params.cu_blocks_lens}')
+        cu_blocks_lens = torch.tensor([0, 8], dtype=torch.int, device=device), 
+        kv_cache = kv_caches[layer_id], 
+        all_sequences_decode = False,
+        q_max_seq_len = 128, 
+        kv_max_seq_len = 128, 
+        ) for layer_id in range(config.num_hidden_layers)])
 
-    logits = model(input_ids, position_ids, kv_caches, input_params)
+    logits = model(input_ids, position_ids, model_params)
     logits_ref = model_ref(input_ids=input_ids_ref[None, :], position_ids=position_ids_ref[None, :])['logits'].reshape(logits.shape)
 
     print(f'logits.shape    : {logits.shape}')
@@ -95,24 +91,20 @@ def test_llama3_8b_instruct_correctness():
     position_ids_ref = torch.arange(len(token_ids), dtype=torch.int)
     input_ids = torch.tensor(token_ids, dtype=torch.int, device=device)
     position_ids = torch.arange(len(token_ids), dtype=torch.int, device=device)
-    input_params = InputParameters(
+    model_params = ModelParameters([AttentionParameters(
         num_sequences = 1, 
         q_cu_seq_lens = torch.tensor([0, len(token_ids)], dtype=torch.int ,device=device),
         kv_cu_seq_lens = torch.tensor([0, len(token_ids)], dtype=torch.int ,device=device),
         new_cache_slots = torch.arange(len(token_ids), dtype=torch.int, device=device),
         block_tables = torch.tensor([0, 1, 2 ,3 ,4 ,5 ,6 ,7], dtype=torch.int, device=device), 
-        cu_blocks_lens = torch.tensor([0, 8], dtype=torch.int, device=device)
-    )
-    print(f'input_ids                       : {input_ids}')
-    print(f'position_ids                    : {position_ids}')
-    print(f'input_params.num_sequences      : {input_params.num_sequences}')
-    print(f'input_params.q_cu_seq_lens      : {input_params.q_cu_seq_lens}')
-    print(f'input_params.kv_cu_seq_lens     : {input_params.kv_cu_seq_lens}')
-    print(f'input_params.new_cache_slots    : {input_params.new_cache_slots}')
-    print(f'input_params.block_tables       : {input_params.block_tables}')
-    print(f'input_params.cu_blocks_lens     : {input_params.cu_blocks_lens}')
+        cu_blocks_lens = torch.tensor([0, 8], dtype=torch.int, device=device), 
+        kv_cache = kv_caches[layer_id], 
+        all_sequences_decode = False,
+        q_max_seq_len = 128, 
+        kv_max_seq_len = 128, 
+    ) for layer_id in range(config.num_hidden_layers)])
 
-    logits = model(input_ids, position_ids, kv_caches, input_params)
+    logits = model(input_ids, position_ids, model_params)
     logits_ref = model_ref(input_ids=input_ids_ref[None, :], position_ids=position_ids_ref[None, :])['logits'].reshape(logits.shape)
 
     print(f'logits.shape    : {logits.shape}')
