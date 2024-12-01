@@ -49,7 +49,7 @@ class SequenceScheduler:
         self.finished = []
         return finished
 
-    def step(self) -> tuple[list[Sequence], list[Instruction]]:
+    def step(self) -> list[tuple[Sequence, Instruction]]:
         if len(self.running) == 0:
             if len(self.waiting) != 0:
                 self.running.append(self.waiting.pop())
@@ -57,7 +57,7 @@ class SequenceScheduler:
                 return [], []
         running = self.running
         self.running = []
-        return running, [running[0].next_instruction()]
+        return [(running[0], running[0].next_instruction())]
 
     def __repr__(self):
         return f'{len(self.waiting)} {len(self.running)} {len(self.finished)}'
@@ -137,115 +137,127 @@ class Engine:
             output_texts.append(self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True))
 
         return output_texts
+    
+    def execute_batch_fill(self, contexts: list[tuple[Sequence, Instruction]]):
+        if len(contexts) == 0:
+            return
 
-    @torch.inference_mode()
-    def step(self):
-        # 1. scheduler sequence
-        # 2. batch instruction
-        sequences, instructions = self.scheduler.step()
-        assert len(sequences) == len(instructions)
-        if len(instructions) == 0:
-            return 
-
-        # 3. execute fill instruction
+        # 1. prepare input
+        num_sequences     : int
         token_ids         : list[int] = []
         position_ids      : list[int] = []
         q_seq_lens        : list[int] = []
         selected_token_ids: list[int] = []
-
         images            : list[Tensor] = []
-
         kv_seq_lens       : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         block_tables      : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         blocks_lens       : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         new_cache_slots   : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
-        for sequence, instruction in zip(sequences, instructions):
-            if isinstance(instruction, Fill):
-                token_ids += instruction.token_ids
-                if instruction.sample:
-                    selected_token_ids.append(len(token_ids) - 1)
-                position_ids += instruction.position_ids
-                q_seq_lens.append(len(instruction.token_ids))
-                for layer_id, (vcids, vid) in enumerate(zip(instruction.cache_ids, instruction.kv_cache_ids)):
-                    sequence.virtual_kv_caches[vid].set(vcids)
-                    slot_ids = self.mmu.v2p(vcids, sequence.virtual_kv_caches[vid].block_tables)
-                    new_cache_slots[layer_id] += slot_ids
-                    kv_seq_lens[layer_id].append(sequence.virtual_kv_caches[vid].n_kv_cache_tokens)
-                    block_tables[layer_id] += sequence.virtual_kv_caches[vid].block_tables
-                    blocks_lens[layer_id].append(len(sequence.virtual_kv_caches[vid].block_tables))
-                if isinstance(instruction, ImageFill):
-                    images += instruction.images
 
-        if len(token_ids):
-            attention_params: list[AttentionParameters] = []
-            q_max_seq_len = max(q_seq_lens)
-            q_cu_seq_lens = torch.tensor(list(accumulate(q_seq_lens, initial=0)), dtype=torch.int, device=self.config.device)
-            for layer_id in range(self.model_config.text_config.num_hidden_layers):
-                attention_params.append(AttentionParameters(
-                    kv_cache=self.mmu.kv_cache,
-                    q_cu_seq_lens = q_cu_seq_lens, 
-                    kv_cu_seq_lens = torch.tensor(list(accumulate([0] + kv_seq_lens[layer_id])), dtype=torch.int, device=self.config.device), 
-                    new_cache_slots = torch.tensor(new_cache_slots[layer_id], dtype=torch.int ,device=self.config.device), 
-                    block_tables = torch.tensor(block_tables[layer_id], dtype=torch.int, device=self.config.device), 
-                    cu_blocks_lens = torch.tensor(list(accumulate(blocks_lens[layer_id], initial=0)), dtype=torch.int, device=self.config.device), 
-                    num_sequences = len(sequences), 
-                    all_sequences_decode = False, 
-                    q_max_seq_len = q_max_seq_len,
-                    kv_max_seq_len = max(kv_seq_lens[layer_id])
-                ))
-            model_params = ModelParameters(attention_params = attention_params)
-            input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
-            position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
-            if len(images):
-                pixel_values = torch.cat(images, dim=0).to(dtype=self.config.dtype, device=self.config.device)
-            else:
-                pixel_values = None
-            logits = self.model_runner(input_ids, pixel_values, position_ids, model_params)
-            if len(selected_token_ids) > 0:
-                sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
-                i = 0
-                for sequence, instruction in zip(sequences, instructions):
-                    if (isinstance(instruction, Fill)) and instruction.sample:
-                        next_token_id = sample_token_ids[i]
-                        i += 1
-                        next_instruction = self.compiler.interpret_next_instruction(DecodeParams(n_prompt_tokens=sequence.static_info.n_prompt_tokens, curr_instruction=instruction, next_token_id=next_token_id))
-                        sequence.append_instruction(next_instruction)
-                        sequence.output_token_ids.append(next_token_id)
+        num_sequences = len(contexts)
+        for sequence, instruction in contexts:
+            token_ids += instruction.token_ids
+            if instruction.sample:
+                selected_token_ids.append(len(token_ids) - 1)
+            position_ids += instruction.position_ids
+            q_seq_lens.append(len(instruction.token_ids))
+            for layer_id, (vcids, vid) in enumerate(zip(instruction.cache_ids, instruction.kv_cache_ids)):
+                sequence.virtual_kv_caches[vid].set(vcids)
+                slot_ids = self.mmu.v2p(vcids, sequence.virtual_kv_caches[vid].block_tables)
+                new_cache_slots[layer_id] += slot_ids
+                kv_seq_lens[layer_id].append(sequence.virtual_kv_caches[vid].n_kv_cache_tokens)
+                block_tables[layer_id] += sequence.virtual_kv_caches[vid].block_tables
+                blocks_lens[layer_id].append(len(sequence.virtual_kv_caches[vid].block_tables))
+            if isinstance(instruction, ImageFill):
+                images += instruction.images
+        q_max_seq_len : int = max(q_seq_lens)
 
-        # 4. execute other instruction
-        for sequence, instruction in zip(sequences, instructions):
+        # 2. prepare tensor data
+        q_cu_seq_lens: Tensor = torch.tensor(list(accumulate(q_seq_lens, initial=0)), dtype=torch.int, device=self.config.device)
+        model_params = ModelParameters(
+            attention_params = [AttentionParameters(
+                kv_cache=self.mmu.kv_cache,
+                q_cu_seq_lens = q_cu_seq_lens, 
+                kv_cu_seq_lens = torch.tensor(list(accumulate(kv_seq_lens[layer_id], initial=0)), dtype=torch.int, device=self.config.device), 
+                new_cache_slots = torch.tensor(new_cache_slots[layer_id], dtype=torch.int ,device=self.config.device), 
+                block_tables = torch.tensor(block_tables[layer_id], dtype=torch.int, device=self.config.device), 
+                cu_blocks_lens = torch.tensor(list(accumulate(blocks_lens[layer_id], initial=0)), dtype=torch.int, device=self.config.device), 
+                num_sequences = num_sequences, 
+                all_sequences_decode = False, 
+                q_max_seq_len = q_max_seq_len,
+                kv_max_seq_len = max(kv_seq_lens[layer_id])
+            )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
+        )
+        input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
+        position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
+        if len(images):
+            pixel_values = torch.cat(images, dim=0).to(dtype=self.config.dtype, device=self.config.device)
+        else:
+            pixel_values = None
+        logits = self.model_runner(input_ids, pixel_values, position_ids, model_params)
+        if len(selected_token_ids) > 0:
+            sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
+            i = 0
+            for sequence, instruction in contexts:
+                if (isinstance(instruction, Fill)) and instruction.sample:
+                    next_token_id = sample_token_ids[i]
+                    i += 1
+                    next_instruction = self.compiler.interpret_next_instruction(DecodeParams(n_prompt_tokens=sequence.static_info.n_prompt_tokens, curr_instruction=instruction, next_token_id=next_token_id))
+                    sequence.append_instruction(next_instruction)
+                    sequence.output_token_ids.append(next_token_id)
+
+    def execute_mov(self, context: tuple[Sequence, Instruction]):
+        sequence, instruction = context
+        src_slot_ids: list[int] = []
+        for src_cache_ids, src_kv_cache_id in zip(instruction.src_cache_ids, instruction.src_kv_cache_ids):
+            block_table = sequence.virtual_kv_caches[src_kv_cache_id].block_tables
+            src_slot_ids += self.mmu.v2p(src_cache_ids, block_table)
+        dst_slot_ids: list[int] = []
+        for dst_cache_ids, dst_kv_cache_id in zip(instruction.dst_cache_ids, instruction.dst_kv_cache_ids):
+            block_table = sequence.virtual_kv_caches[dst_kv_cache_id].block_tables
+            dst_slot_ids += self.mmu.v2p(dst_cache_ids, block_table)
+        assert len(src_slot_ids) == len(dst_slot_ids), f'{len(src_slot_ids)} {len(dst_slot_ids)}'
+        src_slot_ids = torch.tensor(src_slot_ids, dtype=torch.int, device=self.config.device)
+        dst_slot_ids = torch.tensor(dst_slot_ids, dtype=torch.int, device=self.config.device)
+        self.mmu.move_physical_kv_caches(src_slot_ids, dst_slot_ids)
+
+
+    def execute_realloc(self, context: tuple[Sequence, Instruction]):
+        sequence, instruction = context
+        for n_token, vid in zip(instruction.n_tokens, instruction.kv_cache_ids):
+            sequence.virtual_kv_caches[vid].realloc(n_token)
+
+    @torch.inference_mode()
+    def step(self):
+        # 1. schedule sequence
+        contexts = self.scheduler.step()
+        if len(contexts) == 0:
+            return
+
+        # 2. execute instructions
+        fill_contexts = []
+        for context in contexts:
+            sequence, instruction = context
             if isinstance(instruction, Fill):
+                fill_contexts.append(context)
                 continue
             if isinstance(instruction, Mov):
-                # , src_cache_ids: list[list[int]], dst_cache_ids: list[list[int]], src_kv_cache_ids: list[int], dst_kv_cache_ids: list[int]
-                src_slot_ids: list[int] = []
-                for src_cache_ids, src_kv_cache_id in zip(instruction.src_cache_ids, instruction.src_kv_cache_ids):
-                    block_table = sequence.virtual_kv_caches[src_kv_cache_id].block_tables
-                    src_slot_ids += self.mmu.v2p(src_cache_ids, block_table)
-                dst_slot_ids: list[int] = []
-                for dst_cache_ids, dst_kv_cache_id in zip(instruction.dst_cache_ids, instruction.dst_kv_cache_ids):
-                    block_table = sequence.virtual_kv_caches[dst_kv_cache_id].block_tables
-                    dst_slot_ids += self.mmu.v2p(dst_cache_ids, block_table)
-                assert len(src_slot_ids) == len(dst_slot_ids), f'{len(src_slot_ids)} {len(dst_slot_ids)}'
-                src_slot_ids = torch.tensor(src_slot_ids, dtype=torch.int, device=self.config.device)
-                dst_slot_ids = torch.tensor(dst_slot_ids, dtype=torch.int, device=self.config.device)
-                self.mmu.move_physical_kv_caches(src_slot_ids, dst_slot_ids)
+                self.execute_mov(context)
                 continue
             if isinstance(instruction, ReAlloc):
-                for n_token, vid in zip(instruction.n_tokens, instruction.kv_cache_ids):
-                    sequence.virtual_kv_caches[vid].realloc(n_token)
+                self.execute_realloc(context)
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
+        self.execute_batch_fill(fill_contexts)
 
-        # 5. scheduler sequence
-        for sequence in sequences:
+        # 3. scheduler sequence
+        for sequence, _ in contexts:
             if sequence.is_finished():
                 self.scheduler.schedule_finished([sequence])
             else:
                 self.scheduler.schedule_unfinished([sequence])
 
 if __name__ == '__main__':
-    
     image_path = f'/home/xzd/projects/dxz/benchmark/dataset/cherry_blossom.jpg'
     image = Image.open(image_path)
     question = "What is the content of this image?"
