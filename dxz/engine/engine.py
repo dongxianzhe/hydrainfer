@@ -5,12 +5,12 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 from typing import Literal
-from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc
+from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import AttentionParameters, ModelParameters
 from dxz.sequence.sequence import Sequence
-from dxz.memory.compiler import CompilerConfig, Compiler, DecodeParams
+from dxz.memory.compiler import CompilerConfig, Compiler
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig
 
 @dataclass
@@ -89,6 +89,7 @@ class Engine:
             processor = self.processor, 
             image_token_id = self.model_config.image_token_index, 
             num_image_tokens = 576, 
+            max_tokens = 50,
             n_layers = self.model_config.text_config.num_hidden_layers,
             token_prunning_policy = self.config.token_prunning_policy, 
             # streamingLLM params
@@ -111,6 +112,7 @@ class Engine:
         }, ...]
         """
         for input in inputs:
+            self.compiler_config.max_tokens = input.get('max_tokens', 50)
             static_info = self.compiler.compile(
                 prompt = input['prompt'], 
                 images = [input['multi_modal_data']['image']], 
@@ -201,10 +203,9 @@ class Engine:
             for sequence, instruction in contexts:
                 if (isinstance(instruction, Fill)) and instruction.sample:
                     next_token_id = sample_token_ids[i]
-                    i += 1
-                    next_instruction = self.compiler.interpret_next_instruction(DecodeParams(n_prompt_tokens=sequence.static_info.n_prompt_tokens, curr_instruction=instruction, next_token_id=next_token_id))
-                    sequence.append_instruction(next_instruction)
+                    instruction.sample_dst.token_ids = [next_token_id]
                     sequence.output_token_ids.append(next_token_id)
+                    i += 1
 
     def execute_mov(self, context: tuple[Sequence, Instruction]):
         sequence, instruction = context
@@ -246,6 +247,8 @@ class Engine:
                 continue
             if isinstance(instruction, ReAlloc):
                 self.execute_realloc(context)
+                continue
+            if isinstance(instruction, EmptyInstruction):
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
         self.execute_batch_fill(fill_contexts)

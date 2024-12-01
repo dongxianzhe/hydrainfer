@@ -21,12 +21,6 @@ class Sequence:
         self.pc += 1
         return inst
 
-    def append_instruction(self, instruction: TextFill): # todo move to a proper place
-        assert isinstance(instruction, TextFill) and len(instruction.token_ids) == 1
-        if instruction.token_ids[-1] != self.eos_token_id and len(self.output_token_ids) < self.max_tokens:
-            self.instructions.append(instruction)
-            self.append_instruction_count += 1
-
     def is_finished(self) -> bool:
         finished: bool = self.pc >= len(self.instructions)
         if finished:

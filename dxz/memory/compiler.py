@@ -2,7 +2,7 @@ import random
 from torch import Tensor
 from dataclasses import dataclass
 from transformers import AutoTokenizer, AutoProcessor
-from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc
+from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction
 from PIL import Image
 from typing import Literal
 
@@ -13,6 +13,7 @@ class CompilerConfig:
     image_token_id: int
     num_image_tokens: int # number of tokens each image embedding
     n_layers: int
+    max_tokens: 64
     token_prunning_policy: Literal['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill'] = "block_prefill"
     # streamingLLM params
     window_size: int = 512
@@ -50,7 +51,6 @@ class Compiler:
             if token_id == self.image_token_id:
                 inserted_token_ids.extend([self.image_token_id] * (self.num_image_tokens - 1))
             inserted_token_ids.append(token_id)
-        
         images = [self.processor(
             text="", 
             images=image, 
@@ -70,16 +70,6 @@ class Compiler:
             n_prompt_tokens = len(token_ids), 
         )
 
-    def interpret_next_instruction(self, params: "DecodeParams") -> Instruction:
-        return self.code_generator.interpret_next_instruction(params)
-
-
-class DecodeParams:
-    def __init__(self, n_prompt_tokens: int, curr_instruction: Instruction, next_token_id: int):
-        self.n_prompt_tokens = n_prompt_tokens
-        self.curr_instruction = curr_instruction
-        self.next_token_id = next_token_id
-
 class VanillaCodeGenerator:
     """ 
         full attention 
@@ -98,17 +88,21 @@ class VanillaCodeGenerator:
             kv_cache_ids = list(range(self.config.n_layers)), 
             sample = True, 
         ))
+        for _ in range(self.config.max_tokens):
+            curr_instruction = instructions[-1]
+            instructions.append(TextFill(
+                token_ids = None,
+                position_ids = [curr_instruction.position_ids[-1] + 1], 
+                cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in curr_instruction.cache_ids], 
+                kv_cache_ids = curr_instruction.kv_cache_ids,
+                sample = True
+            ))
+        instructions.append(EmptyInstruction())
+        for i in range(len(instructions) - 1):
+            instructions[i].sample_dst = instructions[i + 1]
+        
         n_virtual_kv_caches = self.config.n_layers
         return instructions, n_virtual_kv_caches
-
-    def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
-        return TextFill(
-            token_ids = [params.next_token_id],
-            position_ids = [params.curr_instruction.position_ids[-1] + 1], 
-            cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
-            kv_cache_ids = params.curr_instruction.kv_cache_ids,
-            sample = True
-            )
 
 class MultiModalChunkPrefillCodeGenerator:
     """ 
@@ -148,17 +142,24 @@ class MultiModalChunkPrefillCodeGenerator:
                 ))
                 i = j 
 
+        for i in range(self.config.max_tokens):
+            curr_instruction = instructions[-1]
+            instructions.append(TextFill(
+                token_ids = None, 
+                position_ids = [curr_instruction.position_ids[-1] + 1], 
+                cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in curr_instruction.cache_ids], 
+                kv_cache_ids = curr_instruction.kv_cache_ids,
+                sample = True
+            ))
+
+        instructions.append(EmptyInstruction())
+
+        for i in range(len(instructions) - 1):
+            if instructions[i].sample:
+                instructions[i].sample_dst = instructions[i + 1]
+
         n_virtual_kv_caches = self.config.n_layers
         return instructions, n_virtual_kv_caches
-
-    def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
-        return TextFill(
-            token_ids = [params.next_token_id],
-            position_ids = [params.curr_instruction.position_ids[-1] + 1], 
-            cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
-            kv_cache_ids = params.curr_instruction.kv_cache_ids,
-            sample = True
-            )
 
 class StreamingLLMCodeGenerator:
     def __init__(self, config: CompilerConfig):
@@ -181,6 +182,7 @@ class StreamingLLMCodeGenerator:
             kv_cache_ids = virtual_kv_cache_ids, 
             sample = True, 
         ))
+        curr_instruction = instructions[-1]
         # 2. kv cache eviction
         cache_size = self.attention_sink_size + self.window_size
         if n_prompt_tokens > cache_size:
@@ -195,29 +197,28 @@ class StreamingLLMCodeGenerator:
                 kv_cache_ids = virtual_kv_cache_ids, 
             ))
 
+        for i in range(self.config.max_tokens):
+            cache_ids: list[int] = []
+            for layer_cache_ids in curr_instruction.cache_ids:
+                cache_id = layer_cache_ids[-1]
+                window_offset = cache_id - self.attention_sink_size
+                next_cache_id = (window_offset + 1) % self.window_size + self.attention_sink_size
+                cache_ids.append([next_cache_id])
+
+            instruction = TextFill(
+                token_ids = None, 
+                position_ids = [curr_instruction.position_ids[-1] + 1], 
+                cache_ids = cache_ids, 
+                kv_cache_ids = curr_instruction.kv_cache_ids,
+                sample = True
+                )
+            curr_instruction.sample_dst = instruction
+            instructions.append(instruction)
+            curr_instruction = instruction
+        instructions.append(EmptyInstruction())
+        curr_instruction.sample_dst = instructions[-1]
 
         return instructions, n_virtual_kv_caches
-
-    def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
-        cache_ids: list[int] = []
-        for layer_cache_ids in params.curr_instruction.cache_ids:
-            next_token_id = params.next_token_id
-            cache_id = layer_cache_ids[-1]
-            window_offset = cache_id - self.attention_sink_size
-            next_cache_id = (window_offset + 1) % self.window_size + self.attention_sink_size
-            cache_ids.append([next_cache_id])
-
-        instruction = TextFill(
-            token_ids = [params.next_token_id],
-            position_ids = [params.curr_instruction.position_ids[-1] + 1], 
-            cache_ids = cache_ids, 
-            kv_cache_ids = params.curr_instruction.kv_cache_ids,
-            sample = True
-            )
-
-        # print(instruction)
-
-        return instruction
 
 class RandomCodeGenerator:
     """
@@ -241,23 +242,28 @@ class RandomCodeGenerator:
             sample = True, 
         ))
 
+
+        for i in range(self.config.max_tokens):
+            curr_instruction = instructions[-1]
+            cache_ids: list[int] = []
+            for _ in range(len(curr_instruction.cache_ids)):
+                next_cache_id = random.randint(0, len(token_ids))
+                cache_ids.append([next_cache_id])
+
+            instructions.append(TextFill(
+                token_ids = None, 
+                position_ids = [curr_instruction.position_ids[-1] + 1], 
+                cache_ids = cache_ids, 
+                kv_cache_ids = curr_instruction.kv_cache_ids,
+                sample = True
+                ))
+            
+        instructions.append(EmptyInstruction())
+        for i in range(len(instructions) - 1):
+            if instructions[i].sample:
+                instructions[i].sample_dst = instructions[i + 1]
+            
         return instructions, n_virtual_kv_caches
-
-    def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
-        cache_ids: list[int] = []
-        for _ in range(len(params.curr_instruction.cache_ids)):
-            next_cache_id = random.randint(0, params.n_prompt_tokens - 1)
-            cache_ids.append([next_cache_id])
-
-        instruction = TextFill(
-            token_ids = [params.next_token_id],
-            position_ids = [params.curr_instruction.position_ids[-1] + 1], 
-            cache_ids = cache_ids, 
-            kv_cache_ids = params.curr_instruction.kv_cache_ids,
-            sample = True
-            )
-
-        return instruction
 
 class BlockPrefillLLMCodeGenerator():
     """ 
@@ -306,6 +312,7 @@ class BlockPrefillLLMCodeGenerator():
                 ))
                 n_text_tokens += j - i
                 i = j 
+        curr_instruction = instructions[-1]
         instructions.append(ReAlloc(
             n_tokens = [n_text_tokens + n_image_tokens for _ in range(self.config.n_layers)],
             kv_cache_ids = self.image_kv_cache_ids, 
@@ -320,14 +327,18 @@ class BlockPrefillLLMCodeGenerator():
             n_tokens = [0 for _ in range(self.config.n_layers)],
             kv_cache_ids = self.text_kv_cache_ids, 
         ))
-        return instructions, self.n_virtual_kv_caches
 
-    def interpret_next_instruction(self, params: DecodeParams) -> Instruction:
-        instruction = TextFill(
-            token_ids = [params.next_token_id],
-            position_ids = [params.curr_instruction.position_ids[-1] + 1], 
-            cache_ids = [[params.curr_instruction.position_ids[-1] + 1] for layer_cache_ids in params.curr_instruction.cache_ids], 
-            kv_cache_ids = self.image_kv_cache_ids, 
-            sample = True
-            )
-        return instruction
+        for i in range(self.config.max_tokens):
+            instruction = TextFill(
+                token_ids = None,
+                position_ids = [curr_instruction.position_ids[-1] + 1], 
+                cache_ids = [[curr_instruction.position_ids[-1] + 1] for layer_cache_ids in curr_instruction.cache_ids], 
+                kv_cache_ids = self.image_kv_cache_ids, 
+                sample = True
+                )
+            curr_instruction.next_instruction = instruction
+            instructions.append(instruction)
+            curr_instruction = instruction
+        instructions.append(EmptyInstruction())
+        curr_instruction.sample_dst = instructions[-1]
+        return instructions, self.n_virtual_kv_caches

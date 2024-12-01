@@ -1,4 +1,5 @@
 from torch import Tensor
+from typing import Optional
 
 class Instruction:
     pass
@@ -16,6 +17,7 @@ class TextFill(Fill):
         self.cache_ids = cache_ids
         self.kv_cache_ids = kv_cache_ids
         self.sample = sample
+        self.sample_dst: Optional[TextFill] = None
 
     def __repr__(self):
         return f"TextFill {self.token_ids} {self.position_ids} {self.cache_ids} {self.kv_cache_ids}"
@@ -29,6 +31,7 @@ class ImageFill(Fill):
         self.cache_ids = cache_ids
         self.kv_cache_ids = kv_cache_ids
         self.sample = sample
+        self.sample_dst: Optional[TextFill] = None
 
     def __repr__(self):
         return f"ImageFill {self.token_ids[:3]}...{self.token_ids[-3:]} {self.position_ids[:3]}...{self.position_ids[-3:]} {self.cache_ids[:3]}...{self.cache_ids[-3:]} {self.kv_cache_ids}"
@@ -57,3 +60,10 @@ class Merge(Instruction):
         super().__init__()
         self.kv_cache1_ids = kv_cache1_ids
         self.kv_cache2_ids = kv_cache2_ids
+
+class EmptyInstruction(Instruction):
+    pass
+
+class ImageEmbed(Instruction):
+    def __init__(self, images: list[Tensor]):
+        super().__init__()
