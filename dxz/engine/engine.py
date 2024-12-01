@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 from typing import Literal
-from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction
+from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import AttentionParameters, ModelParameters
@@ -150,11 +150,14 @@ class Engine:
         position_ids      : list[int] = []
         q_seq_lens        : list[int] = []
         selected_token_ids: list[int] = []
-        images            : list[Tensor] = []
+        pixel_values      : list[Tensor] = []
+        image_featues     : list[Tensor] = []
         kv_seq_lens       : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         block_tables      : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         blocks_lens       : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
         new_cache_slots   : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
+        has_image_fill: bool = False
+        has_image_embed_fill: bool = False
 
         num_sequences = len(contexts)
         for sequence, instruction in contexts:
@@ -171,7 +174,15 @@ class Engine:
                 block_tables[layer_id] += sequence.virtual_kv_caches[vid].block_tables
                 blocks_lens[layer_id].append(len(sequence.virtual_kv_caches[vid].block_tables))
             if isinstance(instruction, ImageFill):
-                images += instruction.images
+                pixel_values.append(instruction.pixel_values)
+                has_image_fill = True
+            if isinstance(instruction, ImageEmbedFill):
+                image_featues.append(instruction.image_features)
+                has_image_embed_fill = True
+
+        if has_image_fill and has_image_embed_fill:
+            raise Exception('not support pixel value and image embed batch')
+
         q_max_seq_len : int = max(q_seq_lens)
 
         # 2. prepare tensor data
@@ -192,11 +203,16 @@ class Engine:
         )
         input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
         position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
-        if len(images):
-            pixel_values = torch.cat(images, dim=0).to(dtype=self.config.dtype, device=self.config.device)
+        if len(pixel_values):
+            pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:
             pixel_values = None
-        logits = self.model_runner(input_ids, pixel_values, position_ids, model_params)
+        if len(image_featues):
+            image_featues = torch.cat(image_featues, dim=0).to(dtype=self.config.dtype, device=self.config.device)
+        else:
+            image_featues = None
+            
+        logits = self.model_runner(input_ids, pixel_values, image_featues, position_ids, model_params)
         if len(selected_token_ids) > 0:
             sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
             i = 0
@@ -249,6 +265,11 @@ class Engine:
                 self.execute_realloc(context)
                 continue
             if isinstance(instruction, EmptyInstruction):
+                continue
+            if isinstance(instruction, ImageEmbed):
+                pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
+                image_features = self.model.image_embed(pixel_values)
+                instruction.image_featues_dst.image_features = image_features
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
         self.execute_batch_fill(fill_contexts)

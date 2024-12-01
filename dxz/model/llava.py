@@ -14,7 +14,6 @@ class CLIPEncoder(nn.Module):
         self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
     
     def forward(self, hidden_states: Tensor, vision_feature_layer: int) -> Tensor:
-        # for _, encoder_layer in enumerate(self.layers[:vision_feature_layer + 1]): #
         for _, encoder_layer in enumerate(self.layers[:(vision_feature_layer + len(self.layers)) % len(self.layers) + 1]): #
             hidden_states = encoder_layer(hidden_states)
         return hidden_states
@@ -92,26 +91,33 @@ class LlavaForConditionalGeneration(nn.Module):
         self.multi_modal_projector = LlavaMultiModalProjector(config)
         self.language_model = LlamaForCausalLM(config.text_config)
     
-    def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], position_ids: Tensor, model_params: ModelParameters) -> Tensor:
+    def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], image_features: Optional[Tensor], position_ids: Tensor, model_params: ModelParameters) -> Tensor:
         # input_ids    (n_tokens + m_tokens) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
         # pixel_values (n_images, n_channels, height, width)
         # position_ids (n_tokens + m_tokens)
+        # image_features (m_tokens, hidden_size)
 
         # 1. compute input embeds
         input_embeds = self.input_embed(input_ids) # (n_tokens, n_embeds)
-        image_overwrite_mask = input_ids == self.config.image_token_index
 
         if pixel_values is not None:
+            image_overwrite_mask = input_ids == self.config.image_token_index
             # 2. compute image embeds
             image_features = self.image_embed(pixel_values)
 
             # 3. merge embeds
             embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
 
+        if image_features is not None:
+            image_overwrite_mask = input_ids == self.config.image_token_index
+            print(f'image_features.shape {image_features.shape}')
+            embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
+            print(f'image_features.shape {image_features.shape}')
         # 4. compute logits
         logits = self.language_model(input_embeds, position_ids, model_params)
 
         return logits
+
     
     @classmethod
     def from_safetensor(cls, model_weights_path: str, dtype: torch.dtype, device: torch.device):

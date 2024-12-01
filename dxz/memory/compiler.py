@@ -2,7 +2,7 @@ import random
 from torch import Tensor
 from dataclasses import dataclass
 from transformers import AutoTokenizer, AutoProcessor
-from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction
+from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill
 from PIL import Image
 from typing import Literal
 
@@ -51,14 +51,14 @@ class Compiler:
             if token_id == self.image_token_id:
                 inserted_token_ids.extend([self.image_token_id] * (self.num_image_tokens - 1))
             inserted_token_ids.append(token_id)
-        images = [self.processor(
+        images = self.processor(
             text="", 
-            images=image, 
+            images=images, 
             return_tensors="pt"
-        )['pixel_values'] for image in images]
+        )['pixel_values'] # (n_images, n_channels, width, height)
         return inserted_token_ids, images
 
-    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
         return self.code_generator.code_generate(token_ids, pixel_values)
 
     def compile(self, prompt: str, images: list[Image.Image]) -> CompilerOutput:
@@ -78,16 +78,22 @@ class VanillaCodeGenerator:
     def __init__(self, config: CompilerConfig):
         self.config = config
 
-    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
-        instructions.append(ImageFill(
-            images = pixel_values, 
+        instructions.append(ImageEmbed(
+            pixel_values=pixel_values, 
+            image_featues_dst=None, 
+        ))
+        instructions.append(ImageEmbedFill(
+            image_featues = None,
             token_ids = token_ids,
             position_ids = list(range(0, len(token_ids))), 
             cache_ids = [list(range(0, len(token_ids))) for _ in range(self.config.n_layers)], 
             kv_cache_ids = list(range(self.config.n_layers)), 
             sample = True, 
+            sample_dst = None, 
         ))
+        instructions[0].image_featues_dst = instructions[1]
         for _ in range(self.config.max_tokens):
             curr_instruction = instructions[-1]
             instructions.append(TextFill(
@@ -95,7 +101,8 @@ class VanillaCodeGenerator:
                 position_ids = [curr_instruction.position_ids[-1] + 1], 
                 cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in curr_instruction.cache_ids], 
                 kv_cache_ids = curr_instruction.kv_cache_ids,
-                sample = True
+                sample = True, 
+                sample_dst= None,
             ))
         instructions.append(EmptyInstruction())
         for i in range(len(instructions) - 1):
@@ -112,7 +119,7 @@ class MultiModalChunkPrefillCodeGenerator:
     def __init__(self, config: CompilerConfig):
         self.config = config
 
-    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
         i = 0
         while i < len(token_ids):
@@ -121,12 +128,13 @@ class MultiModalChunkPrefillCodeGenerator:
                 while j < len(token_ids) and token_ids[j] == self.config.image_token_id:
                     j += 1
                 instructions.append(ImageFill(
-                    images = pixel_values, 
+                    pixel_values = pixel_values, 
                     token_ids = token_ids[i:j],
                     position_ids = list(range(i, j)), 
                     cache_ids = [list(range(i, j)) for _ in range(self.config.n_layers)], 
                     kv_cache_ids = list(range(self.config.n_layers)), 
                     sample = j==len(token_ids), 
+                    sample_dst= None,
                 ))
                 i = j
             else:
@@ -139,6 +147,7 @@ class MultiModalChunkPrefillCodeGenerator:
                     cache_ids = [list(range(i, j)) for _ in range(self.config.n_layers)], 
                     kv_cache_ids = list(range(self.config.n_layers)), 
                     sample = j==len(token_ids), 
+                    sample_dst= None,
                 ))
                 i = j 
 
@@ -149,7 +158,8 @@ class MultiModalChunkPrefillCodeGenerator:
                 position_ids = [curr_instruction.position_ids[-1] + 1], 
                 cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in curr_instruction.cache_ids], 
                 kv_cache_ids = curr_instruction.kv_cache_ids,
-                sample = True
+                sample = True, 
+                sample_dst= None,
             ))
 
         instructions.append(EmptyInstruction())
@@ -167,7 +177,7 @@ class StreamingLLMCodeGenerator:
         self.window_size = self.config.window_size
         self.attention_sink_size = self.config.attention_sink_size
 
-    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
         n_virtual_kv_caches = self.config.n_layers
         virtual_kv_cache_ids = list(range(n_virtual_kv_caches))
@@ -175,12 +185,13 @@ class StreamingLLMCodeGenerator:
         n_prompt_tokens = len(token_ids)
         # 1. prefill
         instructions.append(ImageFill(
-            images = pixel_values, 
+            pixel_values = pixel_values, 
             token_ids = token_ids,
             position_ids = list(range(0, n_prompt_tokens)), 
             cache_ids = [list(range(0, n_prompt_tokens)) for _ in range(n_virtual_kv_caches)], 
             kv_cache_ids = virtual_kv_cache_ids, 
             sample = True, 
+            sample_dst= None,
         ))
         curr_instruction = instructions[-1]
         # 2. kv cache eviction
@@ -210,7 +221,8 @@ class StreamingLLMCodeGenerator:
                 position_ids = [curr_instruction.position_ids[-1] + 1], 
                 cache_ids = cache_ids, 
                 kv_cache_ids = curr_instruction.kv_cache_ids,
-                sample = True
+                sample = True, 
+                sample_dst= None,
                 )
             curr_instruction.sample_dst = instruction
             instructions.append(instruction)
@@ -228,18 +240,19 @@ class RandomCodeGenerator:
         self.window_size = self.config.window_size
         self.attention_sink_size = self.config.attention_sink_size
 
-    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
         n_virtual_kv_caches = self.config.n_layers
         virtual_kv_cache_ids = list(range(n_virtual_kv_caches))
         n_prompt_tokens = len(token_ids)
         instructions.append(ImageFill(
-            images = pixel_values, 
+            pixel_values = pixel_values, 
             token_ids = token_ids,
             position_ids = list(range(0, n_prompt_tokens)), 
             cache_ids = [list(range(0, n_prompt_tokens)) for _ in range(n_virtual_kv_caches)], 
             kv_cache_ids = virtual_kv_cache_ids, 
             sample = True, 
+            sample_dst= None,
         ))
 
 
@@ -255,7 +268,8 @@ class RandomCodeGenerator:
                 position_ids = [curr_instruction.position_ids[-1] + 1], 
                 cache_ids = cache_ids, 
                 kv_cache_ids = curr_instruction.kv_cache_ids,
-                sample = True
+                sample = True, 
+                sample_dst= None,
                 ))
             
         instructions.append(EmptyInstruction())
@@ -279,7 +293,7 @@ class BlockPrefillLLMCodeGenerator():
         self.image_kv_cache_ids = list(range(0, self.config.n_layers))
         self.text_kv_cache_ids  = list(range(self.config.n_layers, self.n_virtual_kv_caches))
 
-    def code_generate(self, token_ids: list[int], pixel_values: list[Tensor]) -> tuple[list[Instruction], int]:
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
         n_text_tokens: int = 0
         n_image_tokens: int = 0
@@ -290,12 +304,13 @@ class BlockPrefillLLMCodeGenerator():
                 while j < len(token_ids) and token_ids[j] == self.config.image_token_id:
                     j += 1
                 instructions.append(ImageFill(
-                    images = pixel_values, 
+                    pixel_values = pixel_values, 
                     token_ids = token_ids[i:j],
                     position_ids = list(range(i, j)), 
                     cache_ids = [list(range(n_image_tokens, n_image_tokens + j - i)) for _ in range(self.config.n_layers)], 
                     kv_cache_ids = self.image_kv_cache_ids, 
                     sample = j==len(token_ids), 
+                    sample_dst= None,
                 ))
                 n_image_tokens += j - i
                 i = j
@@ -309,6 +324,7 @@ class BlockPrefillLLMCodeGenerator():
                     cache_ids = [list(range(n_text_tokens, n_text_tokens + j - i)) for _ in range(self.config.n_layers)], 
                     kv_cache_ids = self.text_kv_cache_ids, 
                     sample = j==len(token_ids), 
+                    sample_dst= None,
                 ))
                 n_text_tokens += j - i
                 i = j 
