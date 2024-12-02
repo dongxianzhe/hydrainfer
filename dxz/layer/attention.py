@@ -25,7 +25,7 @@ class TorchMultiHeadAttention(nn.Module):
         self.n_heads = n_heads
         self.head_dim = head_dim
     
-    def forward(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, return_scores=False) -> Tensor:
         # query/key/value (batch_size, seq_len, hidden_size)
         # return (batch_size, seq_len, hidden_size)
         batch_size, seq_len, hidden_size = query.shape
@@ -39,12 +39,16 @@ class TorchMultiHeadAttention(nn.Module):
         value = value.view(-1, seq_len, self.head_dim)
         query *= 1. / math.sqrt(self.head_dim)
         score = torch.bmm(query, key.transpose(1, 2)) # (batch_size * n_heads, seq_len, seq_len)
+        ret_score = score
         score = torch.softmax(score, dim=-1) # (batch_size * n_heads, seq_len, seq_len)
         o = torch.bmm(score, value) # (batch_size * n_heads, seq_len, head_dim)
         o = o.view(batch_size, self.n_heads, seq_len, self.head_dim).transpose(1, 2).contiguous() # (batch_size, seq_len, n_heads, head_dim)
         o = o.view(batch_size, seq_len, hidden_size).to(dtype) # (batch_size, seq_len, hidden_size)
 
-        return o
+        if return_scores:
+            return o, ret_score
+        else:
+            return o
 
 class FlashMultiHeadAttention(nn.Module):
     def __init__(self, n_heads: int, head_dim: int):

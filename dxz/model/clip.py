@@ -12,19 +12,24 @@ class CLIPSdpaAttention(nn.Module):
         self.out_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
         self.n_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads 
-        # from dxz.layer.attention import TorchMultiHeadAttention
-        # self.attention = TorchMultiHeadAttention(self.n_heads, self.head_dim)
+        from dxz.layer.attention import TorchMultiHeadAttention
+        self.torch_attention = TorchMultiHeadAttention(self.n_heads, self.head_dim)
         from dxz.layer.attention import FlashMultiHeadAttention
-        self.attention = FlashMultiHeadAttention(self.n_heads, self.head_dim)
+        self.flash_attention = FlashMultiHeadAttention(self.n_heads, self.head_dim)
     
-    def forward(self, hidden_states: Tensor) -> Tensor:
+    def forward(self, hidden_states: Tensor, return_scores: bool=False) -> Tensor:
         batch_size, n_tokens, embed_dim = hidden_states.size()
         query = self.q_proj(hidden_states)
         key   = self.k_proj(hidden_states)
         value = self.v_proj(hidden_states)
-        o = self.attention(query, key, value)
-        o = self.out_proj(o)
-        return o
+        if return_scores:
+            o, scores = self.torch_attention(query, key, value, return_scores)
+            o = self.out_proj(o)
+            return o, scores
+        else:
+            o = self.flash_attention(query, key, value)
+            o = self.out_proj(o)
+            return o
 
 class QuickGELUActivation(nn.Module):
     """
@@ -54,16 +59,23 @@ class CLIPEncoderLayer(nn.Module):
         self.mlp = CLIPMLP(config)
         self.layer_norm2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
     
-    def forward(self, hidden_states: Tensor) -> Tensor:
+    def forward(self, hidden_states: Tensor, return_scores: bool=False) -> Tensor:
         residual = hidden_states
         hidden_states = self.layer_norm1(hidden_states)
-        hidden_states = self.self_attn(hidden_states)
+        if return_scores:
+            hidden_states, scores = self.self_attn(hidden_states, return_scores)
+        else:
+            hidden_states = self.self_attn(hidden_states, return_scores)
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self.layer_norm2(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
-        return hidden_states
+
+        if return_scores:
+            return hidden_states, scores
+        else:
+            return hidden_states
 
 class CLIPEncoder(nn.Module):
     def __init__(self, config: CLIPVisionConfig):

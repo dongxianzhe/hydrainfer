@@ -65,7 +65,8 @@ class EmptyInstruction(Instruction):
     pass
 
 class ImageEmbed(Instruction):
-    def __init__(self, pixel_values: Tensor, image_featues_dst: Optional[ImageEmbedFill]):
+    def __init__(self, pixel_values: Tensor, image_featues_dst: Optional[ImageEmbedFill], token_pruning_params: dict):
         super().__init__()
         self.pixel_values = pixel_values
         self.image_featues_dst = image_featues_dst
+        self.token_pruning_params = token_pruning_params

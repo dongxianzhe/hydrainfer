@@ -13,9 +13,15 @@ class CLIPEncoder(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
     
-    def forward(self, hidden_states: Tensor, vision_feature_layer: int) -> Tensor:
-        for _, encoder_layer in enumerate(self.layers[:(vision_feature_layer + len(self.layers)) % len(self.layers) + 1]): #
-            hidden_states = encoder_layer(hidden_states)
+    def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: ModelParameters) -> Tensor:
+        for i, encoder_layer in enumerate(self.layers[:(vision_feature_layer + len(self.layers)) % len(self.layers) + 1]): #
+            return_scores = i==(vision_feature_layer + len(self.layers)) % len(self.layers)
+            if return_scores:
+                hidden_states, scores = encoder_layer(hidden_states, return_scores=return_scores)
+                model_params.clip_scores = scores
+            else:
+                hidden_states = encoder_layer(hidden_states, return_scores=return_scores)
+            
         return hidden_states
 
 class CLIPVisionTransformer(nn.Module):
@@ -26,11 +32,11 @@ class CLIPVisionTransformer(nn.Module):
         self.encoder = CLIPEncoder(config)
         self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
     
-    def forward(self, pixel_values: Tensor, vision_feature_layer: int) -> Tensor:
+    def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: ModelParameters) -> Tensor:
         # pixel_values (batch_size, channels, width, height)
         hidden_states = self.embeddings(pixel_values) # (batch_size, n_tokens, hidden_size)
         hidden_states = self.pre_layrnorm(hidden_states)
-        hidden_states = self.encoder(hidden_states, vision_feature_layer)
+        hidden_states = self.encoder(hidden_states, vision_feature_layer, model_params)
         return hidden_states
 
 class CLIPVisionModel(nn.Module):
@@ -38,9 +44,9 @@ class CLIPVisionModel(nn.Module):
         super().__init__()
         self.vision_model = CLIPVisionTransformer(config)
 
-    def forward(self, pixel_values: Tensor, vision_feature_layer: int) -> Tensor:
+    def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: ModelParameters) -> Tensor:
         # pixel_values (n_pictures, n_channels, width, height)
-        return self.vision_model(pixel_values, vision_feature_layer)
+        return self.vision_model(pixel_values, vision_feature_layer, model_params)
 
 
 class LlamaModel(nn.Module):
@@ -103,16 +109,14 @@ class LlavaForConditionalGeneration(nn.Module):
         if pixel_values is not None:
             image_overwrite_mask = input_ids == self.config.image_token_index
             # 2. compute image embeds
-            image_features = self.image_embed(pixel_values)
+            image_features = self.image_embed(pixel_values, model_params)
 
             # 3. merge embeds
             embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
 
         if image_features is not None:
             image_overwrite_mask = input_ids == self.config.image_token_index
-            print(f'image_features.shape {image_features.shape}')
             embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
-            print(f'image_features.shape {image_features.shape}')
         # 4. compute logits
         logits = self.language_model(input_embeds, position_ids, model_params)
 
@@ -154,9 +158,19 @@ class LlavaForConditionalGeneration(nn.Module):
         input_embeds = self.language_model.model.embed_tokens(input_ids)
         return input_embeds
 
-    def image_embed(self, pixel_values: Tensor) -> Tensor:
-        hidden_states = self.vision_tower(pixel_values, self.config.vision_feature_layer)
+    def image_embed(self, pixel_values: Tensor, model_params: ModelParameters) -> Tensor:
+        hidden_states = self.vision_tower(pixel_values, self.config.vision_feature_layer, model_params)
         selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
+        print(f'model_params.embed_token_pruning_params {model_params.embed_token_pruning_params}')
+        if model_params.embed_token_pruning_params and model_params.embed_token_pruning_params.get('policy', "") == 'focal_pruning':
+            from dxz.layer import token_prunning
+            selected_image_feature = token_prunning.focal_prunning(
+                selected_image_feature,
+                model_params.clip_scores,
+                n_output_tokens=model_params.embed_token_pruning_params['n_output_tokens'],
+                strategy='rank',
+            )
+            
         image_features = self.multi_modal_projector(selected_image_feature)
         return image_features
 

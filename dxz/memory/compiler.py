@@ -14,7 +14,7 @@ class CompilerConfig:
     num_image_tokens: int # number of tokens each image embedding
     n_layers: int
     max_tokens: 64
-    token_prunning_policy: Literal['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill'] = "block_prefill"
+    token_prunning_policy: Literal['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill', 'fast'] = "block_prefill"
     # streamingLLM params
     window_size: int = 512
     attention_sink_size: int = 5 
@@ -42,10 +42,11 @@ class Compiler:
             self.code_generator = StreamingLLMCodeGenerator(config)
         elif config.token_prunning_policy == 'block_prefill':
             self.code_generator = BlockPrefillLLMCodeGenerator(config)
+        elif config.token_prunning_policy == 'fast':
+            self.code_generator = FastCodeGenerator(config)
 
     def tokenize(self, prompt: str, images: list[Image.Image]) -> tuple[list[int], list[Tensor]]:
         token_ids = self.tokenizer.encode(prompt)
-
         inserted_token_ids = []
         for token_id in token_ids:
             if token_id == self.image_token_id:
@@ -81,8 +82,9 @@ class VanillaCodeGenerator:
     def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
         instructions.append(ImageEmbed(
-            pixel_values=pixel_values, 
-            image_featues_dst=None, 
+            pixel_values = pixel_values, 
+            image_featues_dst = None, 
+            token_pruning_params=None
         ))
         instructions.append(ImageEmbedFill(
             image_featues = None,
@@ -94,6 +96,15 @@ class VanillaCodeGenerator:
             sample_dst = None, 
         ))
         instructions[0].image_featues_dst = instructions[1]
+        # instructions.append(ImageFill(
+        #     pixel_values = pixel_values, 
+        #     token_ids = token_ids,
+        #     position_ids = list(range(0, len(token_ids))), 
+        #     cache_ids = [list(range(0, len(token_ids))) for _ in range(self.config.n_layers)],
+        #     kv_cache_ids = list(range(self.config.n_layers)), 
+        #     sample = True, 
+        #     sample_dst= None,
+        # ))
         for _ in range(self.config.max_tokens):
             curr_instruction = instructions[-1]
             instructions.append(TextFill(
@@ -358,3 +369,53 @@ class BlockPrefillLLMCodeGenerator():
         instructions.append(EmptyInstruction())
         curr_instruction.sample_dst = instructions[-1]
         return instructions, self.n_virtual_kv_caches
+
+class FastCodeGenerator:
+    def __init__(self, config: CompilerConfig):
+        self.config = config
+        self.n_image_tokens = 64
+
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor) -> tuple[list[Instruction], int]:
+        total_image_tokens = 0
+        pruned_token_ids: list[int] = []
+        for token_id in token_ids:
+            if token_id == self.config.image_token_id:
+                if total_image_tokens < self.n_image_tokens:
+                    total_image_tokens += 1
+                    pruned_token_ids.append(token_id)
+            else:
+                pruned_token_ids.append(token_id)
+        token_ids = pruned_token_ids
+
+        instructions: list[Instruction] = []
+        instructions.append(ImageEmbed(
+            pixel_values = pixel_values, 
+            image_featues_dst = None, 
+            token_pruning_params = {'policy': 'focal_pruning', 'n_output_tokens': self.n_image_tokens}, 
+        ))
+        instructions.append(ImageEmbedFill(
+            image_featues = None,
+            token_ids = token_ids,
+            position_ids = list(range(0, len(token_ids))), 
+            cache_ids = [list(range(0, len(token_ids))) for _ in range(self.config.n_layers)], 
+            kv_cache_ids = list(range(self.config.n_layers)), 
+            sample = True, 
+            sample_dst = None, 
+        ))
+        instructions[0].image_featues_dst = instructions[1]
+        for _ in range(self.config.max_tokens):
+            curr_instruction = instructions[-1]
+            instructions.append(TextFill(
+                token_ids = None,
+                position_ids = [curr_instruction.position_ids[-1] + 1], 
+                cache_ids = [[layer_cache_ids[-1] + 1] for layer_cache_ids in curr_instruction.cache_ids], 
+                kv_cache_ids = curr_instruction.kv_cache_ids,
+                sample = True, 
+                sample_dst= None,
+            ))
+        instructions.append(EmptyInstruction())
+        for i in range(len(instructions) - 1):
+            instructions[i].sample_dst = instructions[i + 1]
+        
+        n_virtual_kv_caches = self.config.n_layers
+        return instructions, n_virtual_kv_caches

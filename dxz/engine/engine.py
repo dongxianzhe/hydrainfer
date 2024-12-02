@@ -12,6 +12,7 @@ from dxz.model.parameters import AttentionParameters, ModelParameters
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig
+from dxz.utils.profiler import profile
 
 @dataclass
 class EngineConfig:
@@ -267,12 +268,15 @@ class Engine:
             if isinstance(instruction, EmptyInstruction):
                 continue
             if isinstance(instruction, ImageEmbed):
-                pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
-                image_features = self.model.image_embed(pixel_values)
-                instruction.image_featues_dst.image_features = image_features
+                with profile('embed'):
+                    pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
+                    model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
+                    image_features = self.model.image_embed(pixel_values, model_params)
+                    instruction.image_featues_dst.image_features = image_features
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
-        self.execute_batch_fill(fill_contexts)
+        with profile('fill'):
+            self.execute_batch_fill(fill_contexts)
 
         # 3. scheduler sequence
         for sequence, _ in contexts:
@@ -287,9 +291,9 @@ if __name__ == '__main__':
     question = "What is the content of this image?"
     prompt = f"USER: <image>\n{question}\nASSISTANT:"
 
-    # ['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill']
+    # ['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill', 'fast']
     config = EngineConfig(
-        token_prunning_policy = "vanilla", 
+        token_prunning_policy = "fast", 
         window_size = 128, 
         attention_sink_size = 1, 
     )
@@ -300,7 +304,7 @@ if __name__ == '__main__':
         "multi_modal_data":{
             "image": image
         },
-        "max_tokens":50
+        "max_tokens":200
     }]
 
     import time
