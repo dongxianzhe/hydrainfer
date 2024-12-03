@@ -112,6 +112,7 @@ class Engine:
             "max_tokens": 50,
         }, ...]
         """
+        arrival_time = time.perf_counter()
         for input in inputs:
             self.compiler_config.max_tokens = input.get('max_tokens', 50)
             static_info = self.compiler.compile(
@@ -127,19 +128,25 @@ class Engine:
                 eos_token_id = self.tokenizer.eos_token_id, 
                 max_seq_len = self.model_config.text_config.max_position_embeddings, 
             )
+            sequence.metric.arrival_time = arrival_time
             self.sid_allocator += 1
             self.scheduler.schedule_new([sequence])
 
-        output_texts: list[str] = []
+        outputs = []
         finished: list[Sequence] = []
         while len(finished) < len(inputs):
             self.step()
             finished += self.scheduler.pop_finished()
 
         for sequence in finished:
-            output_texts.append(self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True))
+            outputs.append({
+                'text' : self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
+                'ttft' : sequence.metric.tokens_time[0] - arrival_time,
+                'tpot' : [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
+                'latency' : sequence.metric.finished_time - sequence.metric.arrival_time
+            })
 
-        return output_texts
+        return outputs
     
     def execute_batch_fill(self, contexts: list[tuple[Sequence, Instruction]]):
         if len(contexts) == 0:
@@ -219,6 +226,7 @@ class Engine:
             
         logits = self.model_runner(input_ids, pixel_values, image_featues, position_ids, model_params)
         if len(selected_token_ids) > 0:
+            t = time.perf_counter()
             sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
             i = 0
             for sequence, instruction in contexts:
@@ -226,6 +234,7 @@ class Engine:
                     next_token_id = sample_token_ids[i]
                     instruction.sample_dst.token_ids = [next_token_id]
                     sequence.output_token_ids.append(next_token_id)
+                    sequence.metric.tokens_time.append(t)
                     i += 1
 
     def execute_mov(self, context: tuple[Sequence, Instruction]):
@@ -283,8 +292,10 @@ class Engine:
             self.execute_batch_fill(fill_contexts)
 
         # 3. scheduler sequence
+        t = time.perf_counter()
         for sequence, _ in contexts:
             if sequence.is_finished():
+                sequence.metric.finished_time = t
                 self.scheduler.schedule_finished([sequence])
             else:
                 self.scheduler.schedule_unfinished([sequence])
@@ -312,9 +323,10 @@ if __name__ == '__main__':
     }]
 
     import time
-    start = time.perf_counter()
     outputs = engine.generate(inputs)
-    end = time.perf_counter()
     print(prompt)
-    print(outputs)
-    print(f'total time {end - start: 3}')
+    for output in outputs:
+        print(output['text'])
+        print(f"ttft: {output['ttft']}")
+        print(f"tpot: {output['tpot']}")
+        print(f"latency: {output['latency']}")
