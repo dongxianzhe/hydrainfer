@@ -1,3 +1,5 @@
+from tqdm import tqdm
+import time
 import random
 from itertools import accumulate
 from transformers import AutoTokenizer, AutoProcessor
@@ -83,7 +85,6 @@ class SequenceScheduler:
     def __repr__(self):
         return f'{len(self.waiting)} {len(self.running)} {len(self.finished)}'
 
-from tqdm import tqdm
 class Engine:
     def __init__(self, config: EngineConfig):
         self.config = config
@@ -145,7 +146,7 @@ class Engine:
                 instructions = static_info.instructions, 
                 virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
                 max_tokens = input.get('max_tokens', 50), 
-                eos_token_id = self.tokenizer.eos_token_id, 
+                eos_token_id = input.get('eos_token_id', None), 
                 max_seq_len = self.model_config.text_config.max_position_embeddings, 
             )
             sequence.metric.arrival_time = arrival_time
@@ -154,9 +155,14 @@ class Engine:
 
         outputs = []
         finished: list[Sequence] = []
+        bar = tqdm(len(inputs))
         while len(finished) < len(inputs):
             self.step()
-            finished += self.scheduler.pop_finished()
+            f = self.scheduler.pop_finished() 
+            finished += f
+            bar.update(len(f))
+
+        finished = sorted(finished, key=lambda seq: seq.sid)
 
         for sequence in finished:
             outputs.append({
@@ -203,9 +209,11 @@ class Engine:
                 blocks_lens[layer_id].append(len(sequence.virtual_kv_caches[vid].block_tables))
             if isinstance(instruction, ImageFill):
                 pixel_values.append(instruction.pixel_values)
+                instruction.pixel_values = None
                 has_image_fill = True
             if isinstance(instruction, ImageEmbedFill):
                 image_featues.append(instruction.image_features)
+                instruction.image_features = None
                 has_image_embed_fill = True
 
         if has_image_fill and has_image_embed_fill:

@@ -32,6 +32,12 @@ class Sequence:
 
     def is_finished(self) -> bool:
         finished: bool = self.pc >= len(self.instructions)
+
+        if not finished and self.eos_token_id:
+            next_inst = self.instructions[self.pc]
+            if isinstance(next_inst, TextFill) and len(next_inst.token_ids) == 1 and next_inst.token_ids[0] == self.eos_token_id:
+                finished = True
+
         if finished:
             for kv_cache in self.virtual_kv_caches:
                 kv_cache.realloc(0)

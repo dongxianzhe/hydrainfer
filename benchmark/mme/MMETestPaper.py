@@ -226,13 +226,21 @@ def test_engine():
     from dxz.engine.engine import Engine, EngineConfig
     paper = MMETestPaper()
     engine = Engine(EngineConfig(
+        batch_policy='continuousbatch', 
         token_prunning_policy='vanilla',
         window_size=512,
         attention_sink_size=4,
     ))
-    for question in tqdm(paper.questions):
-        inputs = [{"prompt":f"USER: <image>\n{question.question}?\nAnswer the question using a single word or phrase. ASSISTANT:", "multi_modal_data":{"image":question.image}, "max_tokens":16}]
-        output_text = engine.generate(inputs)[0]
+    inputs = [{
+        "prompt":f"USER: <image>\n{question.question}?\nAnswer the question using a single word or phrase. ASSISTANT:", 
+        "multi_modal_data":{"image":question.image}, 
+        "max_tokens":16, 
+        "eos_token_id":2} for question in paper.questions]
+
+    outputs = engine.generate(inputs)
+
+    for i, question in enumerate(paper.questions):
+        output_text = outputs[i]['text']
         print(output_text)
         if "Yes" in output_text:
             question.answer = "Yes"
@@ -244,5 +252,5 @@ def test_engine():
     print(marks)
 
 if __name__ == '__main__':
-    test_transformers()
-    # test_engine()
+    # test_transformers()
+    test_engine()
