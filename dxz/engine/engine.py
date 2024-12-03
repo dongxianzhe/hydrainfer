@@ -188,14 +188,18 @@ class Engine:
 
         # 2. prepare tensor data
         q_cu_seq_lens: Tensor = torch.tensor(list(accumulate(q_seq_lens, initial=0)), dtype=torch.int, device=self.config.device)
+        kv_cu_seq_lens = torch.tensor([list(accumulate(kv_seq_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)], dtype=torch.int, device=self.config.device)
+        new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.config.device)
+        block_tables = torch.tensor(block_tables, dtype=torch.int, device=self.config.device)
+        cu_blocks_lens = torch.tensor([list(accumulate(blocks_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)], dtype=torch.int, device=self.config.device)
         model_params = ModelParameters(
             attention_params = [AttentionParameters(
                 kv_cache=self.mmu.kv_cache,
                 q_cu_seq_lens = q_cu_seq_lens, 
-                kv_cu_seq_lens = torch.tensor(list(accumulate(kv_seq_lens[layer_id], initial=0)), dtype=torch.int, device=self.config.device), 
-                new_cache_slots = torch.tensor(new_cache_slots[layer_id], dtype=torch.int ,device=self.config.device), 
-                block_tables = torch.tensor(block_tables[layer_id], dtype=torch.int, device=self.config.device), 
-                cu_blocks_lens = torch.tensor(list(accumulate(blocks_lens[layer_id], initial=0)), dtype=torch.int, device=self.config.device), 
+                kv_cu_seq_lens = kv_cu_seq_lens[layer_id], 
+                new_cache_slots = new_cache_slots[layer_id], 
+                block_tables = block_tables[layer_id], 
+                cu_blocks_lens = cu_blocks_lens[layer_id], 
                 num_sequences = num_sequences, 
                 all_sequences_decode = False, 
                 q_max_seq_len = q_max_seq_len,
@@ -293,7 +297,7 @@ if __name__ == '__main__':
 
     # ['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill', 'fast']
     config = EngineConfig(
-        token_prunning_policy = "fast", 
+        token_prunning_policy = "vanilla", 
         window_size = 128, 
         attention_sink_size = 1, 
     )
@@ -304,7 +308,7 @@ if __name__ == '__main__':
         "multi_modal_data":{
             "image": image
         },
-        "max_tokens":200
+        "max_tokens":50
     }]
 
     import time
