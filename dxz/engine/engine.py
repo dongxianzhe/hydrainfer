@@ -1,3 +1,4 @@
+import random
 from itertools import accumulate
 from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
@@ -28,10 +29,11 @@ class EngineConfig:
     attention_sink_size: int = 4 
 
 class SequenceScheduler:
-    def __init__(self):
+    def __init__(self, batch_policy: str):
         self.waiting: list[Sequence] = []
         self.running: list[Sequence] = []
         self.finished: list[Sequence] = []
+        self.batch_policy = batch_policy
     
     def schedule_new(self, sequences: list[Sequence]):
         self.waiting += sequences
@@ -51,14 +53,32 @@ class SequenceScheduler:
         return finished
 
     def step(self) -> list[tuple[Sequence, Instruction]]:
-        if len(self.running) == 0:
-            if len(self.waiting) != 0:
+        if self.batch_policy == 'nobatch':
+            if len(self.running) == 0:
+                if len(self.waiting) != 0:
+                    self.running.append(self.waiting.pop())
+                else:
+                    return []
+            running = self.running
+            self.running = []
+            return [(running[0], running[0].next_instruction())]
+        elif self.batch_policy == 'requestlevel':
+            if len(self.running) == 0:
+                while len(self.running) < 4 and len(self.waiting) != 0:
+                    self.running.append(self.waiting.pop())
+                if len(self.running) == 0:
+                    return []
+            running = self.running
+            self.running = []
+            return [(seq, seq.next_instruction()) for seq in running]
+        elif self.batch_policy == 'continuousbatch':
+            while len(self.running) < 4 and len(self.waiting) != 0:
                 self.running.append(self.waiting.pop())
-            else:
-                return [], []
-        running = self.running
-        self.running = []
-        return [(running[0], running[0].next_instruction())]
+            if len(self.running) == 0:
+                return []
+            running = self.running
+            self.running = []
+            return [(seq, seq.next_instruction()) for seq in running]
 
     def __repr__(self):
         return f'{len(self.waiting)} {len(self.running)} {len(self.finished)}'
@@ -100,7 +120,7 @@ class Engine:
         self.compiler = Compiler(self.compiler_config)
         # 4. sequence
         self.sid_allocator = 0
-        self.scheduler = SequenceScheduler()
+        self.scheduler = SequenceScheduler(config.batch_policy)
 
     def generate(self, inputs):
         """ inputs example
@@ -306,27 +326,30 @@ if __name__ == '__main__':
     question = "What is the content of this image?"
     prompt = f"USER: <image>\n{question}\nASSISTANT:"
 
+    # ['nobatch', 'requestlevel', 'continuousbatch']
     # ['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill', 'fast']
     config = EngineConfig(
+        batch_policy = 'continuousbatch', 
         token_prunning_policy = "vanilla", 
         window_size = 128, 
         attention_sink_size = 1, 
     )
     engine = Engine(config)
+    batch_size = 10
 
     inputs = [{
         "prompt" : prompt, 
         "multi_modal_data":{
             "image": image
         },
-        "max_tokens":50
-    }]
+        "max_tokens":random.randint(30, 70), 
+    } for _ in range(batch_size)]
 
     import time
     outputs = engine.generate(inputs)
-    print(prompt)
+
     for output in outputs:
         print(output['text'])
-        print(f"ttft: {output['ttft']}")
-        print(f"tpot: {output['tpot']}")
+        # print(f"ttft: {output['ttft']}")
+        # print(f"tpot: {output['tpot']}")
         print(f"latency: {output['latency']}")
