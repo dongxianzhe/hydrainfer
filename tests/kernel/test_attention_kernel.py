@@ -395,8 +395,119 @@ def test_flash_infer_batch_prefill_mask(
     assert torch.allclose(o, o_ref, atol=1e-1, rtol=1e-1)
 
 
+@torch.inference_mode()
+def test_flash_infer_batch_prefill_mask_perf():
+    import flashinfer
+    batch_size = 8
+    num_heads  = (32, 32)
+    head_dim   = 128
+    dtype      = torch.float16
+    device     = torch.device('cuda:0')
+    num_qo_heads, num_kv_heads = num_heads
+    total_blocks = max_num_blocks = max_num_pages = 1024
+    block_size = page_size = 16
+    num_sequences = batch_size
+
+    q_seq_lens = [random.randint(256, 512) for _ in range(batch_size)]
+    q_cu_seq_lens = qo_indptr = torch.tensor(list(accumulate(q_seq_lens, initial=0)), dtype=torch.int, device=device)
+    k_seq_lens = [random.randint(512, 1024) for _ in range(batch_size)]
+    k_cu_seq_lens = torch.tensor(list(accumulate(k_seq_lens, initial=0)), dtype=torch.int, device=device)
+    paged_kv_last_page_len = torch.tensor([page_size if k_seq_len % page_size == 0 else k_seq_len % page_size for k_seq_len in k_seq_lens], dtype=torch.int32, device=device)
+    
+    block_tables = paged_kv_indices = torch.arange(max_num_pages, dtype=torch.int, device=device)
+    cu_block_lens = paged_kv_indptr = torch.tensor(list(accumulate([((k_seq_len + block_size - 1) // block_size) for k_seq_len in k_seq_lens], initial=0)), dtype=torch.int32, device=device)
+    
+    q = torch.randn(size=(sum(q_seq_lens), num_qo_heads, head_dim), dtype=dtype, device=device)
+    k_cache = torch.randn(size=(max_num_pages, page_size, num_kv_heads, head_dim), dtype=dtype, device=device)
+    v_cache = torch.randn(size=(max_num_pages, page_size, num_kv_heads, head_dim), dtype=dtype, device=device)
+
+    full_masks = []
+    for q_seq_len, k_seq_len in zip(q_seq_lens, k_seq_lens):
+        mask = torch.ones(q_seq_len, k_seq_len, dtype=torch.bool, device=q.device)
+        full_masks.append(mask.reshape(-1))
+    full_masks = torch.cat(full_masks, dim=0)
+
+    causal_masks = []
+    for q_seq_len, k_seq_len in zip(q_seq_lens, k_seq_lens):
+        mask = torch.ones(q_seq_len, k_seq_len, dtype=torch.bool, device=q.device)
+        mask = mask.tril(diagonal=k_seq_len - q_seq_len)
+        causal_masks.append(mask.reshape(-1))
+    causal_masks = torch.cat(causal_masks, dim=0)
+
+    streamingllm_masks = []
+    attention_sink = 1
+    window_size = 3
+    for i, (q_seq_len, k_seq_len) in enumerate(zip(q_seq_lens, k_seq_lens)):
+        mask = torch.ones(size=(q_seq_len, k_seq_len), dtype=torch.bool, device=device)
+        mask = torch.triu(mask, diagonal=k_seq_len - q_seq_len - window_size)
+        mask = torch.tril(mask, diagonal=k_seq_len - q_seq_len)
+        mask[:, :attention_sink] = 1
+
+        mask = torch.randint(0, 2, (q_seq_len, k_seq_len), dtype=torch.bool, device=device)
+        streamingllm_masks.append(mask.reshape(-1))
+    streamingllm_masks = torch.cat(streamingllm_masks, dim=0)
+
+    workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=device)
+
+    from dxz.utils.profiler import profile
+
+
+    with profile('full mask'):
+        for i in range(100):
+            prefill_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(workspace_buffer, "NHD", use_cuda_graph=False)
+            prefill_wrapper.plan(
+                qo_indptr              = qo_indptr,
+                paged_kv_indptr        = paged_kv_indptr,
+                paged_kv_indices       = paged_kv_indices,
+                paged_kv_last_page_len = paged_kv_last_page_len,
+                num_qo_heads           = num_qo_heads,
+                num_kv_heads           = num_kv_heads,
+                head_dim               = head_dim,
+                page_size              = page_size,
+                # causal                 = True,
+                custom_mask            = full_masks, 
+            )
+            o = prefill_wrapper.run(q, (k_cache, v_cache))
+    
+    with profile('causal mask'):
+        for i in range(100):
+            prefill_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(workspace_buffer, "NHD", use_cuda_graph=False)
+            prefill_wrapper.plan(
+                qo_indptr              = qo_indptr,
+                paged_kv_indptr        = paged_kv_indptr,
+                paged_kv_indices       = paged_kv_indices,
+                paged_kv_last_page_len = paged_kv_last_page_len,
+                num_qo_heads           = num_qo_heads,
+                num_kv_heads           = num_kv_heads,
+                head_dim               = head_dim,
+                page_size              = page_size,
+                # causal                 = True,
+                custom_mask            = causal_masks, 
+            )
+            o = prefill_wrapper.run(q, (k_cache, v_cache))
+    
+    with profile('streamingllm_mask'):
+        for i in range(100):
+            prefill_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(workspace_buffer, "NHD", use_cuda_graph=False)
+            prefill_wrapper.plan(
+                qo_indptr              = qo_indptr,
+                paged_kv_indptr        = paged_kv_indptr,
+                paged_kv_indices       = paged_kv_indices,
+                paged_kv_last_page_len = paged_kv_last_page_len,
+                num_qo_heads           = num_qo_heads,
+                num_kv_heads           = num_kv_heads,
+                head_dim               = head_dim,
+                page_size              = page_size,
+                # causal                 = True,
+                custom_mask            = streamingllm_masks, 
+            )
+            o = prefill_wrapper.run(q, (k_cache, v_cache))
+    # conclusion: attention mask will not reduce masked dot product computation
+        
+
 if __name__ == '__main__':
     pytest.main([__file__ + '::test_flash_attn_func', '-x'])
     pytest.main([__file__ + '::test_flash_infer_batch_decode', '-x'])
     pytest.main([__file__ + '::test_flash_infer_batch_prefill', '-x'])
     pytest.main([__file__ + '::test_flash_infer_batch_prefill_mask', '-x'])
+    # test_flash_infer_batch_prefill_mask_perf()
