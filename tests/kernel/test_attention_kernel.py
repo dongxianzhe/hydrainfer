@@ -503,7 +503,26 @@ def test_flash_infer_batch_prefill_mask_perf():
             )
             o = prefill_wrapper.run(q, (k_cache, v_cache))
     # conclusion: attention mask will not reduce masked dot product computation
-        
+
+def test_attention_param_creation_perf():
+    n_layers = 32
+    batch_size = 1
+    n_tokens = 200
+    k_seq_lens = [[random.randint(0, 10) for _ in range(batch_size)] for _ in range(n_layers)]
+    
+    device = torch.device('cuda:0')
+    from dxz.utils.profiler import profile
+    with profile('many attention_param creation'):
+        for _ in range(n_tokens):
+            for layer_id in range(n_layers):
+                k_cu_seq_lens = torch.tensor(list(accumulate(k_seq_lens[layer_id], initial=0)), dtype=torch.int, device=device)
+
+    with profile('one attention_param creation'):
+        for _ in range(n_tokens):
+            k_cu_seq_lens = torch.tensor([list(accumulate(k_seq_lens[layer_id], initial=0)) for _ in range(n_layers)], dtype=torch.int, device=device)
+            for layer_id in range(n_layers):
+                layer_k_cu_seq_lens = k_cu_seq_lens[layer_id]
+    # conclusion: create attention param in one creation and use slice to partition data will save time
 
 if __name__ == '__main__':
     pytest.main([__file__ + '::test_flash_attn_func', '-x'])
@@ -511,3 +530,4 @@ if __name__ == '__main__':
     pytest.main([__file__ + '::test_flash_infer_batch_prefill', '-x'])
     pytest.main([__file__ + '::test_flash_infer_batch_prefill_mask', '-x'])
     # test_flash_infer_batch_prefill_mask_perf()
+    # test_attention_param_creation_perf()
