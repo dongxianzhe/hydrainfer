@@ -29,6 +29,14 @@ class EngineConfig:
     window_size: int = 16
     attention_sink_size: int = 4 
 
+@dataclass
+class GenerateOutput:
+    input_len: int
+    text : str
+    ttft : float
+    tpot : list[float]
+    latency : float
+
 class SequenceScheduler:
     def __init__(self, batch_policy: str):
         self.waiting: list[Sequence] = []
@@ -164,13 +172,13 @@ class Engine:
         finished = sorted(finished, key=lambda seq: seq.sid)
 
         for sequence in finished:
-            outputs.append({
-                'input_len' : sequence.static_info.n_prompt_tokens, 
-                'text' : self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
-                'ttft' : sequence.metric.tokens_time[0] - arrival_time,
-                'tpot' : [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
-                'latency' : sequence.metric.finished_time - sequence.metric.arrival_time
-            })
+            outputs.append(GenerateOutput(
+                input_len = sequence.static_info.n_prompt_tokens, 
+                text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
+                ttft = sequence.metric.tokens_time[0] - arrival_time,
+                tpot = [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
+                latency = sequence.metric.finished_time - sequence.metric.arrival_time
+            ))
 
         return outputs
     
@@ -359,48 +367,4 @@ if __name__ == '__main__':
 
     end = time.perf_counter()
     duration = end - start
-    completed = len(outputs)
-    input_lens = []
-    latencies = []
-    ttfts = []
-    tpots = []
-    output_lens = []
-    for output in outputs:
-        input_lens.append(output['input_len'])
-        latencies.append(output['latency'])
-        ttfts.append(output['ttft'])
-        tpots += output['tpot']
-        output_lens.append(len(output['tpot']) + 1)
-    print(output_lens)
-
-    from dxz.utils.metric import BenchmarkMetrics
-    import numpy as np
-
-    metrics = BenchmarkMetrics(
-        benchmark_duration=duration, 
-        completed=completed,
-        total_input=sum(input_lens),
-        total_output=sum(output_lens),
-        mean_input_len=np.mean(input_lens),
-        median_input_len=np.median(input_lens),
-        max_input_len=max(input_lens),
-        mean_output_len=np.mean(output_lens),
-        median_output_len=np.median(output_lens),
-        max_output_len=max(output_lens),
-        request_throughput=completed / duration,
-        input_throughput=sum(input_lens) / duration,
-        output_throughput=sum(output_lens) / duration,
-        mean_latency_ms=np.mean(latencies) * 1000,
-        median_latency_ms=np.median(latencies) * 1000,
-        p90_latency_ms=np.percentile(latencies, 90) * 1000,
-        p99_latency_ms=np.percentile(latencies, 99) * 1000,
-        mean_ttft_ms=np.mean(ttfts or 0) * 1000,
-        median_ttft_ms=np.median(ttfts or 0) * 1000,
-        p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
-        p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
-        mean_tpot_ms=np.mean(tpots) * 1000,
-        median_tpot_ms=np.median(tpots) * 1000,
-        p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
-        p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
-    )
-    metrics.print()
+    print(f'duration {duration}')

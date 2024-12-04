@@ -1,7 +1,10 @@
+import numpy as np
+import time
 from PIL import Image
 import argparse
 import time
 import os
+from offline_inference_benchmark import BenchmarkMetrics
 
 
 image_path = f'./dataset/cherry_blossom.jpg'
@@ -22,33 +25,138 @@ def main(args: argparse.Namespace):
         "prompt" : prompt, 
         "multi_modal_data":{
             "image": image
-        },
-    } for _ in range(args.num_prompts)]
+        }, 
+        "max_tokens": i * 10,
+    } for i in range(args.num_prompts)]
 
     # 2. generate
     if args.backend == 'vllm':
         from vllm import LLM, SamplingParams
         llm = LLM(model="llava-hf/llava-1.5-7b-hf", max_model_len=4096, enforce_eager=True)
-        sampling_params = SamplingParams(temperature=0, max_tokens=50)
+
+        sampling_params = [SamplingParams(temperature=0, max_tokens=input['max_tokens'] + 1, ignore_eos=True) for input in inputs]
 
         start = time.perf_counter()
         outputs = llm.generate(inputs, sampling_params=sampling_params)
         end = time.perf_counter()
+        duration = end - start
+        completed = len(outputs)
+        input_lens = []
+        latencies = []
+        ttfts = []
+        tpots = []
+        output_lens = []
+        for output in outputs:
+            input_lens.append(len(output.prompt_token_ids))
+            latencies.append(output.metrics.finished_time - output.metrics.arrival_time)
+            ttfts.append(output.metrics.first_token_time - output.metrics.first_scheduled_time)
+            # tpots = []
+            output_lens.append(len(output.outputs[0].token_ids))
+            pass # todo
+        metrics = BenchmarkMetrics(
+            benchmark_duration=duration, 
+            completed=completed,
+            total_input=sum(input_lens),
+            total_output=sum(output_lens),
+            mean_input_len=np.mean(input_lens),
+            median_input_len=np.median(input_lens),
+            max_input_len=max(input_lens),
+            mean_output_len=np.mean(output_lens),
+            median_output_len=np.median(output_lens),
+            max_output_len=max(output_lens),
+            request_throughput=completed / duration,
+            input_throughput=sum(input_lens) / duration,
+            output_throughput=sum(output_lens) / duration,
+            mean_latency_ms=np.mean(latencies) * 1000,
+            median_latency_ms=np.median(latencies) * 1000,
+            p90_latency_ms=np.percentile(latencies, 90) * 1000,
+            p99_latency_ms=np.percentile(latencies, 99) * 1000,
+            mean_ttft_ms=np.mean(ttfts or 0) * 1000,
+            median_ttft_ms=np.median(ttfts or 0) * 1000,
+            p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
+            p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
+            mean_tpot_ms=np.mean(tpots) * 1000,
+            median_tpot_ms=np.median(tpots) * 1000,
+            p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
+            p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
+        )
+        metrics.print()
+
+        if args.output_text:
+            for output in outputs:
+                print(output.outputs[0].text)
 
     elif args.backend == 'dxz':
-        from dxz.engine.mllm_engine import MLLMEngine, MLLMEngineConfig
-        config = MLLMEngineConfig(kvcache_size=6)
-        llm = MLLMEngine(config)
+        from dxz.engine.engine import EngineConfig, Engine
+        config = EngineConfig(
+            batch_policy = 'continuousbatch', 
+            token_prunning_policy = "vanilla", 
+            window_size = 128, 
+            attention_sink_size = 1, 
+        )
+        engine = Engine(config)
+        batch_size = 10
+        inputs = [{
+            "prompt" : prompt, 
+            "multi_modal_data":{
+                "image": image
+            },
+            # "max_tokens":0, 
+            # "max_tokens":random.randint(30, 70), 
+            "max_tokens": i * 10, 
+        } for i in range(batch_size)]
 
         start = time.perf_counter()
-        outputs = llm.generate(inputs)
-        end = time.perf_counter()
 
-    # 3. show result
-    if args.output_text:
+        outputs = engine.generate(inputs)
+
+        end = time.perf_counter()
+        duration = end - start
+        completed = len(outputs)
+        input_lens = []
+        latencies = []
+        ttfts = []
+        tpots = []
+        output_lens = []
         for output in outputs:
-            print(output)
-    print(f'total time {end - start: 3}')
+            input_lens.append(output.input_len)
+            latencies.append(output.latency)
+            ttfts.append(output.ttft)
+            tpots += output.tpot
+            output_lens.append(len(output.tpot) + 1)
+
+        metrics = BenchmarkMetrics(
+            benchmark_duration=duration, 
+            completed=completed,
+            total_input=sum(input_lens),
+            total_output=sum(output_lens),
+            mean_input_len=np.mean(input_lens),
+            median_input_len=np.median(input_lens),
+            max_input_len=max(input_lens),
+            mean_output_len=np.mean(output_lens),
+            median_output_len=np.median(output_lens),
+            max_output_len=max(output_lens),
+            request_throughput=completed / duration,
+            input_throughput=sum(input_lens) / duration,
+            output_throughput=sum(output_lens) / duration,
+            mean_latency_ms=np.mean(latencies) * 1000,
+            median_latency_ms=np.median(latencies) * 1000,
+            p90_latency_ms=np.percentile(latencies, 90) * 1000,
+            p99_latency_ms=np.percentile(latencies, 99) * 1000,
+            mean_ttft_ms=np.mean(ttfts or 0) * 1000,
+            median_ttft_ms=np.median(ttfts or 0) * 1000,
+            p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
+            p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
+            mean_tpot_ms=np.mean(tpots) * 1000,
+            median_tpot_ms=np.median(tpots) * 1000,
+            p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
+            p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
+        )
+        metrics.print()
+        if args.output_text:
+            for output in outputs:
+                print(output.text)
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Benchmark the online serving throughput.")
