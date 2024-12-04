@@ -15,7 +15,6 @@ from dxz.model.parameters import AttentionParameters, ModelParameters
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig
-from dxz.utils.profiler import profile
 
 @dataclass
 class EngineConfig:
@@ -166,6 +165,7 @@ class Engine:
 
         for sequence in finished:
             outputs.append({
+                'input_len' : sequence.static_info.n_prompt_tokens, 
                 'text' : self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
                 'ttft' : sequence.metric.tokens_time[0] - arrival_time,
                 'tpot' : [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
@@ -309,15 +309,13 @@ class Engine:
             if isinstance(instruction, EmptyInstruction):
                 continue
             if isinstance(instruction, ImageEmbed):
-                with profile('embed'):
-                    pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
-                    model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
-                    image_features = self.model.image_embed(pixel_values, model_params)
-                    instruction.image_featues_dst.image_features = image_features
+                pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
+                model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
+                image_features = self.model.image_embed(pixel_values, model_params)
+                instruction.image_featues_dst.image_features = image_features
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
-        with profile('fill'):
-            self.execute_batch_fill(fill_contexts)
+        self.execute_batch_fill(fill_contexts)
 
         # 3. scheduler sequence
         t = time.perf_counter()
@@ -344,20 +342,65 @@ if __name__ == '__main__':
     )
     engine = Engine(config)
     batch_size = 10
-
     inputs = [{
         "prompt" : prompt, 
         "multi_modal_data":{
             "image": image
         },
-        "max_tokens":random.randint(30, 70), 
-    } for _ in range(batch_size)]
+        # "max_tokens":0, 
+        # "max_tokens":random.randint(30, 70), 
+        "max_tokens": i * 10, 
+    } for i in range(batch_size)]
 
     import time
+    start = time.perf_counter()
+
     outputs = engine.generate(inputs)
 
+    end = time.perf_counter()
+    duration = end - start
+    completed = len(outputs)
+    input_lens = []
+    latencies = []
+    ttfts = []
+    tpots = []
+    output_lens = []
     for output in outputs:
-        print(output['text'])
-        # print(f"ttft: {output['ttft']}")
-        # print(f"tpot: {output['tpot']}")
-        print(f"latency: {output['latency']}")
+        input_lens.append(output['input_len'])
+        latencies.append(output['latency'])
+        ttfts.append(output['ttft'])
+        tpots += output['tpot']
+        output_lens.append(len(output['tpot']) + 1)
+    print(output_lens)
+
+    from dxz.utils.metric import BenchmarkMetrics
+    import numpy as np
+
+    metrics = BenchmarkMetrics(
+        benchmark_duration=duration, 
+        completed=completed,
+        total_input=sum(input_lens),
+        total_output=sum(output_lens),
+        mean_input_len=np.mean(input_lens),
+        median_input_len=np.median(input_lens),
+        max_input_len=max(input_lens),
+        mean_output_len=np.mean(output_lens),
+        median_output_len=np.median(output_lens),
+        max_output_len=max(output_lens),
+        request_throughput=completed / duration,
+        input_throughput=sum(input_lens) / duration,
+        output_throughput=sum(output_lens) / duration,
+        mean_latency_ms=np.mean(latencies) * 1000,
+        median_latency_ms=np.median(latencies) * 1000,
+        p90_latency_ms=np.percentile(latencies, 90) * 1000,
+        p99_latency_ms=np.percentile(latencies, 99) * 1000,
+        mean_ttft_ms=np.mean(ttfts or 0) * 1000,
+        median_ttft_ms=np.median(ttfts or 0) * 1000,
+        p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
+        p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
+        mean_tpot_ms=np.mean(tpots) * 1000,
+        median_tpot_ms=np.median(tpots) * 1000,
+        p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
+        p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
+    )
+    metrics.print()
