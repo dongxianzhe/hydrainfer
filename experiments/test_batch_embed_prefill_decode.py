@@ -71,17 +71,21 @@ def prefill_batchsize_throughput(batch_size) -> float:
     end = time.perf_counter()
     duration = end - start
     throughput = n_tokens * num_repeats / duration
-    return throughput
+    latency = duration / num_repeats
+    return throughput, latency
 
 def plot_prefill_batchsize_throughput():
     batch_sizes = [1, 2, 3, 4, 5, 6, 7, 8]
     throughputs = []
+    latencies   = []
     for batch_size in batch_sizes:
-        throughput = prefill_batchsize_throughput(batch_size)
-        print(f"batch_size {batch_size} throughput {throughput} tokens / s")
+        throughput, latency = prefill_batchsize_throughput(batch_size)
+        print(f"batch_size {batch_size} throughput {throughput} tokens / s latency {latency} s")
         throughputs.append(throughput)
+        latencies.append(latency)
 
-    bar_chart(batch_sizes, throughputs, figsize=(8, 6), xlabel="Batch Size", ylabel="Tokens per Second", title="Prefill", filename="bs2throughput")
+    bar_chart(batch_sizes, throughputs, figsize=(8, 6), xlabel="Batch Size", ylabel="Tokens per Second", title="Prefill", filename="prefill_bs2throughput")
+    bar_chart(batch_sizes, latencies, figsize=(8, 6), xlabel="Batch Size", ylabel="latency", title="Prefill", filename="prefill_bs1throughput")
 
 # 2. test decode
 def decode_batchsize_throughput(batch_size) -> float:
@@ -131,17 +135,21 @@ def decode_batchsize_throughput(batch_size) -> float:
     end = time.perf_counter()
     duration = end - start
     throughput = num_sequences * num_repeats / duration
-    return throughput 
+    latency    = duration / num_repeats
+    return throughput, latency
 
 def plot_decode_batchsize_throughput():
     batch_sizes = [i for i in range(1, 64)]
     throughputs = []
+    latencies   = []
     for batch_size in batch_sizes:
-        throughput = decode_batchsize_throughput(batch_size)
-        print(f"batch_size {batch_size} throughput {throughput} tokens / s")
+        throughput, latency = decode_batchsize_throughput(batch_size)
+        print(f"batch_size {batch_size} throughput {throughput} tokens / s latency {latency} s")
         throughputs.append(throughput)
+        latencies.append(latency)
 
-    bar_chart(batch_sizes, throughputs, figsize=(8, 6), xlabel="Batch Size", ylabel="Tokens per Second", title="Decode", filename="decodebs2throughput")
+    bar_chart(batch_sizes, throughputs, figsize=(8, 6), xlabel="Batch Size", ylabel="Tokens per Second", title="Decode", filename="decode_bs2throughput")
+    bar_chart(batch_sizes, latencies, figsize=(8, 6), xlabel="Batch Size", ylabel="latency Second", title="Decode", filename="decode_bs2latency")
 
 def embed_batchsize_throughput(batch_size) -> float:
     model_params = ModelParameters()
@@ -155,25 +163,28 @@ def embed_batchsize_throughput(batch_size) -> float:
     num_repeats = 10
     for i in range(num_repeats):
         image_features = model.image_embed(pixel_values, model_params)
-        print(image_features.shape)
         torch.cuda.synchronize()
     end = time.perf_counter()
     duration = end - start
     throughput = 576 * batch_size *  num_repeats / duration
-    return throughput
+    latency = duration / num_repeats
+    return throughput, latency
 
 def plot_embed_batchsize_throughput():
     batch_sizes = [i for i in range(1, 8)]
     throughputs = []
+    latencies   = []
     for batch_size in batch_sizes:
-        throughput = embed_batchsize_throughput(batch_size)
-        print(f"batch_size {batch_size} throughput {throughput} tokens/s")
+        throughput, latency = embed_batchsize_throughput(batch_size)
+        print(f"batch_size {batch_size} throughput {throughput} tokens/s, latency {latency}")
         throughputs.append(throughput)
+        latencies.append(latency)
 
     bar_chart(batch_sizes, throughputs, figsize=(8, 6), xlabel="Batch Size", ylabel="Tokens per Second", title="Embed", filename="embed_bs2throughput")
+    bar_chart(batch_sizes, latencies, figsize=(8, 6), xlabel="Batch Size", ylabel="Latency Seconds", title="Embed", filename="embed_bs2latency")
 
 # 3. test embed
 if __name__ == '__main__':
-    # plot_prefill_batchsize_throughput()
-    # plot_decode_batchsize_throughput()
+    plot_prefill_batchsize_throughput()
+    plot_decode_batchsize_throughput()
     plot_embed_batchsize_throughput()
