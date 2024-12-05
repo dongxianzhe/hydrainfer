@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SequenceMetric:
     arrival_time: float = 0. 
+    first_schedule_time: float = 0.
     tokens_time: list[float] = field(default_factory=list)
     finished_time: float = 0.
 

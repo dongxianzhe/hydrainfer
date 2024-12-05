@@ -26,7 +26,7 @@ def main(args: argparse.Namespace):
         "multi_modal_data":{
             "image": image
         }, 
-        "max_tokens": i * 10,
+        "max_tokens": (i + 1) * 10,
     } for i in range(args.num_prompts)]
 
     # 2. generate
@@ -50,9 +50,11 @@ def main(args: argparse.Namespace):
             input_lens.append(len(output.prompt_token_ids))
             latencies.append(output.metrics.finished_time - output.metrics.arrival_time)
             ttfts.append(output.metrics.first_token_time - output.metrics.first_scheduled_time)
-            # tpots = []
+            if hasattr(output.metrics, "token_times"):
+                for i in range(1, len(output.metrics.token_times)):
+                    tpot = output.metrics.token_times[i] - output.metrics.token_times[i - 1]
+                    tpots.append(tpot)
             output_lens.append(len(output.outputs[0].token_ids))
-            pass # todo
         metrics = BenchmarkMetrics(
             benchmark_duration=duration, 
             completed=completed,
@@ -95,16 +97,6 @@ def main(args: argparse.Namespace):
             attention_sink_size = 1, 
         )
         engine = Engine(config)
-        batch_size = 10
-        inputs = [{
-            "prompt" : prompt, 
-            "multi_modal_data":{
-                "image": image
-            },
-            # "max_tokens":0, 
-            # "max_tokens":random.randint(30, 70), 
-            "max_tokens": i * 10, 
-        } for i in range(batch_size)]
 
         start = time.perf_counter()
 

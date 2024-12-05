@@ -65,7 +65,9 @@ class SequenceScheduler:
         if self.batch_policy == 'nobatch':
             if len(self.running) == 0:
                 if len(self.waiting) != 0:
-                    self.running.append(self.waiting.pop())
+                    sequence = self.waiting.pop()
+                    sequence.metric.first_schedule_time = time.perf_counter()
+                    self.running.append(sequence)
                 else:
                     return []
             running = self.running
@@ -74,7 +76,9 @@ class SequenceScheduler:
         elif self.batch_policy == 'requestlevel':
             if len(self.running) == 0:
                 while len(self.running) < 4 and len(self.waiting) != 0:
-                    self.running.append(self.waiting.pop())
+                    sequence = self.waiting.pop()
+                    sequence.metric.first_schedule_time = time.perf_counter()
+                    self.running.append(sequence)
                 if len(self.running) == 0:
                     return []
             running = self.running
@@ -82,7 +86,9 @@ class SequenceScheduler:
             return [(seq, seq.next_instruction()) for seq in running]
         elif self.batch_policy == 'continuousbatch':
             while len(self.running) < 4 and len(self.waiting) != 0:
-                self.running.append(self.waiting.pop())
+                sequence = self.waiting.pop()
+                sequence.metric.first_schedule_time = time.perf_counter()
+                self.running.append(sequence)
             if len(self.running) == 0:
                 return []
             running = self.running
@@ -175,7 +181,7 @@ class Engine:
             outputs.append(GenerateOutput(
                 input_len = sequence.static_info.n_prompt_tokens, 
                 text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
-                ttft = sequence.metric.tokens_time[0] - arrival_time,
+                ttft = sequence.metric.tokens_time[0] - sequence.metric.arrival_time,
                 tpot = [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
                 latency = sequence.metric.finished_time - sequence.metric.arrival_time
             ))
