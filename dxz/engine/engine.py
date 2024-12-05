@@ -300,6 +300,27 @@ class Engine:
         for n_token, vid in zip(instruction.n_tokens, instruction.kv_cache_ids):
             sequence.virtual_kv_caches[vid].realloc(n_token)
 
+    def execute_batch_image_embed(self, contexts: list[tuple[Sequence, Instruction]]):
+        if len(contexts) == 0:
+            return
+
+        n_images: list[int] = []
+        batch_pixel_values: list[Tensor] = []
+        for sequence, instruction in contexts:
+            pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device) # (n_images, n_channels, width, height)
+            batch_pixel_values.append(pixel_values)
+            n_images.append(pixel_values.shape[0])
+        pixel_values = torch.cat(batch_pixel_values, dim=0) 
+
+        model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
+        image_features = self.model.image_embed(pixel_values, model_params) # (batch_size, n_tokens, vision_hidden_size)
+
+        left = 0
+        for i, (sequence, instruction) in enumerate(contexts):
+            right = left + n_images[i]
+            instruction.image_featues_dst.image_features = image_features[left: right, :, :]
+            left += n_images[i]
+
     @torch.inference_mode()
     def step(self):
         # 1. schedule sequence
@@ -309,6 +330,7 @@ class Engine:
 
         # 2. execute instructions
         fill_contexts = []
+        image_embed_contexts = []
         for context in contexts:
             sequence, instruction = context
             if isinstance(instruction, Fill):
@@ -323,13 +345,11 @@ class Engine:
             if isinstance(instruction, EmptyInstruction):
                 continue
             if isinstance(instruction, ImageEmbed):
-                pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
-                model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
-                image_features = self.model.image_embed(pixel_values, model_params)
-                instruction.image_featues_dst.image_features = image_features
+                image_embed_contexts.append(context)
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
         self.execute_batch_fill(fill_contexts)
+        self.execute_batch_image_embed(image_embed_contexts)
 
         # 3. scheduler sequence
         t = time.perf_counter()

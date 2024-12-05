@@ -240,7 +240,7 @@ def test_engine():
     outputs = engine.generate(inputs)
 
     for i, question in enumerate(paper.questions):
-        output_text = outputs[i]['text']
+        output_text = outputs[i].text
         print(output_text)
         if "Yes" in output_text:
             question.answer = "Yes"
