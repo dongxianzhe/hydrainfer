@@ -165,7 +165,7 @@ class LlavaForConditionalGeneration(nn.Module):
             from dxz.layer import token_prunning
             selected_image_feature = token_prunning.focal_prunning(
                 selected_image_feature,
-                model_params.clip_scores,
+                model_params.clip_scores[:, :, 1:, 1:], # (batch_size, n_images, 576, 576)
                 n_output_tokens=model_params.embed_token_pruning_params['n_output_tokens'],
                 strategy='rank',
             )
