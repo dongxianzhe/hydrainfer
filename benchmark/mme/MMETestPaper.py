@@ -223,14 +223,33 @@ def test_transformers():
 
 def test_engine():
     from tqdm import tqdm
-    from dxz.engine.engine import Engine, EngineConfig
+    import torch
+    from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
+    from dxz.memory.virtual_kv_cache import MemoryConfig
+    from dxz.memory.compiler import CompilerConfig
     paper = MMETestPaper()
-    engine = Engine(EngineConfig(
-        batch_policy='continuousbatch', 
-        token_prunning_policy='vanilla',
-        window_size=512,
-        attention_sink_size=4,
-    ))
+    config = EngineConfig(
+        model_name = "llava-hf/llava-1.5-7b-hf", 
+        dtype = torch.half, 
+        device = torch.device('cuda:0'), 
+        memory_config=MemoryConfig(
+            num_blocks = 20000, 
+            block_size = 16, 
+        ), 
+        scheduler_config=SchedulerConfig(
+            batch_policy = 'continuousbatch', 
+            max_running_sequences = 10, 
+        ), 
+        compiler_config=CompilerConfig(
+            max_tokens = 64, 
+            kv_cache_eviction_policy = None, 
+            window_size = 28, 
+            attention_sink_size = 4, 
+            token_pruning_policy = None, 
+            n_embed_output_tokens = 256, 
+        ), 
+    )
+    engine = Engine(config)
     inputs = [{
         "prompt":f"USER: <image>\n{question.question}?\nAnswer the question using a single word or phrase. ASSISTANT:", 
         "multi_modal_data":{"image":question.image}, 

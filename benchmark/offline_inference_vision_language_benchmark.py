@@ -89,12 +89,30 @@ def main(args: argparse.Namespace):
                 print(output.outputs[0].text)
 
     elif args.backend == 'dxz':
-        from dxz.engine.engine import EngineConfig, Engine
+        import torch
+        from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
+        from dxz.memory.virtual_kv_cache import MemoryConfig
+        from dxz.memory.compiler import CompilerConfig
         config = EngineConfig(
-            batch_policy = 'continuousbatch', 
-            token_prunning_policy = "vanilla", 
-            window_size = 128, 
-            attention_sink_size = 1, 
+            model_name = "llava-hf/llava-1.5-7b-hf", 
+            dtype = torch.half, 
+            device = torch.device('cuda:0'), 
+            memory_config=MemoryConfig(
+                num_blocks = 20000, 
+                block_size = 16, 
+            ), 
+            scheduler_config=SchedulerConfig(
+                batch_policy = 'continuousbatch', 
+                max_running_sequences = 10, 
+            ), 
+            compiler_config=CompilerConfig(
+                max_tokens = 64, 
+                kv_cache_eviction_policy = None, 
+                window_size = 28, 
+                attention_sink_size = 4, 
+                token_pruning_policy = None, 
+                n_embed_output_tokens = 64, 
+            ), 
         )
         engine = Engine(config)
 

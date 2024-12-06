@@ -161,7 +161,7 @@ class LlavaForConditionalGeneration(nn.Module):
     def image_embed(self, pixel_values: Tensor, model_params: ModelParameters) -> Tensor:
         hidden_states = self.vision_tower(pixel_values, self.config.vision_feature_layer, model_params)
         selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
-        if model_params.embed_token_pruning_params and model_params.embed_token_pruning_params.get('policy', "") == 'focal_pruning':
+        if model_params.embed_token_pruning_params and model_params.embed_token_pruning_params.get('policy', "") == 'focal':
             from dxz.layer import token_prunning
             selected_image_feature = token_prunning.focal_prunning(
                 selected_image_feature,

@@ -4,7 +4,7 @@ import random
 from itertools import accumulate
 from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 from typing import Literal
@@ -13,21 +13,22 @@ from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import AttentionParameters, ModelParameters
 from dxz.sequence.sequence import Sequence
-from dxz.memory.compiler import CompilerConfig, Compiler
-from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig
+from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
+from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
+
+@dataclass
+class SchedulerConfig:
+    batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
+    max_running_sequences: int = 10
 
 @dataclass
 class EngineConfig:
-    model_name  : str                                                   = "llava-hf/llava-1.5-7b-hf"  # the repository name of huggingface
-    dtype       : torch.dtype                                           = torch.half                  # 
-    device      : torch.device                                          = torch.device('cuda:0')      #
-    batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'nobatch'                   #
-    num_blocks  : int                                                   = 16
-    block_size  : int                                                   = 16                          # kvcache block size
-    token_prunning_policy: Literal['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill'] = "streamingllm"
-    # streamingLLM params
-    window_size: int = 16
-    attention_sink_size: int = 4 
+    model_name  : str          = "llava-hf/llava-1.5-7b-hf" 
+    dtype       : torch.dtype  = torch.half 
+    device      : torch.device = torch.device('cuda:0') 
+    memory_config    : MemoryConfig    = field(default_factory=MemoryConfig)
+    compiler_config  : CompilerConfig  = field(default_factory=CompilerConfig)
+    scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
 
 @dataclass
 class GenerateOutput:
@@ -38,11 +39,11 @@ class GenerateOutput:
     latency : float
 
 class SequenceScheduler:
-    def __init__(self, batch_policy: str):
+    def __init__(self, config: SchedulerConfig):
+        self.config = config
         self.waiting: list[Sequence] = []
         self.running: list[Sequence] = []
         self.finished: list[Sequence] = []
-        self.batch_policy = batch_policy
     
     def schedule_new(self, sequences: list[Sequence]):
         self.waiting += sequences
@@ -62,7 +63,7 @@ class SequenceScheduler:
         return finished
 
     def step(self) -> list[tuple[Sequence, Instruction]]:
-        if self.batch_policy == 'nobatch':
+        if self.config.batch_policy == 'nobatch':
             if len(self.running) == 0:
                 if len(self.waiting) != 0:
                     sequence = self.waiting.pop()
@@ -73,9 +74,9 @@ class SequenceScheduler:
             running = self.running
             self.running = []
             return [(running[0], running[0].next_instruction())]
-        elif self.batch_policy == 'requestlevel':
+        elif self.config.batch_policy == 'requestlevel':
             if len(self.running) == 0:
-                while len(self.running) < 4 and len(self.waiting) != 0:
+                while len(self.running) < self.config.max_running_sequences and len(self.waiting) != 0:
                     sequence = self.waiting.pop()
                     sequence.metric.first_schedule_time = time.perf_counter()
                     self.running.append(sequence)
@@ -84,8 +85,8 @@ class SequenceScheduler:
             running = self.running
             self.running = []
             return [(seq, seq.next_instruction()) for seq in running]
-        elif self.batch_policy == 'continuousbatch':
-            while len(self.running) < 4 and len(self.waiting) != 0:
+        elif self.config.batch_policy == 'continuousbatch':
+            while len(self.running) < self.config.max_running_sequences and len(self.waiting) != 0:
                 sequence = self.waiting.pop()
                 sequence.metric.first_schedule_time = time.perf_counter()
                 self.running.append(sequence)
@@ -109,32 +110,31 @@ class Engine:
         self.model_config = self.model.config
         self.model_runner = self.model
         # 2. memory
-        self.memory_config = MemoryConfig(
-            num_blocks = 10000, 
-            block_size = 16, 
-            num_kv_heads = self.model_config.text_config.num_key_value_heads, 
+        self.memory_context = MemoryContext(
             head_size = self.model_config.text_config.head_dim, 
+            num_kv_heads=self.model_config.text_config.num_key_value_heads, 
             dtype = self.config.dtype, 
             device = self.config.device, 
         )
-        self.mmu = MemoryManagementUnit(self.memory_config)
+        self.mmu = MemoryManagementUnit(
+            config = self.config.memory_config, 
+            context = self.memory_context, 
+            )
         # 3. compiler
-        self.compiler_config = CompilerConfig(
+        self.compiler_context = CompilerContext(
             tokenizer = self.tokenizer, 
             processor = self.processor, 
             image_token_id = self.model_config.image_token_index, 
-            num_image_tokens = 576, 
-            max_tokens = 50,
+            num_image_tokens = self.model_config.image_seq_length, 
             n_layers = self.model_config.text_config.num_hidden_layers,
-            token_prunning_policy = self.config.token_prunning_policy, 
-            # streamingLLM params
-            window_size = self.config.window_size, 
-            attention_sink_size = self.config.attention_sink_size
         )
-        self.compiler = Compiler(self.compiler_config)
+        self.compiler = Compiler(
+            config = self.config.compiler_config, 
+            context = self.compiler_context, 
+        )
         # 4. sequence
         self.sid_allocator = 0
-        self.scheduler = SequenceScheduler(config.batch_policy)
+        self.scheduler = SequenceScheduler(self.config.scheduler_config)
 
     def generate(self, inputs):
         """ inputs example
@@ -148,10 +148,10 @@ class Engine:
         """
         arrival_time = time.perf_counter()
         for input in inputs:
-            self.compiler_config.max_tokens = input.get('max_tokens', 50)
             static_info = self.compiler.compile(
                 prompt = input['prompt'], 
                 images = [input['multi_modal_data']['image']], 
+                compile_params = CompileParameters(max_tokens = input.get('max_tokens', None))
                 )
             sequence = Sequence(
                 static_info=static_info, 
@@ -367,12 +367,27 @@ if __name__ == '__main__':
     prompt = f"USER: <image>\n{question}\nASSISTANT:"
 
     # ['nobatch', 'requestlevel', 'continuousbatch']
-    # ['vanilla', 'mchunkprefill', 'random', 'streamingllm', 'block_prefill', 'fast']
+    # ['random', 'streamingllm']
     config = EngineConfig(
-        batch_policy = 'continuousbatch', 
-        token_prunning_policy = "vanilla", 
-        window_size = 128, 
-        attention_sink_size = 1, 
+        model_name = "llava-hf/llava-1.5-7b-hf", 
+        dtype = torch.half, 
+        device = torch.device('cuda:0'), 
+        memory_config=MemoryConfig(
+            num_blocks = 10000, 
+            block_size = 16, 
+        ), 
+        scheduler_config=SchedulerConfig(
+            batch_policy = 'continuousbatch', 
+            max_running_sequences = 10, 
+        ), 
+        compiler_config=CompilerConfig(
+            max_tokens = 64, 
+            kv_cache_eviction_policy = "random", 
+            window_size = 28, 
+            attention_sink_size = 4, 
+            token_pruning_policy = 'focal', 
+            n_embed_output_tokens = 64, 
+        ), 
     )
     engine = Engine(config)
     batch_size = 10
@@ -394,3 +409,5 @@ if __name__ == '__main__':
     end = time.perf_counter()
     duration = end - start
     print(f'duration {duration}')
+    for output in outputs:
+        print(output.text)

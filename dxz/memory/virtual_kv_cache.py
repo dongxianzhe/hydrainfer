@@ -5,13 +5,16 @@ from dxz.memory.block_allocator import BlockAllocator
 
 @dataclass
 class MemoryConfig:
-    num_blocks: int
-    block_size: int
+    num_blocks: int = 10000
+    block_size: int = 16
+     
+
+@dataclass
+class MemoryContext:
     num_kv_heads: int
     head_size: int
     dtype: torch.dtype
     device: torch.device
-     
 
 class MemoryManagementUnit:
     """_summary_
@@ -20,15 +23,16 @@ class MemoryManagementUnit:
         2. gpu memory
         3. vitual kv cache creation todo
     """
-    def __init__(self, config: MemoryConfig):
+    def __init__(self, config: MemoryConfig, context: MemoryContext):
         self.config = config
+        self.context = context
         self.kv_cache = KVCache(
             config.num_blocks, 
             config.block_size, 
-            config.num_kv_heads, 
-            config.head_size, 
-            config.dtype, 
-            config.device
+            context.num_kv_heads, 
+            context.head_size, 
+            context.dtype, 
+            context.device
         )
         self.kv_cache_allocator = BlockAllocator(config.num_blocks)
 
