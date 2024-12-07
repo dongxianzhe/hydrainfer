@@ -20,6 +20,7 @@ from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, Me
 class SchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     max_running_sequences: int = 10
+    max_batch_tokens: int = 1024
 
 @dataclass
 class EngineConfig:
@@ -29,6 +30,7 @@ class EngineConfig:
     memory_config    : MemoryConfig    = field(default_factory=MemoryConfig)
     compiler_config  : CompilerConfig  = field(default_factory=CompilerConfig)
     scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
+    batch_image_embed: bool = True
 
 @dataclass
 class GenerateOutput:
@@ -168,7 +170,7 @@ class Engine:
 
         outputs = []
         finished: list[Sequence] = []
-        bar = tqdm(len(inputs))
+        bar = tqdm(range(len(inputs)))
         while len(finished) < len(inputs):
             self.step()
             f = self.scheduler.pop_finished() 
@@ -321,6 +323,13 @@ class Engine:
             instruction.image_featues_dst.image_features = image_features[left: right, :, :]
             left += n_images[i]
 
+    def execute_image_embed(self, context: tuple[Sequence, Instruction]):
+        sequence, instruction = context
+        pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
+        model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
+        image_features = self.model.image_embed(pixel_values, model_params)
+        instruction.image_featues_dst.image_features = image_features
+
     @torch.inference_mode()
     def step(self):
         # 1. schedule sequence
@@ -349,7 +358,12 @@ class Engine:
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
         self.execute_batch_fill(fill_contexts)
-        self.execute_batch_image_embed(image_embed_contexts)
+
+        if self.config.batch_image_embed:
+            self.execute_batch_image_embed(image_embed_contexts)
+        else:
+            for context in image_embed_contexts:
+                self.execute_image_embed(context)
 
         # 3. scheduler sequence
         t = time.perf_counter()
@@ -373,7 +387,7 @@ if __name__ == '__main__':
         dtype = torch.half, 
         device = torch.device('cuda:0'), 
         memory_config=MemoryConfig(
-            num_blocks = 10000, 
+            num_blocks = 20000, 
             block_size = 16, 
         ), 
         scheduler_config=SchedulerConfig(
@@ -382,12 +396,13 @@ if __name__ == '__main__':
         ), 
         compiler_config=CompilerConfig(
             max_tokens = 64, 
-            kv_cache_eviction_policy = "random", 
+            kv_cache_eviction_policy = None, 
             window_size = 28, 
             attention_sink_size = 4, 
-            token_pruning_policy = 'focal', 
+            token_pruning_policy = None, 
             n_embed_output_tokens = 64, 
         ), 
+        batch_image_embed = True, 
     )
     engine = Engine(config)
     batch_size = 10

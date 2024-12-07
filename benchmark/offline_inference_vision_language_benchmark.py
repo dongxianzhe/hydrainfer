@@ -113,6 +113,7 @@ def main(args: argparse.Namespace):
                 token_pruning_policy = None, 
                 n_embed_output_tokens = 64, 
             ), 
+            batch_image_embed=True, 
         )
         engine = Engine(config)
 
