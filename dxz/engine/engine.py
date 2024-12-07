@@ -15,6 +15,7 @@ from dxz.model.parameters import AttentionParameters, ModelParameters
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
+from queue import Queue
 
 @dataclass
 class SchedulerConfig:
@@ -43,12 +44,13 @@ class GenerateOutput:
 class SequenceScheduler:
     def __init__(self, config: SchedulerConfig):
         self.config = config
-        self.waiting: list[Sequence] = []
+        self.waiting = Queue()
         self.running: list[Sequence] = []
         self.finished: list[Sequence] = []
     
     def schedule_new(self, sequences: list[Sequence]):
-        self.waiting += sequences
+        for sequence in sequences:
+            self.waiting.put(sequence)
     
     def schedule_running(self, sequences: list[Sequence]):
         self.running += sequences
@@ -67,8 +69,8 @@ class SequenceScheduler:
     def step(self) -> list[tuple[Sequence, Instruction]]:
         if self.config.batch_policy == 'nobatch':
             if len(self.running) == 0:
-                if len(self.waiting) != 0:
-                    sequence = self.waiting.pop()
+                if not self.waiting.empty():
+                    sequence = self.waiting.get()
                     sequence.metric.first_schedule_time = time.perf_counter()
                     self.running.append(sequence)
                 else:
@@ -78,8 +80,8 @@ class SequenceScheduler:
             return [(running[0], running[0].next_instruction())]
         elif self.config.batch_policy == 'requestlevel':
             if len(self.running) == 0:
-                while len(self.running) < self.config.max_running_sequences and len(self.waiting) != 0:
-                    sequence = self.waiting.pop()
+                while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
+                    sequence = self.waiting.get()
                     sequence.metric.first_schedule_time = time.perf_counter()
                     self.running.append(sequence)
                 if len(self.running) == 0:
@@ -88,8 +90,8 @@ class SequenceScheduler:
             self.running = []
             return [(seq, seq.next_instruction()) for seq in running]
         elif self.config.batch_policy == 'continuousbatch':
-            while len(self.running) < self.config.max_running_sequences and len(self.waiting) != 0:
-                sequence = self.waiting.pop()
+            while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
+                sequence = self.waiting.get()
                 sequence.metric.first_schedule_time = time.perf_counter()
                 self.running.append(sequence)
             if len(self.running) == 0:
