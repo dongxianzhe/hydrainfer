@@ -104,6 +104,7 @@ def main(args: argparse.Namespace):
             scheduler_config=SchedulerConfig(
                 batch_policy = 'continuousbatch', 
                 max_running_sequences = 10, 
+                max_batch_fill_tokens = 1024, 
             ), 
             compiler_config=CompilerConfig(
                 max_tokens = 64, 

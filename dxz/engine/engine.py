@@ -21,7 +21,7 @@ from queue import Queue
 class SchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     max_running_sequences: int = 10
-    max_batch_tokens: int = 1024
+    max_batch_fill_tokens: int = 1024
 
 @dataclass
 class EngineConfig:
@@ -67,38 +67,45 @@ class SequenceScheduler:
         return finished
 
     def step(self) -> list[tuple[Sequence, Instruction]]:
+        schedule_time = time.perf_counter()
         if self.config.batch_policy == 'nobatch':
             if len(self.running) == 0:
                 if not self.waiting.empty():
                     sequence = self.waiting.get()
-                    sequence.metric.first_schedule_time = time.perf_counter()
+                    sequence.metric.first_schedule_time = schedule_time
                     self.running.append(sequence)
-                else:
-                    return []
-            running = self.running
-            self.running = []
-            return [(running[0], running[0].next_instruction())]
         elif self.config.batch_policy == 'requestlevel':
             if len(self.running) == 0:
                 while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
                     sequence = self.waiting.get()
-                    sequence.metric.first_schedule_time = time.perf_counter()
+                    sequence.metric.first_schedule_time = schedule_time
                     self.running.append(sequence)
-                if len(self.running) == 0:
-                    return []
-            running = self.running
-            self.running = []
-            return [(seq, seq.next_instruction()) for seq in running]
         elif self.config.batch_policy == 'continuousbatch':
             while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
                 sequence = self.waiting.get()
-                sequence.metric.first_schedule_time = time.perf_counter()
+                sequence.metric.first_schedule_time = schedule_time
                 self.running.append(sequence)
-            if len(self.running) == 0:
-                return []
-            running = self.running
-            self.running = []
-            return [(seq, seq.next_instruction()) for seq in running]
+        if len(self.running) == 0:
+            return []
+
+        batch_fill_tokens = 0
+        
+        next_step: Sequence = []
+        this_step: Sequence = []
+        for sequence in self.running:
+            inst = sequence.curr_instruction()
+            if isinstance(inst, Fill):
+                assert len(inst.token_ids) <= self.config.max_batch_fill_tokens
+                if batch_fill_tokens + len(inst.token_ids) > self.config.max_batch_fill_tokens:
+                    next_step.append(sequence)
+                else:
+                    this_step.append(sequence)
+                    batch_fill_tokens += len(inst.token_ids)
+            else:
+                this_step.append(sequence)
+
+        self.running = next_step
+        return [(seq, seq.next_instruction()) for seq in this_step]
 
     def __repr__(self):
         return f'{len(self.waiting)} {len(self.running)} {len(self.finished)}'

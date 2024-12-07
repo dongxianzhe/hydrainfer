@@ -31,6 +31,9 @@ class Sequence:
         self.pc += 1
         return inst
 
+    def curr_instruction(self) -> Instruction:
+        return self.instructions[self.pc]
+
     def is_finished(self) -> bool:
         finished: bool = self.pc >= len(self.instructions)
 
