@@ -9,6 +9,9 @@ from typing import Literal, Optional
 @dataclass
 class CompilerConfig:
     max_tokens: int = 64
+    disaggregate_embed_prefill: bool = True
+    # chunked_prefill: bool = True
+    # max_chunk_size: int = 256
     kv_cache_eviction_policy: Literal[None, 'random', 'streamingllm'] = None
     window_size: int = 28
     attention_sink_size: int = 4 
@@ -63,28 +66,43 @@ class Compiler:
         n_virtual_kv_caches: int = self.context.n_layers
 
         layer_virtual_kv_cache_ids = list(range(self.context.n_layers))
-        # 1. embed (token pruning)
-        embed_instruction = ImageEmbed(
-            pixel_values = pixel_values, 
-            image_featues_dst = None, 
-            token_pruning_params = {'policy': self.config.token_pruning_policy, 'n_output_tokens': self.config.n_embed_output_tokens}, 
-        )
-        instructions.append(embed_instruction)
-        # 2. prefill
-        last_prefill_instruction = ImageEmbedFill(
-            image_featues = None,
-            token_ids = token_ids,
-            position_ids = list(range(0, len(token_ids))), 
-            cache_ids = [list(range(0, len(token_ids))) for _ in range(self.context.n_layers)], 
-            kv_cache_ids = layer_virtual_kv_cache_ids, 
-            sample = True, 
-            sample_dst = None, 
-        )
-        instructions.append(last_prefill_instruction)
-        embed_instruction.image_featues_dst = last_prefill_instruction
+        if self.config.disaggregate_embed_prefill:
+            # 1. embed (token pruning)
+            embed_instruction = ImageEmbed(
+                pixel_values = pixel_values, 
+                image_featues_dst = None, 
+                token_pruning_params = {'policy': self.config.token_pruning_policy, 'n_output_tokens': self.config.n_embed_output_tokens}, 
+            )
+            instructions.append(embed_instruction)
+            # 2. prefill
+            last_prefill_instruction = ImageEmbedFill(
+                image_featues = None,
+                token_ids = token_ids,
+                position_ids = list(range(0, len(token_ids))), 
+                cache_ids = [list(range(0, len(token_ids))) for _ in range(self.context.n_layers)], 
+                kv_cache_ids = layer_virtual_kv_cache_ids, 
+                sample = True, 
+                sample_dst = None, 
+            )
+            instructions.append(last_prefill_instruction)
+            embed_instruction.image_featues_dst = last_prefill_instruction
+        else:
+            assert self.config.token_pruning_policy == None, 'token pruning is not supported without disaggregate_embed_prefill'
+            fill_inst = ImageFill(
+                pixel_values = pixel_values, 
+                token_ids = token_ids,
+                position_ids = list(range(0, len(token_ids))), 
+                cache_ids = [list(range(0, len(token_ids))) for _ in range(self.context.n_layers)],
+                kv_cache_ids = layer_virtual_kv_cache_ids, 
+                sample = True, 
+                sample_dst= None,
+            )
+            instructions.append(fill_inst)
+            last_prefill_instruction = fill_inst
+
         # 3. decode (kv_cache eviction)
         max_tokens = compile_param.max_tokens if compile_param.max_tokens is not None else self.config.max_tokens
-        curr_instruction = last_prefill_instruction
+        curr_fill_inst = last_prefill_instruction
         for _ in range(max_tokens):
             cache_ids: list[int] = []
             if self.config.kv_cache_eviction_policy == 'random':
@@ -95,21 +113,21 @@ class Compiler:
                 raise Exception('todo')
             else:
                 for layer_id in range(self.context.n_layers):
-                    cache_ids.append([curr_instruction.cache_ids[layer_id][-1] + 1])
+                    cache_ids.append([curr_fill_inst.cache_ids[layer_id][-1] + 1])
 
             instruction = TextFill(
                 token_ids = None,
-                position_ids = [curr_instruction.position_ids[-1] + 1], 
+                position_ids = [curr_fill_inst.position_ids[-1] + 1], 
                 cache_ids = cache_ids, 
                 kv_cache_ids = layer_virtual_kv_cache_ids,
                 sample = True, 
                 sample_dst= None,
             )
-            curr_instruction.sample_dst = instruction
+            curr_fill_inst.sample_dst = instruction
             instructions.append(instruction)
-            curr_instruction = instruction
+            curr_fill_inst = instruction
         tail_instruction = EmptyInstruction()
-        curr_instruction.sample_dst = tail_instruction
+        curr_fill_inst.sample_dst = tail_instruction
         instructions.append(tail_instruction)
 
         return instructions, n_virtual_kv_caches

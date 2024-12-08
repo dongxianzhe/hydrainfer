@@ -209,7 +209,7 @@ class Engine:
             outputs.append(GenerateOutput(
                 input_len = sequence.static_info.n_prompt_tokens, 
                 text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
-                ttft = sequence.metric.tokens_time[0] - sequence.metric.arrival_time,
+                ttft = sequence.metric.tokens_time[0] - sequence.metric.first_schedule_time,
                 tpot = [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
                 latency = sequence.metric.finished_time - sequence.metric.arrival_time
             ))
@@ -483,11 +483,14 @@ if __name__ == '__main__':
         scheduler_config=SchedulerConfig(
             batch_policy = 'continuousbatch', 
             max_running_sequences = 10, 
-            max_batch_fill_tokens = 1024, 
+            max_batch_fill_tokens = 4096, 
             debug_mode = True, 
         ), 
         compiler_config=CompilerConfig(
             max_tokens = 64, 
+            disaggregate_embed_prefill=True, 
+            chunked_prefill = False, 
+            max_chunk_size = 512, 
             kv_cache_eviction_policy = None, 
             window_size = 28, 
             attention_sink_size = 4, 
