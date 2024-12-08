@@ -20,6 +20,7 @@ from queue import Queue
 @dataclass
 class SchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
+    priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_sequences: int = 10
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
@@ -73,39 +74,37 @@ class SequenceScheduler:
     def step(self) -> list[tuple[Sequence, Instruction]]:
         self.step_cnt += 1
         schedule_time = time.perf_counter()
+        # 1. get enough sequences to participate in the batch
         if self.config.batch_policy == 'nobatch':
             if len(self.running) == 0:
                 if not self.waiting.empty():
                     sequence = self.waiting.get()
-                    sequence.metric.first_schedule_time = schedule_time
                     self.running.append(sequence)
         elif self.config.batch_policy == 'requestlevel':
             if len(self.running) == 0:
                 while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
                     sequence = self.waiting.get()
-                    sequence.metric.first_schedule_time = schedule_time
                     self.running.append(sequence)
         elif self.config.batch_policy == 'continuousbatch':
             while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
                 sequence = self.waiting.get()
-                sequence.metric.first_schedule_time = schedule_time
                 self.running.append(sequence)
         if len(self.running) == 0:
             return []
 
         batch_fill_tokens = 0
         batch_embed_images = 0
-        
+        prefill_seqs: list[Sequence] = []
+        decode_seqs : list[Sequence] = []
         next_step: Sequence = []
         this_step: Sequence = []
         for sequence in self.running:
             inst = sequence.curr_instruction()
             if isinstance(inst, Fill):
-                if batch_fill_tokens < self.config.max_batch_fill_tokens:
-                    this_step.append(sequence)
-                    batch_fill_tokens += len(inst.token_ids)
+                if len(inst.token_ids) == 1:
+                    decode_seqs.append(sequence)
                 else:
-                    next_step.append(sequence)
+                    prefill_seqs.append(sequence)
             elif isinstance(inst, ImageEmbed):
                 if batch_embed_images < self.config.max_batch_embed_images:
                     this_step.append(sequence)
@@ -115,11 +114,25 @@ class SequenceScheduler:
             else:
                 this_step.append(sequence)
 
+        fill_seqs = prefill_seqs + decode_seqs if self.config.priority == 'prefill' else decode_seqs + prefill_seqs
+            
+        for seq in fill_seqs:
+            inst = seq.curr_instruction()
+            if batch_fill_tokens < self.config.max_batch_fill_tokens:
+                this_step.append(seq)
+                batch_fill_tokens += len(inst.token_ids)
+            else:
+                next_step.append(seq)
+
         if self.config.debug_mode:
             print(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
             print(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
             print(f'pc  : ' + ' '.join(f'{seq.pc : 2}'                 for seq in this_step))
             print(f'inst: ' + ' '.join(f'{seq.curr_instruction()}' for seq in this_step))
+
+        for seq in this_step:
+            if seq.metric.first_schedule_time == 0.:
+                seq.metric.first_schedule_time = schedule_time
 
         self.running = next_step
         return [(seq, seq.next_instruction()) for seq in this_step]
@@ -209,7 +222,7 @@ class Engine:
             outputs.append(GenerateOutput(
                 input_len = sequence.static_info.n_prompt_tokens, 
                 text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
-                ttft = sequence.metric.tokens_time[0] - sequence.metric.first_schedule_time,
+                ttft = sequence.metric.tokens_time[0] - sequence.metric.arrival_time,
                 tpot = [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
                 latency = sequence.metric.finished_time - sequence.metric.arrival_time
             ))
@@ -489,8 +502,6 @@ if __name__ == '__main__':
         compiler_config=CompilerConfig(
             max_tokens = 64, 
             disaggregate_embed_prefill=True, 
-            chunked_prefill = False, 
-            max_chunk_size = 512, 
             kv_cache_eviction_policy = None, 
             window_size = 28, 
             attention_sink_size = 4, 
@@ -500,15 +511,15 @@ if __name__ == '__main__':
         batch_image_embed = True, 
     )
     engine = Engine(config)
-    batch_size = 10
+    batch_size = 1
     inputs = [{
         "prompt" : prompt, 
         "multi_modal_data":{
             "image": image
         },
-        # "max_tokens":0, 
+        "max_tokens":0, 
         # "max_tokens":random.randint(30, 70), 
-        "max_tokens": i * 10, 
+        # "max_tokens": i * 10, 
     } for i in range(batch_size)]
 
     import time
