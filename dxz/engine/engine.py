@@ -32,6 +32,7 @@ class EngineConfig:
     compiler_config  : CompilerConfig  = field(default_factory=CompilerConfig)
     scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
     batch_image_embed: bool = True
+    ragged_fill_tensor_optimization: bool = False
 
 @dataclass
 class GenerateOutput:
@@ -245,29 +246,93 @@ class Engine:
             raise Exception('not support pixel value and image embed batch')
 
         q_max_seq_len : int = max(q_seq_lens)
+        q_cu_seq_lens = list(accumulate(q_seq_lens, initial=0))
+        kv_cu_seq_lens = [list(accumulate(kv_seq_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)]
+        cu_block_lens = [list(accumulate(blocks_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)]
 
         # 2. prepare tensor data
-        q_cu_seq_lens: Tensor = torch.tensor(list(accumulate(q_seq_lens, initial=0)), dtype=torch.int, device=self.config.device)
-        kv_cu_seq_lens = torch.tensor([list(accumulate(kv_seq_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)], dtype=torch.int, device=self.config.device)
-        new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.config.device)
-        block_tables = torch.tensor(block_tables, dtype=torch.int, device=self.config.device)
-        cu_blocks_lens = torch.tensor([list(accumulate(blocks_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)], dtype=torch.int, device=self.config.device)
-        model_params = ModelParameters(
-            attention_params = [AttentionParameters(
-                kv_cache=self.mmu.kv_cache,
-                q_cu_seq_lens = q_cu_seq_lens, 
-                kv_cu_seq_lens = kv_cu_seq_lens[layer_id], 
-                new_cache_slots = new_cache_slots[layer_id], 
-                block_tables = block_tables[layer_id], 
-                cu_blocks_lens = cu_blocks_lens[layer_id], 
-                num_sequences = num_sequences, 
-                all_sequences_decode = False, 
-                q_max_seq_len = q_max_seq_len,
-                kv_max_seq_len = max(kv_seq_lens[layer_id])
-            )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
-        )
-        input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
-        position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
+        if self.config.ragged_fill_tensor_optimization:
+            def prepare_ragged_tensor(
+                input_ids: list[int], 
+                position_ids: list[int], 
+                q_cu_seq_lens: list[int],    
+                kv_cu_seq_lens: list[list[int]], 
+                new_cache_slots: list[list[int]], 
+                block_tables: list[list[int]],
+                cu_block_lens: list[list[int]],
+                device, 
+            ):
+                ind_ptr  = {}
+                data: list[int] = []
+                ind_ptr['input_ids'] = (len(data), len(data) + len(input_ids))
+                data += input_ids
+                ind_ptr['position_ids'] = (len(data), len(data) + len(position_ids))
+                data += position_ids
+                ind_ptr['q_cu_seq_lens'] = (len(data), len(data) + len(q_cu_seq_lens))
+                data += q_cu_seq_lens
+                ind_ptr['kv_cu_seq_lens'] = []
+                ind_ptr['new_cache_slots'] = []
+                ind_ptr['block_tables'] = []
+                ind_ptr['cu_block_lens'] = []
+                for layer_id in range(len(kv_cu_seq_lens)):
+                    ind_ptr['kv_cu_seq_lens'].append((len(data), len(data) + len(kv_cu_seq_lens[layer_id])))
+                    data += kv_cu_seq_lens[layer_id]
+                    ind_ptr['new_cache_slots'].append((len(data), len(data) + len(new_cache_slots[layer_id])))
+                    data += new_cache_slots[layer_id]
+                    ind_ptr['block_tables'].append((len(data), len(data) + len(block_tables[layer_id])))
+                    data += block_tables[layer_id]
+                    ind_ptr['cu_block_lens'].append((len(data), len(data) + len(cu_block_lens[layer_id])))
+                    data += cu_block_lens[layer_id]
+                ragged_tensor = torch.tensor(data, dtype=torch.int, device=device)
+                return ragged_tensor, ind_ptr
+            ragged_tensor, ind_ptr = prepare_ragged_tensor(
+                input_ids       = token_ids, 
+                position_ids    = position_ids, 
+                q_cu_seq_lens   = q_cu_seq_lens, 
+                kv_cu_seq_lens  = kv_cu_seq_lens, 
+                new_cache_slots = new_cache_slots, 
+                block_tables    = block_tables, 
+                cu_block_lens   = cu_block_lens, 
+                device          = self.config.device, 
+            )
+            input_ids = ragged_tensor[ind_ptr['input_ids'][0]:ind_ptr['input_ids'][1]]
+            position_ids = ragged_tensor[ind_ptr['position_ids'][0]:ind_ptr['position_ids'][1]]
+            model_params = ModelParameters(
+                attention_params = [AttentionParameters(
+                    kv_cache=self.mmu.kv_cache,
+                    q_cu_seq_lens = ragged_tensor[ind_ptr['q_cu_seq_lens'][0]:ind_ptr['q_cu_seq_lens'][1]], 
+                    kv_cu_seq_lens = ragged_tensor[ind_ptr['kv_cu_seq_lens'][layer_id][0]:ind_ptr['kv_cu_seq_lens'][layer_id][1]], 
+                    new_cache_slots = ragged_tensor[ind_ptr['new_cache_slots'][layer_id][0]:ind_ptr['new_cache_slots'][layer_id][1]], 
+                    block_tables = ragged_tensor[ind_ptr['block_tables'][layer_id][0]:ind_ptr['block_tables'][layer_id][1]], 
+                    cu_blocks_lens = ragged_tensor[ind_ptr['cu_block_lens'][layer_id][0]:ind_ptr['cu_block_lens'][layer_id][1]], 
+                    num_sequences = num_sequences, 
+                    all_sequences_decode = False, 
+                    q_max_seq_len = q_max_seq_len,
+                    kv_max_seq_len = max(kv_seq_lens[layer_id])
+                )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
+            )
+        else:
+            input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
+            position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
+            q_cu_seq_lens = torch.tensor(q_cu_seq_lens, dtype=torch.int, device=self.config.device)
+            kv_cu_seq_lens = torch.tensor(kv_cu_seq_lens, dtype=torch.int, device=self.config.device)
+            new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.config.device)
+            block_tables = torch.tensor(block_tables, dtype=torch.int, device=self.config.device)
+            cu_blocks_lens = torch.tensor(cu_block_lens, dtype=torch.int, device=self.config.device)
+            model_params = ModelParameters(
+                attention_params = [AttentionParameters(
+                    kv_cache=self.mmu.kv_cache,
+                    q_cu_seq_lens = q_cu_seq_lens, 
+                    kv_cu_seq_lens = kv_cu_seq_lens[layer_id], 
+                    new_cache_slots = new_cache_slots[layer_id], 
+                    block_tables = block_tables[layer_id], 
+                    cu_blocks_lens = cu_blocks_lens[layer_id], 
+                    num_sequences = num_sequences, 
+                    all_sequences_decode = False, 
+                    q_max_seq_len = q_max_seq_len,
+                    kv_max_seq_len = max(kv_seq_lens[layer_id])
+                )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
+            )
         if len(pixel_values):
             pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:

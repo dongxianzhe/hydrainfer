@@ -98,12 +98,12 @@ def main(args: argparse.Namespace):
             dtype = torch.half, 
             device = torch.device('cuda:0'), 
             memory_config=MemoryConfig(
-                num_blocks = 20000, 
+                num_blocks = 25000, 
                 block_size = 16, 
             ), 
             scheduler_config=SchedulerConfig(
                 batch_policy = 'continuousbatch', 
-                max_running_sequences = 10, 
+                max_running_sequences = 15, 
                 max_batch_fill_tokens = 1024, 
             ), 
             compiler_config=CompilerConfig(
@@ -115,6 +115,7 @@ def main(args: argparse.Namespace):
                 n_embed_output_tokens = 64, 
             ), 
             batch_image_embed=True, 
+            ragged_fill_tensor_optimization=False, 
         )
         engine = Engine(config)
 
