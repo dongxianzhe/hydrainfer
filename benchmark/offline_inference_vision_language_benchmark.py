@@ -105,6 +105,7 @@ def main(args: argparse.Namespace):
                 batch_policy = 'continuousbatch', 
                 max_running_sequences = 15, 
                 max_batch_fill_tokens = 1024, 
+                max_batch_embed_images= 3, 
             ), 
             compiler_config=CompilerConfig(
                 max_tokens = 64, 
@@ -112,7 +113,7 @@ def main(args: argparse.Namespace):
                 window_size = 28, 
                 attention_sink_size = 4, 
                 token_pruning_policy = None, 
-                n_embed_output_tokens = 64, 
+                n_embed_output_tokens = 460,
             ), 
             batch_image_embed=True, 
             ragged_fill_tensor_optimization=False, 

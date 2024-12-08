@@ -22,6 +22,7 @@ class SchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     max_running_sequences: int = 10
     max_batch_fill_tokens: int = 1024
+    max_batch_embed_images: int = 3
 
 @dataclass
 class EngineConfig:
@@ -90,18 +91,24 @@ class SequenceScheduler:
             return []
 
         batch_fill_tokens = 0
+        batch_embed_images = 0
         
         next_step: Sequence = []
         this_step: Sequence = []
         for sequence in self.running:
             inst = sequence.curr_instruction()
             if isinstance(inst, Fill):
-                assert len(inst.token_ids) <= self.config.max_batch_fill_tokens
-                if batch_fill_tokens + len(inst.token_ids) > self.config.max_batch_fill_tokens:
-                    next_step.append(sequence)
-                else:
+                if batch_fill_tokens < self.config.max_batch_fill_tokens:
                     this_step.append(sequence)
                     batch_fill_tokens += len(inst.token_ids)
+                else:
+                    next_step.append(sequence)
+            elif isinstance(inst, ImageEmbed):
+                if batch_embed_images < self.config.max_batch_embed_images:
+                    this_step.append(sequence)
+                    batch_embed_images += 1 # todo cope with multi image
+                else:
+                    next_step.append(sequence)
             else:
                 this_step.append(sequence)
 
@@ -467,6 +474,7 @@ if __name__ == '__main__':
         scheduler_config=SchedulerConfig(
             batch_policy = 'continuousbatch', 
             max_running_sequences = 10, 
+            max_batch_fill_tokens = 10
         ), 
         compiler_config=CompilerConfig(
             max_tokens = 64, 
