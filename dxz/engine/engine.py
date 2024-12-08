@@ -23,6 +23,7 @@ class SchedulerConfig:
     max_running_sequences: int = 10
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
+    debug_mode: bool = False
 
 @dataclass
 class EngineConfig:
@@ -49,6 +50,7 @@ class SequenceScheduler:
         self.waiting = Queue()
         self.running: list[Sequence] = []
         self.finished: list[Sequence] = []
+        self.step_cnt = 0
     
     def schedule_new(self, sequences: list[Sequence]):
         for sequence in sequences:
@@ -69,6 +71,7 @@ class SequenceScheduler:
         return finished
 
     def step(self) -> list[tuple[Sequence, Instruction]]:
+        self.step_cnt += 1
         schedule_time = time.perf_counter()
         if self.config.batch_policy == 'nobatch':
             if len(self.running) == 0:
@@ -111,6 +114,12 @@ class SequenceScheduler:
                     next_step.append(sequence)
             else:
                 this_step.append(sequence)
+
+        if self.config.debug_mode:
+            print(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
+            print(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
+            print(f'pc  : ' + ' '.join(f'{seq.pc : 2}'                 for seq in this_step))
+            print(f'inst: ' + ' '.join(f'{seq.curr_instruction()}' for seq in this_step))
 
         self.running = next_step
         return [(seq, seq.next_instruction()) for seq in this_step]
@@ -474,7 +483,8 @@ if __name__ == '__main__':
         scheduler_config=SchedulerConfig(
             batch_policy = 'continuousbatch', 
             max_running_sequences = 10, 
-            max_batch_fill_tokens = 10
+            max_batch_fill_tokens = 1024, 
+            debug_mode = True, 
         ), 
         compiler_config=CompilerConfig(
             max_tokens = 64, 
