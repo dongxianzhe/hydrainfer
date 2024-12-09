@@ -103,7 +103,7 @@ class Compiler:
         # 3. decode (kv_cache eviction)
         max_tokens = compile_param.max_tokens if compile_param.max_tokens is not None else self.config.max_tokens
         curr_fill_inst = last_prefill_instruction
-        for _ in range(max_tokens):
+        for _ in range(max_tokens - 1):
             cache_ids: list[int] = []
             if self.config.kv_cache_eviction_policy == 'random':
                 for _ in range(self.context.n_layers):

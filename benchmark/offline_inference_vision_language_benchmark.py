@@ -4,8 +4,8 @@ from PIL import Image
 import argparse
 import time
 import os
-from offline_inference_benchmark import BenchmarkMetrics
-
+from offline_inference_metric import BenchmarkMetrics
+from simulated_dataset import SimulatedDataset
 
 image_path = f'./dataset/cherry_blossom.jpg'
 image = Image.open(image_path)
@@ -21,20 +21,29 @@ prompt = f"USER: <image>\n{question}\nASSISTANT:"
 
 def main(args: argparse.Namespace):
     # 1. prepare input
-    inputs = [{
-        "prompt" : prompt, 
-        "multi_modal_data":{
-            "image": image
-        }, 
-        "max_tokens": (i + 1) * 10,
-    } for i in range(args.num_prompts)]
+    from transformers import AutoProcessor
+    model_name = "llava-hf/llava-1.5-7b-hf"
+    inputs = SimulatedDataset(
+        processor=AutoProcessor.from_pretrained(model_name), 
+        image_path=image_path, 
+        has_images=[True for _ in range(args.num_prompts)], 
+        prompt_text_lens = [17 for i in range(args.num_prompts)], 
+        output_text_lens = [(i + 1) * 10 for i in range(args.num_prompts)]
+        )
+    # inputs = [{
+    #     "prompt" : prompt, 
+    #     "multi_modal_data":{
+    #         "image": image
+    #     }, 
+    #     "max_tokens": (i + 1) * 10,
+    # } for i in range(args.num_prompts)]
 
     # 2. generate
     if args.backend == 'vllm':
         from vllm import LLM, SamplingParams
-        llm = LLM(model="llava-hf/llava-1.5-7b-hf", max_model_len=4096, enforce_eager=True)
+        llm = LLM(model=model_name, max_model_len=4096, enforce_eager=True)
 
-        sampling_params = [SamplingParams(temperature=0, max_tokens=input['max_tokens'] + 1, ignore_eos=True) for input in inputs]
+        sampling_params = [SamplingParams(temperature=0, max_tokens=input['max_tokens'], ignore_eos=True) for input in inputs]
 
         start = time.perf_counter()
         outputs = llm.generate(inputs, sampling_params=sampling_params)
@@ -94,7 +103,7 @@ def main(args: argparse.Namespace):
         from dxz.memory.virtual_kv_cache import MemoryConfig
         from dxz.memory.compiler import CompilerConfig
         config = EngineConfig(
-            model_name = "llava-hf/llava-1.5-7b-hf", 
+            model_name = model_name, 
             dtype = torch.half, 
             device = torch.device('cuda:0'), 
             memory_config=MemoryConfig(
@@ -103,7 +112,7 @@ def main(args: argparse.Namespace):
             ), 
             scheduler_config=SchedulerConfig(
                 batch_policy = 'continuousbatch', 
-                priority='prefill', 
+                priority='decode', 
                 max_running_sequences = 20, 
                 max_batch_fill_tokens = 1024, 
                 max_batch_embed_images= 3, 
@@ -112,8 +121,8 @@ def main(args: argparse.Namespace):
             ), 
             compiler_config=CompilerConfig(
                 max_tokens = 64, 
+                disaggregate_embed_prefill = False, 
                 kv_cache_eviction_policy = None, 
-                disaggregate_embed_prefill = True, 
                 window_size = 28, 
                 attention_sink_size = 4, 
                 token_pruning_policy = None, 

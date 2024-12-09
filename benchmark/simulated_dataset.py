@@ -29,7 +29,7 @@ class SimulatedDataset:
             prompt_text_len = max(prompt_text_len, 0)
             # 2. image
             if has_image:
-                token_ids += tokenizer.encode(processor.image_token)[1:]
+                token_ids += self.tokenizer.encode(processor.image_token)[1:]
             # 3. question
             suffix_len = min(len(suffix), prompt_text_len)
             prompt_text_len -= suffix_len
@@ -40,11 +40,14 @@ class SimulatedDataset:
             # 4. suffix
             token_ids += suffix[:suffix_len]
 
-            prompt = tokenizer.decode(token_ids, skip_special_tokens=False)
+            prompt = self.tokenizer.decode(token_ids, skip_special_tokens=False)
             self.data.append({"prompt": prompt, "multi_modal_data":{"image":image}, "max_tokens": output_text_len})
     
     def __iter__(self):
         return iter(self.data)
+
+    def __len__(self):
+        return len(self.data)
 
 if __name__ == '__main__':
     from transformers import AutoProcessor
