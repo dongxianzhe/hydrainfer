@@ -187,7 +187,9 @@ class Engine:
         self.scheduler = SequenceScheduler(self.config.scheduler_config)
 
     def generate(self, inputs):
-        """ inputs example
+        """ 
+        genreate is used in offline inference
+        inputs example
         [{
             "prompt" : prompt, 
             "multi_modal_data":{
@@ -196,25 +198,8 @@ class Engine:
             "max_tokens": 50,
         }, ...]
         """
-        arrival_time = time.perf_counter()
         for input in inputs:
-            static_info = self.compiler.compile(
-                prompt = input['prompt'], 
-                images = [input['multi_modal_data']['image']], 
-                compile_params = CompileParameters(max_tokens = input.get('max_tokens', None))
-                )
-            sequence = Sequence(
-                static_info=static_info, 
-                sid = self.sid_allocator, 
-                instructions = static_info.instructions, 
-                virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
-                max_tokens = input.get('max_tokens', 50), 
-                eos_token_id = input.get('eos_token_id', None), 
-                max_seq_len = self.model_config.text_config.max_position_embeddings, 
-            )
-            sequence.metric.arrival_time = arrival_time
-            self.sid_allocator += 1
-            self.scheduler.schedule_new([sequence])
+            self.add_request(input)
 
         outputs = []
         finished: list[Sequence] = []
@@ -238,9 +223,30 @@ class Engine:
 
         return outputs
     
-    def execute_batch_fill(self, contexts: list[tuple[Sequence, Instruction]]):
+    def add_request(self, input):
+        arrival_time = time.perf_counter()
+        static_info = self.compiler.compile(
+            prompt = input['prompt'], 
+            images = [input['multi_modal_data']['image']], 
+            compile_params = CompileParameters(max_tokens = input.get('max_tokens', None))
+            )
+        sequence = Sequence(
+            static_info=static_info, 
+            sid = self.sid_allocator, 
+            instructions = static_info.instructions, 
+            virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
+            max_tokens = input.get('max_tokens', 50), 
+            eos_token_id = input.get('eos_token_id', None), 
+            max_seq_len = self.model_config.text_config.max_position_embeddings, 
+        )
+        sequence.metric.arrival_time = arrival_time
+        self.sid_allocator += 1
+        self.scheduler.schedule_new([sequence])
+        return sequence
+    
+    def execute_batch_fill(self, contexts: list[tuple[Sequence, Instruction]]) -> dict[int, int]:
         if len(contexts) == 0:
-            return
+            return {}
 
         # 1. prepare input
         num_sequences     : int
@@ -381,6 +387,7 @@ class Engine:
             image_featues = None
             
         logits = self.model_runner(input_ids, pixel_values, image_featues, position_ids, model_params)
+        output_tokens = {} # sid -> token_id
         if len(selected_token_ids) > 0:
             t = time.perf_counter()
             sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
@@ -392,6 +399,8 @@ class Engine:
                     sequence.output_token_ids.append(next_token_id)
                     sequence.metric.tokens_time.append(t)
                     i += 1
+                    output_tokens[sequence.sid] = next_token_id
+        return output_tokens
 
     def execute_mov(self, context: tuple[Sequence, Instruction]):
         sequence, instruction = context
@@ -443,11 +452,11 @@ class Engine:
         instruction.image_featues_dst.image_features = image_features
 
     @torch.inference_mode()
-    def step(self):
+    def step(self) -> dict[int, int]:
         # 1. schedule sequence
         contexts = self.scheduler.step()
         if len(contexts) == 0:
-            return
+            return {}
 
         # 2. execute instructions
         fill_contexts = []
@@ -469,7 +478,8 @@ class Engine:
                 image_embed_contexts.append(context)
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
-        self.execute_batch_fill(fill_contexts)
+
+        output_tokens = self.execute_batch_fill(fill_contexts)
 
         if self.config.batch_image_embed:
             self.execute_batch_image_embed(image_embed_contexts)
@@ -485,6 +495,46 @@ class Engine:
                 self.scheduler.schedule_finished([sequence])
             else:
                 self.scheduler.schedule_unfinished([sequence])
+        
+        return output_tokens
+
+from dxz.entrypoint.async_stream import AsyncStream
+import asyncio
+class AsyncEngine:
+    def __init__(self, config: Engine):
+        self.engine = Engine(config=config)
+        self.tokenizer = self.engine.tokenizer
+        self.is_stream_output:dict[int, bool]        = {} # sequence.id -> wheather stream output
+        self.output_streams  :dict[int, AsyncStream] = {} # sequence.id -> output generator
+
+    def generate(self, input, stream: bool) -> AsyncStream:
+        id = self.engine.add_request(prompt).sid
+        output_stream = AsyncStream()
+        self.is_stream_output[id] = stream
+        self.output_streams  [id] = output_stream
+        return output_stream
+    
+    async def loop(self):
+        while True:
+            print('looping...')
+            output_tokens = self.engine.step()
+            print(output_tokens)
+            for sid, token_id in output_tokens.items():
+                if self.is_stream_output[sid]:
+                    output_text = self.tokenizer.decode(token_id)
+                    output_stream = self.output_streams[sid]
+                    output_stream.put(output_stream)
+
+            finished = self.engine.scheduler.pop_finished()
+            for seq in finished:
+                if not self.is_stream_output[sid]:
+                    output_text = self.tokenizer.decode(seq.output_token_ids)
+                    output_stream = self.output_streams[seq.sid]
+                    output_text.put(output_text)
+                output_stream.put(StopAsyncIteration())
+                del self.is_stream_output[seq.id]
+                del self.output_streams[seq.id]
+            await asyncio.sleep(1)
 
 if __name__ == '__main__':
     image_path = f'/home/xzd/projects/dxz/benchmark/dataset/cherry_blossom.jpg'
