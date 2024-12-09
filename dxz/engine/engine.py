@@ -24,6 +24,7 @@ class SchedulerConfig:
     max_running_sequences: int = 10
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
+    batch_embed_fill: bool = False
     debug_mode: bool = False
 
 @dataclass
@@ -96,8 +97,9 @@ class SequenceScheduler:
         batch_embed_images = 0
         prefill_seqs: list[Sequence] = []
         decode_seqs : list[Sequence] = []
-        next_step: Sequence = []
-        this_step: Sequence = []
+        embed_seqs  : list[Sequence] = []
+        next_step: list[Sequence] = []
+        this_step: list[Sequence] = []
         for sequence in self.running:
             inst = sequence.curr_instruction()
             if isinstance(inst, Fill):
@@ -106,13 +108,20 @@ class SequenceScheduler:
                 else:
                     prefill_seqs.append(sequence)
             elif isinstance(inst, ImageEmbed):
-                if batch_embed_images < self.config.max_batch_embed_images:
-                    this_step.append(sequence)
-                    batch_embed_images += 1 # todo cope with multi image
-                else:
-                    next_step.append(sequence)
+                embed_seqs.append(sequence)
             else:
                 this_step.append(sequence)
+
+
+        if len(prefill_seqs) > 0 and not self.config.batch_embed_fill:
+            next_step += embed_seqs
+        else:
+            for seq in embed_seqs:
+                if batch_embed_images < self.config.max_batch_embed_images:
+                    this_step.append(seq)
+                    batch_embed_images += 1 # todo cope with multi image
+                else:
+                    next_step.append(seq)
 
         fill_seqs = prefill_seqs + decode_seqs if self.config.priority == 'prefill' else decode_seqs + prefill_seqs
             
@@ -496,7 +505,7 @@ if __name__ == '__main__':
         scheduler_config=SchedulerConfig(
             batch_policy = 'continuousbatch', 
             max_running_sequences = 10, 
-            max_batch_fill_tokens = 4096, 
+            max_batch_fill_tokens = 1024, 
             debug_mode = True, 
         ), 
         compiler_config=CompilerConfig(
@@ -511,7 +520,7 @@ if __name__ == '__main__':
         batch_image_embed = True, 
     )
     engine = Engine(config)
-    batch_size = 1
+    batch_size = 10
     inputs = [{
         "prompt" : prompt, 
         "multi_modal_data":{

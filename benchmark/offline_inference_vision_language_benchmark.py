@@ -105,8 +105,9 @@ def main(args: argparse.Namespace):
                 batch_policy = 'continuousbatch', 
                 priority='prefill', 
                 max_running_sequences = 20, 
-                max_batch_fill_tokens = 4096, 
+                max_batch_fill_tokens = 1024, 
                 max_batch_embed_images= 3, 
+                batch_embed_fill=False,
                 debug_mode=False, 
             ), 
             compiler_config=CompilerConfig(
