@@ -22,3 +22,4 @@ tmp_dir
 benchmark/mme/*.parquet
 benchmark/*/*.parquet
 **/*.pkl
+!benchmark/dataset/cherry_blossom.jpg
