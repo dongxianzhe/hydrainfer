@@ -1,12 +1,13 @@
 import matplotlib.pyplot as plt
 
-def bar_chart(x, y, figsize=(8, 6), xlabel="", ylabel="", title="", filename="bar_chart"):
+def bar_chart(x, y, figsize=(4, 4), xlabel="", ylabel="", title="", filename="bar_chart"):
     plt.figure(figsize=figsize)
-    bars = plt.bar(x, y, edgecolor='black', linewidth=2, color='#6fa7a9')
+    bars = plt.bar(range(len(x)), y, edgecolor='black', linewidth=2, color='#6fa7a9')
 
-    plt.xlabel(xlabel)
-    plt.ylabel(ylabel)
-    plt.title(title)
+    plt.xticks(ticks=range(len(x)), labels=x, rotation=45)
+    plt.xlabel(xlabel, fontsize=14, fontweight='bold')
+    plt.ylabel(ylabel, fontsize=14, fontweight='bold')
+    plt.title(title, fontsize=14, fontweight='bold')
 
     plt.grid(axis='y', linestyle='--', alpha=0.7)
 

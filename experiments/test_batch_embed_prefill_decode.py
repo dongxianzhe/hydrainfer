@@ -75,7 +75,7 @@ def prefill_batchsize_throughput(batch_size) -> float:
     return throughput, latency
 
 def plot_prefill_batchsize_throughput():
-    batch_sizes = [1, 2, 3, 4, 5, 6, 7, 8]
+    batch_sizes = [1, 2, 4, 8]
     throughputs = []
     latencies   = []
     for batch_size in batch_sizes:
@@ -85,7 +85,7 @@ def plot_prefill_batchsize_throughput():
         latencies.append(latency)
 
     bar_chart(batch_sizes, throughputs, figsize=(8, 6), xlabel="Batch Size", ylabel="Tokens per Second", title="Prefill", filename="prefill_bs2throughput")
-    bar_chart(batch_sizes, latencies, figsize=(8, 6), xlabel="Batch Size", ylabel="latency", title="Prefill", filename="prefill_bs1throughput")
+    bar_chart(batch_sizes, latencies, figsize=(8, 6), xlabel="Batch Size", ylabel="latency", title="Prefill", filename="prefill_bs2latency")
 
 # 2. test decode
 def decode_batchsize_throughput(batch_size) -> float:
@@ -139,7 +139,7 @@ def decode_batchsize_throughput(batch_size) -> float:
     return throughput, latency
 
 def plot_decode_batchsize_throughput():
-    batch_sizes = [i for i in range(1, 64)]
+    batch_sizes = [1, 8, 16, 32, 64]
     throughputs = []
     latencies   = []
     for batch_size in batch_sizes:
@@ -171,7 +171,7 @@ def embed_batchsize_throughput(batch_size) -> float:
     return throughput, latency
 
 def plot_embed_batchsize_throughput():
-    batch_sizes = [i for i in range(1, 8)]
+    batch_sizes = [1, 2, 4, 8]
     throughputs = []
     latencies   = []
     for batch_size in batch_sizes:
@@ -185,6 +185,6 @@ def plot_embed_batchsize_throughput():
 
 # 3. test embed
 if __name__ == '__main__':
-    plot_prefill_batchsize_throughput()
-    plot_decode_batchsize_throughput()
+    # plot_prefill_batchsize_throughput()
+    # plot_decode_batchsize_throughput()
     plot_embed_batchsize_throughput()
