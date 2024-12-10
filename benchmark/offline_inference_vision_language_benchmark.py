@@ -23,13 +23,22 @@ def main(args: argparse.Namespace):
     # 1. prepare input
     from transformers import AutoProcessor
     model_name = "llava-hf/llava-1.5-7b-hf"
-    inputs = SimulatedDataset(
-        processor=AutoProcessor.from_pretrained(model_name), 
-        image_path=image_path, 
-        has_images=[True for _ in range(args.num_prompts)], 
-        prompt_text_lens = [17 for i in range(args.num_prompts)], 
-        output_text_lens = [(i + 1) * 10 for i in range(args.num_prompts)]
-        )
+    if args.only_prefill:
+        inputs = SimulatedDataset(
+            processor=AutoProcessor.from_pretrained(model_name), 
+            image_path=image_path, 
+            has_images=[True for _ in range(args.num_prompts)], 
+            prompt_text_lens = [17 for i in range(args.num_prompts)], 
+            output_text_lens = [1 for i in range(args.num_prompts)]
+            )
+    else:
+        inputs = SimulatedDataset(
+            processor=AutoProcessor.from_pretrained(model_name), 
+            image_path=image_path, 
+            has_images=[True for _ in range(args.num_prompts)], 
+            prompt_text_lens = [17 for i in range(args.num_prompts)], 
+            output_text_lens = [(i + 1) * 10 for i in range(args.num_prompts)]
+            )
     # inputs = [{
     #     "prompt" : prompt, 
     #     "multi_modal_data":{
@@ -204,6 +213,13 @@ if __name__ == '__main__':
         action='store_true',
         default=False,
         help='output generated text'
+    )
+
+    parser.add_argument(
+        '--only-prefill',
+        action='store_true',
+        default=False,
+        help='only test prefill performance'
     )
     args = parser.parse_args()
 
