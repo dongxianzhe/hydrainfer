@@ -188,7 +188,8 @@ class Engine:
 
         import flashinfer
         self.workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.config.device)
-        self.flash_infer_handler = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
+        self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
+        self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
     def generate(self, inputs):
         """ 
         genreate is used in offline inference
@@ -277,6 +278,7 @@ class Engine:
         q_cu_seq_lens     : list[int]
         q_max_seq_len     : int
         selected_token_ids: list[int] = []
+        all_sequences_decode: bool
         for sequence, instruction in contexts:
             token_ids += instruction.token_ids
             position_ids += instruction.position_ids
@@ -285,6 +287,7 @@ class Engine:
                 selected_token_ids.append(len(token_ids) - 1)
         q_max_seq_len = max(q_seq_lens)
         q_cu_seq_lens = list(accumulate(q_seq_lens, initial=0))
+        all_sequences_decode = len(token_ids) == num_sequences
 
         layers_kv_seq_lens           : list[list[int]] = []
         layers_paged_kv_last_page_len: list[list[int]] = []
@@ -336,22 +339,36 @@ class Engine:
         ten_layers_cu_blocks_lens = torch.tensor(layers_cu_blocks_lens, dtype=torch.int, device=self.config.device)
         if self.config.memory_config.memory_management_policy == 'vanilla':
             ten_layers_paged_kv_last_page_len = torch.tensor(layers_paged_kv_last_page_len, dtype=torch.int, device=self.config.device)
-            self.flash_infer_handler.plan(
-                qo_indptr = ten_q_cu_seq_lens, 
-                paged_kv_indptr = ten_layers_cu_blocks_lens[0], 
-                paged_kv_indices = ten_layers_block_tables[0], 
-                paged_kv_last_page_len = ten_layers_paged_kv_last_page_len[0],
-                num_qo_heads = self.model_config.text_config.num_attention_heads,
-                num_kv_heads = self.model_config.text_config.num_key_value_heads,
-                head_dim = self.model_config.text_config.head_dim, 
-                page_size = self.config.memory_config.block_size,
-                causal=True
-            )
+            flash_infer_handler = None
+            if all_sequences_decode:
+                self.batch_decode_with_paged_kvcache_wrapper.plan(
+                    indptr = ten_layers_cu_blocks_lens[0], 
+                    indices = ten_layers_block_tables[0],
+                    last_page_len = ten_layers_paged_kv_last_page_len[0],
+                    num_qo_heads = self.model_config.text_config.num_attention_heads,
+                    num_kv_heads = self.model_config.text_config.num_key_value_heads,
+                    head_dim = self.model_config.text_config.head_dim, 
+                    page_size = self.config.memory_config.block_size,
+                )
+                flash_infer_handler = self.batch_decode_with_paged_kvcache_wrapper
+            else:
+                self.batch_prefill_with_paged_kvcache_wrapper.plan(
+                    qo_indptr = ten_q_cu_seq_lens, 
+                    paged_kv_indptr = ten_layers_cu_blocks_lens[0], 
+                    paged_kv_indices = ten_layers_block_tables[0], 
+                    paged_kv_last_page_len = ten_layers_paged_kv_last_page_len[0],
+                    num_qo_heads = self.model_config.text_config.num_attention_heads,
+                    num_kv_heads = self.model_config.text_config.num_key_value_heads,
+                    head_dim = self.model_config.text_config.head_dim, 
+                    page_size = self.config.memory_config.block_size,
+                    causal=True
+                )
+                flash_infer_handler = self.batch_prefill_with_paged_kvcache_wrapper
             model_params = ModelParameters(
                 attention_params = [AttentionParameters(
                     kv_cache=self.mmu.kv_caches[layer_id],
                     new_cache_slots = ten_layers_new_cache_slots[0],
-                    flash_infer_handler=self.flash_infer_handler,
+                    flash_infer_handler=flash_infer_handler,
                 )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
             )
         elif self.config.memory_config.memory_management_policy == 'shared_layers':
@@ -544,7 +561,7 @@ if __name__ == '__main__':
         dtype = torch.half, 
         device = torch.device('cuda:0'), 
         memory_config=MemoryConfig(
-            memory_management_policy='shared_layers',
+            memory_management_policy='vanilla',
             num_blocks = 20000, 
             block_size = 16, 
         ), 
