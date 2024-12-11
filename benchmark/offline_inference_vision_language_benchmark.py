@@ -116,6 +116,7 @@ def main(args: argparse.Namespace):
             dtype = torch.half, 
             device = torch.device('cuda:0'), 
             memory_config=MemoryConfig(
+                memory_management_policy='vanilla', 
                 num_blocks = 34000, 
                 block_size = 16, 
             ), 
@@ -138,7 +139,6 @@ def main(args: argparse.Namespace):
                 n_embed_output_tokens = 460,
             ), 
             batch_image_embed=True, 
-            ragged_fill_tensor_optimization=False, 
         )
         engine = Engine(config)
 

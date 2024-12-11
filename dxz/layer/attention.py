@@ -139,6 +139,11 @@ class FlashCausalGroupedQueryPageAttention(nn.Module):
             value, # values: Tensor,    # [n_tokens, n_kv_heads, head_dim]
         )
 
+        # 3. compute for each sequence with flash infer
+        if attention_params.flash_infer_handler:
+            output = attention_params.flash_infer_handler.run(query, (key_cache, value_cache))
+            return output.view(-1, self.n_qo_heads * self.head_dim)
+
         # 3. compute for each sequence with flash attn
         output=torch.empty_like(query)
         mha_varlen_fwd(

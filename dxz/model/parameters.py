@@ -99,15 +99,17 @@ from dataclasses import dataclass
 @dataclass
 class AttentionParameters:
     kv_cache: KVCache
-    q_cu_seq_lens: Tensor
-    kv_cu_seq_lens: Tensor
-    new_cache_slots: Tensor
-    block_tables: Tensor
-    cu_blocks_lens: Tensor 
-    num_sequences: int
-    all_sequences_decode: bool
-    q_max_seq_len: int
-    kv_max_seq_len: int
+    q_cu_seq_lens: Tensor = None
+    kv_cu_seq_lens: Tensor = None
+    paged_kv_last_page_len: Tensor = None
+    new_cache_slots: Tensor = None
+    block_tables: Tensor = None
+    cu_blocks_lens: Tensor  = None
+    num_sequences: int = None
+    all_sequences_decode: bool = False
+    q_max_seq_len: int = 128
+    kv_max_seq_len: int = 128
+    flash_infer_handler: "flashinfer.BatchPrefillWithPagedKVCacheWrapper" = None
 
 @dataclass
 class ModelParameters:

@@ -1,5 +1,6 @@
 import torch
 from torch import Tensor
+from dxz.memory.block_allocator import BlockAllocator
 
 try:
     from dxz._C.kernel.kv_cache_kernels import set_kv_cache as set_kv_cache_kernel
@@ -17,6 +18,13 @@ class KVCache:
         self.device       = device
         self.key_cache   = torch.randn(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device)
         self.value_cache = torch.randn(size=(num_blocks, block_size, num_kv_heads, head_size), dtype=dtype, device=device)
+        self.allocator = BlockAllocator(num_blocks)
+
+    def allocate(self, n_blocks: int) -> list[int]:
+        return self.allocator.allocate(n_blocks)
+    
+    def free(self, blocks: list[int]):
+        self.allocator.free(blocks)
     
     def get_kv_cache(self) -> tuple[Tensor, Tensor]:
         return (self.key_cache, self.value_cache)

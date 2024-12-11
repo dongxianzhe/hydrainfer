@@ -4,7 +4,7 @@ from torch import nn, Tensor
 from transformers import LlamaConfig
 import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
-from dxz.model.parameters import ModelParameters
+from dxz.model.parameters import ModelParameters, AttentionParameters
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
 from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
 from dxz._C.kernel.norm import rms_norm
@@ -34,7 +34,7 @@ class LlamaSdpaAttention(nn.Module):
             head_dim=config.head_dim
         )
     
-    def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
         query = self.q_proj(hidden_states)
         key   = self.k_proj(hidden_states)
         value = self.v_proj(hidden_states)
@@ -42,7 +42,7 @@ class LlamaSdpaAttention(nn.Module):
         key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim)
         value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim)
         query, key = self.rotary_emb(query, key, position_ids)
-        hidden_states = self.attention(query, key, value, model_params)
+        hidden_states = self.attention(query, key, value, attention_param)
         return self.o_proj(hidden_states)
 
 class LlamaMLP(nn.Module):

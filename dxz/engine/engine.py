@@ -36,7 +36,6 @@ class EngineConfig:
     compiler_config  : CompilerConfig  = field(default_factory=CompilerConfig)
     scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
     batch_image_embed: bool = True
-    ragged_fill_tensor_optimization: bool = False
 
 @dataclass
 class GenerateOutput:
@@ -161,6 +160,7 @@ class Engine:
         self.model_runner = self.model
         # 2. memory
         self.memory_context = MemoryContext(
+            n_layers=self.model_config.text_config.num_hidden_layers,
             head_size = self.model_config.text_config.head_dim, 
             num_kv_heads=self.model_config.text_config.num_key_value_heads, 
             dtype = self.config.dtype, 
@@ -186,6 +186,9 @@ class Engine:
         self.sid_allocator = 0
         self.scheduler = SequenceScheduler(self.config.scheduler_config)
 
+        import flashinfer
+        self.workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.config.device)
+        self.flash_infer_handler = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
     def generate(self, inputs):
         """ 
         genreate is used in offline inference
@@ -250,133 +253,123 @@ class Engine:
 
         # 1. prepare input
         num_sequences     : int
-        token_ids         : list[int] = []
-        position_ids      : list[int] = []
-        q_seq_lens        : list[int] = []
-        selected_token_ids: list[int] = []
+        num_sequences = len(contexts)
+
         pixel_values      : list[Tensor] = []
         image_featues     : list[Tensor] = []
-        kv_seq_lens       : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
-        block_tables      : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
-        blocks_lens       : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
-        new_cache_slots   : list[list[int]] = [[] for _ in range(self.model_config.text_config.num_hidden_layers)]
-        has_image_fill: bool = False
+        has_image_fill      : bool = False
         has_image_embed_fill: bool = False
-
-        num_sequences = len(contexts)
-        for sequence, instruction in contexts:
-            token_ids += instruction.token_ids
-            if instruction.sample:
-                selected_token_ids.append(len(token_ids) - 1)
-            position_ids += instruction.position_ids
-            q_seq_lens.append(len(instruction.token_ids))
-            for layer_id, (vcids, vid) in enumerate(zip(instruction.cache_ids, instruction.kv_cache_ids)):
-                sequence.virtual_kv_caches[vid].set(vcids)
-                slot_ids = self.mmu.v2p(vcids, sequence.virtual_kv_caches[vid].block_tables)
-                new_cache_slots[layer_id] += slot_ids
-                kv_seq_lens[layer_id].append(sequence.virtual_kv_caches[vid].n_kv_cache_tokens)
-                block_tables[layer_id] += sequence.virtual_kv_caches[vid].block_tables
-                blocks_lens[layer_id].append(len(sequence.virtual_kv_caches[vid].block_tables))
-            if isinstance(instruction, ImageFill):
-                pixel_values.append(instruction.pixel_values)
-                instruction.pixel_values = None
+        for seq, inst in contexts:
+            if isinstance(inst, ImageFill):
+                pixel_values.append(inst.pixel_values)
+                inst.pixel_values = None
                 has_image_fill = True
-            if isinstance(instruction, ImageEmbedFill):
-                image_featues.append(instruction.image_features)
-                instruction.image_features = None
+            if isinstance(inst, ImageEmbedFill):
+                image_featues.append(inst.image_features)
+                inst.image_features = None
                 has_image_embed_fill = True
-
         if has_image_fill and has_image_embed_fill:
             raise Exception('not support pixel value and image embed batch')
 
-        q_max_seq_len : int = max(q_seq_lens)
+        token_ids         : list[int] = []
+        position_ids      : list[int] = []
+        q_seq_lens        : list[int] = []
+        q_cu_seq_lens     : list[int]
+        q_max_seq_len     : int
+        selected_token_ids: list[int] = []
+        for sequence, instruction in contexts:
+            token_ids += instruction.token_ids
+            position_ids += instruction.position_ids
+            q_seq_lens.append(len(instruction.token_ids))
+            if instruction.sample:
+                selected_token_ids.append(len(token_ids) - 1)
+        q_max_seq_len = max(q_seq_lens)
         q_cu_seq_lens = list(accumulate(q_seq_lens, initial=0))
-        kv_cu_seq_lens = [list(accumulate(kv_seq_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)]
-        cu_block_lens = [list(accumulate(blocks_lens[layer_id], initial=0)) for layer_id in range(self.model_config.text_config.num_hidden_layers)]
+
+        layers_kv_seq_lens           : list[list[int]] = []
+        layers_paged_kv_last_page_len: list[list[int]] = []
+        layers_kv_cu_seq_lens        : list[list[int]] = []
+        layers_block_tables          : list[list[int]] = []
+        layers_blocks_lens           : list[list[int]] = []
+        layers_cu_blocks_lens        : list[list[int]] = []
+        layers_new_cache_slots       : list[list[int]] = []
+        if self.config.memory_config.memory_management_policy == 'vanilla':
+            # vanilla policy: all layers have same kv cache management, so we only gather first level attention info
+            n_kv_cache_group = 1
+        elif self.config.memory_config.memory_management_policy == 'shared_layers':
+            # shared_layers policy: all layers have different kv cache management and all layer virtual kv cache shared one kv cache
+            n_kv_cache_group = 32
+
+        for layer_id in range(n_kv_cache_group):
+            layer_kv_seq_lens             : list[int] = []
+            layer_paged_kv_last_page_len  : list[int] = []
+            layer_block_tables            : list[int] = []
+            layer_blocks_lens             : list[int] = []
+            layer_new_cache_slots         : list[int] = []
+            for seq, inst in contexts:
+                virtual_kv_cache = seq.virtual_kv_caches[inst.kv_cache_ids[layer_id]]
+                virtual_kv_cache.set(inst.cache_ids[layer_id])
+                slot_ids = virtual_kv_cache.v2p(inst.cache_ids[layer_id])
+                layer_new_cache_slots += slot_ids
+                layer_kv_seq_lens.append(virtual_kv_cache.n_kv_cache_tokens)
+                layer_block_tables += virtual_kv_cache.block_table
+                layer_blocks_lens.append(len(virtual_kv_cache.block_table))
+                layer_paged_kv_last_page_len.append(
+                    (virtual_kv_cache.n_kv_cache_tokens + self.config.memory_config.block_size - 1) %
+                    self.config.memory_config.block_size + 1
+                )
+            layers_kv_seq_lens.append(layer_kv_seq_lens)
+            layers_block_tables.append(layer_block_tables)
+            layers_blocks_lens.append(layer_blocks_lens)
+            layers_new_cache_slots.append(layer_new_cache_slots)
+            layers_kv_cu_seq_lens.append(list(accumulate(layer_kv_seq_lens, initial=0)))
+            layers_cu_blocks_lens.append(list(accumulate(layer_blocks_lens, initial=0)))
+            layers_paged_kv_last_page_len.append(layer_paged_kv_last_page_len)
+
 
         # 2. prepare tensor data
-        if self.config.ragged_fill_tensor_optimization:
-            def prepare_ragged_tensor(
-                input_ids: list[int], 
-                position_ids: list[int], 
-                q_cu_seq_lens: list[int],    
-                kv_cu_seq_lens: list[list[int]], 
-                new_cache_slots: list[list[int]], 
-                block_tables: list[list[int]],
-                cu_block_lens: list[list[int]],
-                device, 
-            ):
-                ind_ptr  = {}
-                data: list[int] = []
-                ind_ptr['input_ids'] = (len(data), len(data) + len(input_ids))
-                data += input_ids
-                ind_ptr['position_ids'] = (len(data), len(data) + len(position_ids))
-                data += position_ids
-                ind_ptr['q_cu_seq_lens'] = (len(data), len(data) + len(q_cu_seq_lens))
-                data += q_cu_seq_lens
-                ind_ptr['kv_cu_seq_lens'] = []
-                ind_ptr['new_cache_slots'] = []
-                ind_ptr['block_tables'] = []
-                ind_ptr['cu_block_lens'] = []
-                for layer_id in range(len(kv_cu_seq_lens)):
-                    ind_ptr['kv_cu_seq_lens'].append((len(data), len(data) + len(kv_cu_seq_lens[layer_id])))
-                    data += kv_cu_seq_lens[layer_id]
-                    ind_ptr['new_cache_slots'].append((len(data), len(data) + len(new_cache_slots[layer_id])))
-                    data += new_cache_slots[layer_id]
-                    ind_ptr['block_tables'].append((len(data), len(data) + len(block_tables[layer_id])))
-                    data += block_tables[layer_id]
-                    ind_ptr['cu_block_lens'].append((len(data), len(data) + len(cu_block_lens[layer_id])))
-                    data += cu_block_lens[layer_id]
-                ragged_tensor = torch.tensor(data, dtype=torch.int, device=device)
-                return ragged_tensor, ind_ptr
-            ragged_tensor, ind_ptr = prepare_ragged_tensor(
-                input_ids       = token_ids, 
-                position_ids    = position_ids, 
-                q_cu_seq_lens   = q_cu_seq_lens, 
-                kv_cu_seq_lens  = kv_cu_seq_lens, 
-                new_cache_slots = new_cache_slots, 
-                block_tables    = block_tables, 
-                cu_block_lens   = cu_block_lens, 
-                device          = self.config.device, 
+        ten_input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
+        ten_position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
+        ten_q_cu_seq_lens = torch.tensor(q_cu_seq_lens, dtype=torch.int, device=self.config.device)
+        ten_layers_new_cache_slots = torch.tensor(layers_new_cache_slots, dtype=torch.int, device=self.config.device)
+        ten_layers_block_tables = torch.tensor(layers_block_tables, dtype=torch.int, device=self.config.device)
+        ten_layers_cu_blocks_lens = torch.tensor(layers_cu_blocks_lens, dtype=torch.int, device=self.config.device)
+        if self.config.memory_config.memory_management_policy == 'vanilla':
+            ten_layers_paged_kv_last_page_len = torch.tensor(layers_paged_kv_last_page_len, dtype=torch.int, device=self.config.device)
+            self.flash_infer_handler.plan(
+                qo_indptr = ten_q_cu_seq_lens, 
+                paged_kv_indptr = ten_layers_cu_blocks_lens[0], 
+                paged_kv_indices = ten_layers_block_tables[0], 
+                paged_kv_last_page_len = ten_layers_paged_kv_last_page_len[0],
+                num_qo_heads = self.model_config.text_config.num_attention_heads,
+                num_kv_heads = self.model_config.text_config.num_key_value_heads,
+                head_dim = self.model_config.text_config.head_dim, 
+                page_size = self.config.memory_config.block_size,
+                causal=True
             )
-            input_ids = ragged_tensor[ind_ptr['input_ids'][0]:ind_ptr['input_ids'][1]]
-            position_ids = ragged_tensor[ind_ptr['position_ids'][0]:ind_ptr['position_ids'][1]]
             model_params = ModelParameters(
                 attention_params = [AttentionParameters(
-                    kv_cache=self.mmu.kv_cache,
-                    q_cu_seq_lens = ragged_tensor[ind_ptr['q_cu_seq_lens'][0]:ind_ptr['q_cu_seq_lens'][1]], 
-                    kv_cu_seq_lens = ragged_tensor[ind_ptr['kv_cu_seq_lens'][layer_id][0]:ind_ptr['kv_cu_seq_lens'][layer_id][1]], 
-                    new_cache_slots = ragged_tensor[ind_ptr['new_cache_slots'][layer_id][0]:ind_ptr['new_cache_slots'][layer_id][1]], 
-                    block_tables = ragged_tensor[ind_ptr['block_tables'][layer_id][0]:ind_ptr['block_tables'][layer_id][1]], 
-                    cu_blocks_lens = ragged_tensor[ind_ptr['cu_block_lens'][layer_id][0]:ind_ptr['cu_block_lens'][layer_id][1]], 
-                    num_sequences = num_sequences, 
-                    all_sequences_decode = False, 
-                    q_max_seq_len = q_max_seq_len,
-                    kv_max_seq_len = max(kv_seq_lens[layer_id])
+                    kv_cache=self.mmu.kv_caches[layer_id],
+                    new_cache_slots = ten_layers_new_cache_slots[0],
+                    flash_infer_handler=self.flash_infer_handler,
                 )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
             )
-        else:
-            input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
-            position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
-            q_cu_seq_lens = torch.tensor(q_cu_seq_lens, dtype=torch.int, device=self.config.device)
-            kv_cu_seq_lens = torch.tensor(kv_cu_seq_lens, dtype=torch.int, device=self.config.device)
-            new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.config.device)
-            block_tables = torch.tensor(block_tables, dtype=torch.int, device=self.config.device)
-            cu_blocks_lens = torch.tensor(cu_block_lens, dtype=torch.int, device=self.config.device)
+        elif self.config.memory_config.memory_management_policy == 'shared_layers':
+            ten_layers_kv_cu_seq_lens = torch.tensor(layers_kv_cu_seq_lens, dtype=torch.int, device=self.config.device)
             model_params = ModelParameters(
                 attention_params = [AttentionParameters(
-                    kv_cache=self.mmu.kv_cache,
-                    q_cu_seq_lens = q_cu_seq_lens, 
-                    kv_cu_seq_lens = kv_cu_seq_lens[layer_id], 
-                    new_cache_slots = new_cache_slots[layer_id], 
-                    block_tables = block_tables[layer_id], 
-                    cu_blocks_lens = cu_blocks_lens[layer_id], 
+                    kv_cache = self.mmu.kv_caches[0], 
+                    q_cu_seq_lens = ten_q_cu_seq_lens,
+                    kv_cu_seq_lens = ten_layers_kv_cu_seq_lens[layer_id], 
+                    new_cache_slots = ten_layers_new_cache_slots[layer_id],
+                    block_tables = ten_layers_block_tables[layer_id], 
+                    cu_blocks_lens = ten_layers_cu_blocks_lens[layer_id], 
                     num_sequences = num_sequences, 
-                    all_sequences_decode = False, 
-                    q_max_seq_len = q_max_seq_len,
-                    kv_max_seq_len = max(kv_seq_lens[layer_id])
+                    q_max_seq_len = q_max_seq_len, 
+                    kv_max_seq_len = max(layers_kv_seq_lens[layer_id]), 
                 )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
             )
+
         if len(pixel_values):
             pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:
@@ -386,7 +379,8 @@ class Engine:
         else:
             image_featues = None
             
-        logits = self.model_runner(input_ids, pixel_values, image_featues, position_ids, model_params)
+        # 3. forward and sample
+        logits = self.model_runner(ten_input_ids, pixel_values, image_featues, ten_position_ids, model_params)
         output_tokens = {} # sid -> token_id
         if len(selected_token_ids) > 0:
             t = time.perf_counter()
@@ -403,6 +397,7 @@ class Engine:
         return output_tokens
 
     def execute_mov(self, context: tuple[Sequence, Instruction]):
+        raise Exception('not implemented')
         sequence, instruction = context
         src_slot_ids: list[int] = []
         for src_cache_ids, src_kv_cache_id in zip(instruction.src_cache_ids, instruction.src_kv_cache_ids):
@@ -549,6 +544,7 @@ if __name__ == '__main__':
         dtype = torch.half, 
         device = torch.device('cuda:0'), 
         memory_config=MemoryConfig(
+            memory_management_policy='shared_layers',
             num_blocks = 20000, 
             block_size = 16, 
         ), 
@@ -576,8 +572,9 @@ if __name__ == '__main__':
         "multi_modal_data":{
             "image": image
         },
-        "max_tokens":0, 
+        # "max_tokens":0, 
         # "max_tokens":random.randint(30, 70), 
+        "max_tokens": 10, 
         # "max_tokens": i * 10, 
     } for i in range(batch_size)]
 

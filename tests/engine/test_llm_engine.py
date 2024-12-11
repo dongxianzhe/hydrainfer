@@ -1,5 +1,4 @@
-from dxz.engine.llm_engine import LLMEngine
-from dxz.request.sequence import Sequence
+from dxz.engine.llm_engine import LLMEngine, Sequence
 from dxz.memory.block_allocator import BlockAllocator
 import torch
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
