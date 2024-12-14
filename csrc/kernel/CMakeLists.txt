@@ -6,13 +6,15 @@ cc_library(
     kernels
   HDRS 
     kv_cache_kernels/kv_cache_kernels.h
+    position_embedding/rope.h
   SRCS 
     kv_cache_kernels/kv_cache_kernels.cu
+    position_embedding/rope.cu
   DEPS
     glog::glog
     torch
   DEFINES
-    __CUDA_NO_HALF_OPERATORS__
+    # __CUDA_NO_HALF_OPERATORS__
 )
 add_subdirectory(flash_attn)
 add_subdirectory(flash_infer)

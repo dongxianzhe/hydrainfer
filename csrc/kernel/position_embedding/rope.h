@@ -1,6 +1,8 @@
 #pragma once
 #include <torch/torch.h>
 
+namespace mllm::kernel{
+
 // apply rotary embedding to query and key inplace
 void apply_rotary_pos_emb(
     torch::Tensor& query,            // [n_tokens, n_heads, head_dim]
@@ -9,3 +11,5 @@ void apply_rotary_pos_emb(
     const torch::Tensor& cos_sin,    // [max_positions, 2, rotary_dim/2]
     int rotary_dim,
     bool interleaved);
+
+}

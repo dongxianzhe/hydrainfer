@@ -2,6 +2,8 @@
 #include <torch/torch.h>
 #include "dispatch.h"
 
+namespace mllm::kernel{
+
 template <typename T>
 struct RotaryEmbedding {
   // apply rotary embedding to data on position idx
@@ -112,4 +114,6 @@ void apply_rotary_pos_emb(
             k_stride,
             interleaved);
   });
+}
+
 }
