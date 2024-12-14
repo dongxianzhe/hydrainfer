@@ -19,20 +19,20 @@ execute_process(
 # globbing all generated files in sub directory "generated"
 file(GLOB GENERATED_SRC_FILES "${CMAKE_CURRENT_BINARY_DIR}/generated/*.cu")
 
-# cc_library(
-#   NAME 
-#     flash_attn.kernels
-#   HDRS
-#     flash_api.h
-#   SRCS
-#     flash_api.cpp
-#     ${GENERATED_SRC_FILES}
-#   INCLUDES
-#     src
-#   DEPS
-#     torch
-#     cutlass
-# )
+cc_library(
+  NAME 
+    flash_attn.kernels
+  HDRS
+    flash_api.h
+  SRCS
+    flash_api.cpp
+    ${GENERATED_SRC_FILES}
+  INCLUDES
+    src
+  DEPS
+    torch
+    cutlass
+)
 
 pybind_extension(
   NAME

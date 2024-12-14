@@ -7,9 +7,11 @@ cc_library(
   HDRS 
     kv_cache_kernels/kv_cache_kernels.h
     position_embedding/rope.h
+    norm/rms_norm.h
   SRCS 
     kv_cache_kernels/kv_cache_kernels.cu
     position_embedding/rope.cu
+    norm/rms_norm.cu
   DEPS
     glog::glog
     torch

@@ -4,6 +4,8 @@
 #include"reduce/reduce_sum.cuh"
 #include"dispatch.h"
 
+namespace mllm::kernel{
+
 // calculate the root mean square norm.
 // equation: x -> w * x / sqrt(E[x^2] + eps)
 // The mean is calculated over the last dimension
@@ -58,4 +60,6 @@ void rms_norm(torch::Tensor& out,
             epsilon,
             n);
   });
+}
+
 }

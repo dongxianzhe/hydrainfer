@@ -10,4 +10,5 @@ cc_test(
     :memory
     GTest::gtest_main
     :kernels
+    :flash_attn.kernels
 )

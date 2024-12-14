@@ -1,3 +1,5 @@
+list(APPEND COMMON_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
 add_subdirectory(kernel)
 add_subdirectory(benchmark)
 add_subdirectory(memory)
+add_subdirectory(model)
