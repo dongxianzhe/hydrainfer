@@ -131,6 +131,13 @@ message(STATUS "CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
 # 5. find other package from vcpkg
 
 find_package(benchmark CONFIG REQUIRED)
+find_package(glog CONFIG REQUIRED)
+find_package(GTest CONFIG REQUIRED)
+
+# enable testing in this directory so we can do a top-level `make test`.
+# this also includes the BUILD_TESTING option, which is on by default.
+include(CTest)
+include(GoogleTest)
 
 # 7. add subdirectory
 add_subdirectory(csrc)
