@@ -6,10 +6,14 @@ cc_library(
     memory
   HDRS
     block_allocator.h
+    kv_cache.h
   SRCS
     block_allocator.cpp
+    kv_cache.cpp
   DEPS
+    :kernels
     glog::glog
+    torch
 )
 
 cc_test(
@@ -17,6 +21,16 @@ cc_test(
     memory_test
   SRCS
     block_allocator_test.cpp
+  DEPS
+    :memory
+    GTest::gtest_main
+)
+
+cc_test(
+  NAME
+    kv_cache_test
+  SRCS
+    kv_cache_test.cpp
   DEPS
     :memory
     GTest::gtest_main
