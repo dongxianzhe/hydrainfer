@@ -1,5 +1,19 @@
+include(cc_library)
 list(APPEND COMMON_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
 
+cc_library(
+  NAME 
+    kernels
+  HDRS 
+    kv_cache_kernels/kv_cache_kernels.h
+  SRCS 
+    kv_cache_kernels/kv_cache_kernels.cu
+  DEPS
+    glog::glog
+    torch
+  DEFINES
+    __CUDA_NO_HALF_OPERATORS__
+)
 add_subdirectory(flash_attn)
 add_subdirectory(flash_infer)
 add_subdirectory(gemm)

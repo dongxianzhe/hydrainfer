@@ -3,6 +3,8 @@
 
 #include "kv_cache_kernels.h"
 
+namespace mllm::kernel{
+
 #define DISPATCH_CASE_FLOATING_TYPES(...)              \
   AT_DISPATCH_CASE(at::ScalarType::Float, __VA_ARGS__) \
   AT_DISPATCH_CASE(at::ScalarType::Half, __VA_ARGS__)  \
@@ -90,4 +92,6 @@ void set_kv_cache(
             head_dim,
             block_size);
   });
+}
+
 }
