@@ -72,9 +72,7 @@ function(cargo_library)
     "${CMAKE_CURRENT_BINARY_DIR}/${LIB_TARGET}/${LIB_BUILD_TYPE}/${STATIC_LIB_NAME}")
   
 
-  message(STATUS "------------------------------------------------------------")
   message(STATUS "running: ${CARGO_ENV_COMMAND} ${CARGO_EXECUTABLE} ARGS ${CARGO_ARGS}")
-  message(STATUS "------------------------------------------------------------")
 
   add_custom_command(
       OUTPUT ${LIB_FILE}

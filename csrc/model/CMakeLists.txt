@@ -1,14 +1,42 @@
 include(cc_library)
 include(cc_test)
 
+cc_library(
+  NAME 
+    models
+  HDRS
+    models.h
+  SRCS
+    models.cpp
+  DEPS
+    :memory
+    :kernels
+    :flash_attn.kernels
+    glog::glog
+    torch
+)
+
 cc_test(
   NAME
     model_test
   SRCS
     model_test.cpp
   DEPS
-    :memory
+    :models
     GTest::gtest_main
-    :kernels
-    :flash_attn.kernels
+    glog::glog
+    torch
+)
+
+cc_test(
+  NAME
+    fake_model_test
+  HDRS
+    fake_model.h
+  SRCS
+    fake_model_test.cpp
+  DEPS
+    GTest::gtest_main
+    glog::glog
+    torch
 )

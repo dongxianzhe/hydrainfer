@@ -139,6 +139,10 @@ find_package(GTest CONFIG REQUIRED)
 include(CTest)
 include(GoogleTest)
 
+# 6. find rust
+enable_language(Rust)
+find_package(Rust REQUIRED)
+
 # 7. add subdirectory
 add_subdirectory(csrc)
 add_subdirectory(third_party)

@@ -1,6 +1,8 @@
 #pragma once
+
 #include <torch/torch.h>
 #include "norm/rms_norm.h"
+#include "memory/kv_cache.h"
 #include "attention.h"
 #include "position_embed.h"
 #include "linear.h"
