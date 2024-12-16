@@ -122,22 +122,23 @@ def main(args: argparse.Namespace):
             ), 
             scheduler_config=SchedulerConfig(
                 batch_policy = 'continuousbatch', 
-                priority='decode', 
+                priority='prefill', 
                 max_running_sequences = 20, 
                 max_batch_fill_tokens = 1024, 
                 max_batch_embed_images= 3, 
-                batch_embed_fill=False,
-                debug_mode=False, 
+                batch_embed_fill=True,
+                debug_mode=args.debug, 
             ), 
             compiler_config=CompilerConfig(
                 max_tokens = 64, 
-                disaggregate_embed_prefill = False, 
+                disaggregate_embed_prefill = True, 
                 kv_cache_eviction_policy = None, 
                 window_size = 28, 
                 attention_sink_size = 4, 
                 token_pruning_policy = None, 
                 n_embed_output_tokens = 460,
             ), 
+            multi_thread_request_process=True, 
             batch_image_embed=True, 
         )
         engine = Engine(config)
@@ -220,6 +221,13 @@ if __name__ == '__main__':
         action='store_true',
         default=False,
         help='only test prefill performance'
+    )
+
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        default=False,
+        help='print scheduler step info'
     )
     args = parser.parse_args()
 

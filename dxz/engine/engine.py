@@ -1,3 +1,5 @@
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
 import time
 import random
@@ -35,6 +37,7 @@ class EngineConfig:
     memory_config    : MemoryConfig    = field(default_factory=MemoryConfig)
     compiler_config  : CompilerConfig  = field(default_factory=CompilerConfig)
     scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
+    multi_thread_request_process : bool = True
     batch_image_embed: bool = True
 
 @dataclass
@@ -186,10 +189,15 @@ class Engine:
         self.sid_allocator = 0
         self.scheduler = SequenceScheduler(self.config.scheduler_config)
 
+        # 5. flashinfer optimization
         import flashinfer
         self.workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.config.device)
         self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
         self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
+
+        # 6. multi threads request process optimization
+        self.executor = ThreadPoolExecutor(max_workers=32)
+
     def generate(self, inputs):
         """ 
         genreate is used in offline inference
@@ -202,8 +210,15 @@ class Engine:
             "max_tokens": 50,
         }, ...]
         """
-        for input in inputs:
-            self.add_request(input)
+        if self.config.multi_thread_request_process:
+            self.add_request_lock = threading.Lock()
+            def fun(input):
+                with self.add_request_lock:
+                    return self.add_request(input)
+            self.executor.map(fun, inputs)
+        else:
+            for input in inputs:
+                self.add_request(input)
 
         outputs = []
         finished: list[Sequence] = []
@@ -492,7 +507,6 @@ class Engine:
             raise Exception(f'unsupported instrction {type(instruction)}')
 
         output_tokens = self.execute_batch_fill(fill_contexts)
-
         if self.config.batch_image_embed:
             self.execute_batch_image_embed(image_embed_contexts)
         else:
@@ -568,7 +582,8 @@ if __name__ == '__main__':
         scheduler_config=SchedulerConfig(
             batch_policy = 'continuousbatch', 
             max_running_sequences = 10, 
-            max_batch_fill_tokens = 1024, 
+            max_batch_fill_tokens = 500, 
+            max_batch_embed_images= 3, 
             debug_mode = True, 
         ), 
         compiler_config=CompilerConfig(
@@ -591,8 +606,8 @@ if __name__ == '__main__':
         },
         # "max_tokens":0, 
         # "max_tokens":random.randint(30, 70), 
-        "max_tokens": 10, 
-        # "max_tokens": i * 10, 
+        "max_tokens": 1, 
+        # "max_tokens": i * 10, ``
     } for i in range(batch_size)]
 
     import time
