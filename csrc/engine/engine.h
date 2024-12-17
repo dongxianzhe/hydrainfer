@@ -7,14 +7,12 @@
 #include <atomic>
 #include <torch/torch.h>
 
+#include "sequence.h"
 #include "common/concurrent_queue.h"
 
 namespace mllm{
 
 
-struct RequestOutput{
-    std::vector<int> output_token_ids;
-};
 
 class BatchFuture {
 public:

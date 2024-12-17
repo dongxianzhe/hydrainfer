@@ -37,3 +37,13 @@ cc_test(
     GTest::gtest_main
     torch
 )
+
+cc_test(
+  NAME
+    sequence_test
+  SRCS
+    sequence_test.cpp
+  DEPS
+    GTest::gtest_main
+    torch
+)
