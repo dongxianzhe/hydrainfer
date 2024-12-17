@@ -55,8 +55,7 @@ class SequenceScheduler{
 public:
     SequenceScheduler(const SchedulerConfig& config);
     void schedule_new(Sequence* seq);
-    void schedule_running(const std::vector<Sequence*>& seqs);
-    void schedule_unfinished(const std::vector<Sequence*>& seqs);
+    void schedule_running(Sequence* seq);
     void step(std::vector<Sequence*>& this_step);
 private:
     SchedulerConfig config;
@@ -99,6 +98,7 @@ public:
 private:
     std::future<bool> add_request(std::string prompt,
         torch::Tensor pixel_value, 
+        const SamplingParams& sp, 
         bool stream,
         OutputCallback callback);
     void step();
@@ -106,12 +106,14 @@ private:
 public:
     std::future<bool> add_request_async(std::string prompt,
         torch::Tensor pixel_value, 
+        const SamplingParams& sp, 
         bool stream,
         OutputCallback callback);
 
     BatchFuture add_requests_async(
         std::vector<std::string> prompts,
         std::vector<torch::Tensor> pixel_values, 
+        std::vector<SamplingParams> sps, 
         bool stream,
         BatchOutputCallback callback);
 
@@ -127,8 +129,12 @@ private:
     std::atomic_bool running_{false};
     torch::TensorOptions options_;
     std::vector<std::unique_ptr<KVCache>> kv_caches;
+    EngineConfig config;
     FakeConfig model_config;
+    FakeModel model{nullptr};
     std::unique_ptr<SequenceScheduler> scheduler;
+    void execute_batch_fill(std::vector<Sequence*>& seqs);
+    void execute_batch_image_embed(std::vector<Sequence*>& seqs);
 };
 
 

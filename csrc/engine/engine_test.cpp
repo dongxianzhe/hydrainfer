@@ -16,7 +16,8 @@ TEST(engine, add_requests_async){
     };
     std::vector<std::string> prompts{"she", "he", "hello!", "he is"};
     std::vector<torch::Tensor> pixel_values{torch::randn({1, 3, 336, 336}), torch::randn({1, 3, 336, 336}), torch::randn({1, 3, 336, 336}), torch::randn({1, 3, 336, 336})};
-    auto futures = engine.add_requests_async(prompts, pixel_values, false, callback);
+    std::vector<SamplingParams> sps {{2}, {3}, {1}, {4}};
+    auto futures = engine.add_requests_async(prompts, pixel_values, sps, false, callback);
     futures.wait();
 
     std::cout << "main thread finished" << std::endl;
@@ -34,10 +35,12 @@ TEST(engine, add_request_async){
         std::cout << "callback is called" << std::endl;
         return true;
     };
-    engine.add_request_async("she", torch::randn({1, 3, 336, 336}), false, callback);
-    engine.add_request_async("he", torch::randn({1, 3, 336, 336}), false, callback);
-    engine.add_request_async("hello!", torch::randn({1, 3, 336, 336}), false, callback);
-    auto future = engine.add_request_async("he is", torch::randn({1, 3, 336, 336}), false, callback);
+
+
+    engine.add_request_async("she", torch::randn({1, 3, 336, 336}), SamplingParams{1}, false, callback);
+    engine.add_request_async("he", torch::randn({1, 3, 336, 336}), SamplingParams{1}, false, callback);
+    engine.add_request_async("hello!", torch::randn({1, 3, 336, 336}), SamplingParams{1}, false, callback);
+    auto future = engine.add_request_async("he is", torch::randn({1, 3, 336, 336}), SamplingParams{3}, false, callback);
     future.wait();
 
     std::cout << "main thread finished" << std::endl;

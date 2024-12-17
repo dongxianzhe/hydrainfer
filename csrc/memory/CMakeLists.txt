@@ -35,3 +35,13 @@ cc_test(
     :memory
     GTest::gtest_main
 )
+
+# cc_test(
+#   NAME
+#     virtual_kv_cache_test
+#   SRCS
+#     virtual_kv_cache_test.cpp
+#   DEPS
+#     :memory
+#     GTest::gtest_main
+# )

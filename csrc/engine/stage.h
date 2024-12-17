@@ -6,6 +6,7 @@ namespace mllm{
 
 struct Stage{
     enum class StageType {Empty = 0, TextFill = 1, ImageFill = 2, ImageEmbedFill = 3, ImageEmbed = 4};
+    Stage(StageType t) : type(t){}
     StageType type;
     std::vector<int> token_ids;
     std::vector<int> position_ids;
@@ -14,6 +15,7 @@ struct Stage{
     torch::Tensor image_features;
     bool sample;
     int sample_dst_stage_id;
+    int image_feature_dst_stage_id;
 };
 
 // struct Fill : public Stage{

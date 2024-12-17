@@ -7,13 +7,11 @@
 #include "position_embed.h"
 #include "linear.h"
 #include "embedding.h"
+#includee "model_params.h"
 
 namespace mllm{
 
-class ModelParameters{
-public:
-    std::vector<AttentionParams*> attention_params;
-};
+
 
 class LlamaConfig{
 public:
