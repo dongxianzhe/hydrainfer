@@ -27,3 +27,13 @@ cc_test(
     :engine
     GTest::gtest_main
 )
+
+cc_test(
+  NAME
+    stage_test
+  SRCS
+    stage_test.cpp
+  DEPS
+    GTest::gtest_main
+    torch
+)
