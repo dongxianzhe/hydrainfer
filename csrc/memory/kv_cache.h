@@ -12,10 +12,10 @@ public:
 
     ~KVCache();
 
-    KVCache(const BlockAllocator&) = delete;
-    KVCache(BlockAllocator&&) = delete;
-    KVCache& operator=(const BlockAllocator&) = delete;
-    KVCache& operator=(BlockAllocator&&) = delete;
+    KVCache(const KVCache&) = delete;
+    KVCache(KVCache&&) = delete;
+    KVCache& operator=(const KVCache&) = delete;
+    KVCache& operator=(KVCache&&) = delete;
 
     std::vector<int> allocate(int n_blocks);
     
