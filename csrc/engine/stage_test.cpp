@@ -6,7 +6,8 @@ namespace  mllm
 
 TEST(stage, image_embed_fill){
     auto image_features = torch::randn({576, 4096});
-    ImageEmbedFill stage;
+    Stage stage;
+    stage.type = Stage::StageType::Empty;
     stage.image_features = image_features;
 
     std::vector<int> token_ids;
