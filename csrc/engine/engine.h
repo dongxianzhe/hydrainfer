@@ -7,11 +7,64 @@
 #include <atomic>
 #include <torch/torch.h>
 
+#include "memory/kv_cache.h"
+#include "model/fake_model.h"
+#include "tokenizer/tokenizer.h"
 #include "sequence.h"
 #include "common/concurrent_queue.h"
 
 namespace mllm{
 
+struct MemoryConfig{
+    enum class MemoryManagementPolicy{VANILLA = 0, SHARED = 1};
+    MemoryManagementPolicy memory_management_policy = MemoryManagementPolicy::VANILLA;
+    int num_blocks = 10000;
+    int block_size = 16;
+};
+struct StageConfig{
+    int default_max_tokens = 64;
+    bool disaggregate_embed_prefill = true;
+    enum class KVcacheEvictionPolicy{NONE = 0, RANDOM = 1, STREAMINGLLM = 2};
+    KVcacheEvictionPolicy kv_cache_eviction_policy = KVcacheEvictionPolicy::NONE;
+    int window_size = 28;
+    int attention_sink_size = 4;
+    enum class TokenPruningPolicy{NONE = 0, RANDOM = 1, STREAMINGLLM = 2};
+    TokenPruningPolicy token_pruning_policy = TokenPruningPolicy::NONE;
+    int n_embed_output_tokens = 64;
+};
+struct SchedulerConfig{
+    enum class BatchPolicy{NOBATCH = 0, REQUESTLEVEL = 1, CONTINUOUSBATCH=2};
+    BatchPolicy batch_policy = BatchPolicy::CONTINUOUSBATCH;
+    enum class BatchPriority{PREFILL = 0, DECODE = 1};
+    BatchPriority priority = BatchPriority::PREFILL;
+    int max_running_sequences = 10;
+    int max_batch_fill_tokens = 1024;
+    int max_batch_embed_images = 3;
+    bool batch_embed_fill = true;
+    bool debug_mode = false;
+};
+struct EngineConfig{
+    int num_handling_threads = 32;
+    std::string model_path = "";
+    MemoryConfig memory_config;
+    StageConfig stage_config;
+    SchedulerConfig scheduler_config;
+    bool batch_image_embed_forward = true;
+};
+class SequenceScheduler{
+public:
+    SequenceScheduler(const SchedulerConfig& config);
+    void schedule_new(Sequence* seq);
+    void schedule_running(const std::vector<Sequence*>& seqs);
+    void schedule_unfinished(const std::vector<Sequence*>& seqs);
+    void step(std::vector<Sequence*>& this_step);
+private:
+    SchedulerConfig config;
+    ConcurrentQueue<Sequence*> waiting;
+    std::vector<Sequence*> running;
+    std::vector<Sequence*> finished;
+    int step_cnt = 0;
+};
 
 
 class BatchFuture {
@@ -41,49 +94,14 @@ using OutputCallback = std::function<bool(RequestOutput output)>;
 using BatchOutputCallback = std::function<bool(size_t index, RequestOutput output)>;
 class Engine{
 public:
-    struct MemoryConfig{
-        enum class MemoryManagementPolicy{VANILLA = 0, SHARED = 1};
-        MemoryManagementPolicy memory_management_policy = MemoryManagementPolicy::VANILLA;
-        int num_blocks = 10000;
-        int block_size = 16;
-    };
-    struct StageConfig{
-        int default_max_tokens = 64;
-        bool disaggregate_embed_prefill = true;
-        enum class KVcacheEvictionPolicy{NONE = 0, RANDOM = 1, STREAMINGLLM = 2};
-        KVcacheEvictionPolicy kv_cache_eviction_policy = KVcacheEvictionPolicy::NONE;
-        int window_size = 28;
-        int attention_sink_size = 4;
-        enum class TokenPruningPolicy{NONE = 0, RANDOM = 1, STREAMINGLLM = 2};
-        TokenPruningPolicy token_pruning_policy = TokenPruningPolicy::NONE;
-        int n_embed_output_tokens = 64;
-    };
-    struct SchedulerConfig{
-        enum class BatchPolicy{NOBATCH = 0, REQUESTLEVEL = 1, CONTINUOUSBATCH=2};
-        BatchPolicy batch_policy = BatchPolicy::CONTINUOUSBATCH;
-        enum class BatchPriority{PREFILL = 0, DECODE = 1};
-        BatchPriority priority = BatchPriority::PREFILL;
-        int max_running_sequences = 10;
-        int max_batch_fill_tokens = 1024;
-        int max_batch_embed_images = 3;
-        bool batch_embed_fill = true;
-        bool debug_mode = false;
-    };
-    struct EngineConfig{
-        int num_handling_threads = 32;
-        std::string model_path = "";
-        MemoryConfig memory_config;
-        StageConfig stage_config;
-        SchedulerConfig scheduler_config;
-        bool batch_image_embed_forward = true;
-    };
     Engine(const EngineConfig& config);
 
-public:
+private:
     std::future<bool> add_request(std::string prompt,
         torch::Tensor pixel_value, 
         bool stream,
         OutputCallback callback);
+    void step();
 
 public:
     std::future<bool> add_request_async(std::string prompt,
@@ -103,9 +121,15 @@ private:
     void handling_loop(size_t tid);
     ConcurrentQueue<Task> queue_;
     std::vector<std::thread> handling_threads_;
+    std::vector<std::unique_ptr<Tokenizer>> tokenizers_;
     std::thread loop_thread_;
     std::atomic_bool stoped_{false};
     std::atomic_bool running_{false};
+    torch::TensorOptions options_;
+    std::vector<std::unique_ptr<KVCache>> kv_caches;
+    FakeConfig model_config;
+    std::unique_ptr<SequenceScheduler> scheduler;
 };
+
 
 }

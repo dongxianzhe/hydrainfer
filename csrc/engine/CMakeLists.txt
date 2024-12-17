@@ -11,6 +11,8 @@ cc_library(
     engine.cpp
   DEPS
     :common
+    :memory
+    :tokenizer
     Folly::folly
     absl::time
     absl::synchronization

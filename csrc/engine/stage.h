@@ -5,7 +5,7 @@
 namespace mllm{
 
 struct Stage{
-    enum class StageType {Empty = 0, TextFill = 1, ImageFill = 2, ImageEmbedFill = 3};
+    enum class StageType {Empty = 0, TextFill = 1, ImageFill = 2, ImageEmbedFill = 3, ImageEmbed = 4};
     StageType type;
     std::vector<int> token_ids;
     std::vector<int> position_ids;

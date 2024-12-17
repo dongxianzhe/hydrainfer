@@ -5,7 +5,8 @@
 namespace mllm{
 
 TEST(engine, add_requests_async){
-    Engine::EngineConfig config;
+    EngineConfig config;
+    config.model_path = "/home/xzd/.cache/huggingface/hub/models--llava-hf--llava-1.5-7b-hf/snapshots/8c85e9a4d626b7b908448be32c1ba5ad79b95e76";
 
     Engine engine(config);
 
@@ -24,7 +25,8 @@ TEST(engine, add_requests_async){
 }
 
 TEST(engine, add_request_async){
-    Engine::EngineConfig config;
+    EngineConfig config;
+    config.model_path = "/home/xzd/.cache/huggingface/hub/models--llava-hf--llava-1.5-7b-hf/snapshots/8c85e9a4d626b7b908448be32c1ba5ad79b95e76";
 
     Engine engine(config);
 
@@ -35,7 +37,7 @@ TEST(engine, add_request_async){
     engine.add_request_async("she", torch::randn({1, 3, 336, 336}), false, callback);
     engine.add_request_async("he", torch::randn({1, 3, 336, 336}), false, callback);
     engine.add_request_async("hello!", torch::randn({1, 3, 336, 336}), false, callback);
-    auto future = engine.add_request("he is", torch::randn({1, 3, 336, 336}), false, callback);
+    auto future = engine.add_request_async("he is", torch::randn({1, 3, 336, 336}), false, callback);
     future.wait();
 
     std::cout << "main thread finished" << std::endl;
@@ -44,7 +46,7 @@ TEST(engine, add_request_async){
 }
 
 TEST(engine, engine_config){
-    Engine::EngineConfig config;
+    EngineConfig config;
     EXPECT_EQ(config.memory_config.block_size, 16);
 }
 
