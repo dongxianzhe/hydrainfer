@@ -133,6 +133,8 @@ message(STATUS "CMAKE_CXX_FLAGS_DEBUG: ${CMAKE_CXX_FLAGS_DEBUG}")
 find_package(benchmark CONFIG REQUIRED)
 find_package(glog CONFIG REQUIRED)
 find_package(GTest CONFIG REQUIRED)
+find_package(absl CONFIG REQUIRED)
+find_package(folly CONFIG REQUIRED)
 
 # enable testing in this directory so we can do a top-level `make test`.
 # this also includes the BUILD_TESTING option, which is on by default.

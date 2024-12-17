@@ -3,6 +3,15 @@
   "version": "0.0.1",
   "dependencies": [
     {
+      "name": "folly",
+      "version>=": "2024.01.01.00",
+      "default-features": false
+    },
+    {
+      "name": "abseil",
+      "version>=": "20230125.3"
+    },
+    {
       "name": "gtest",
       "version>=": "1.13.0"
     },

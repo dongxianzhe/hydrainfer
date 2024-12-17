@@ -5,8 +5,10 @@ cc_library(
   NAME 
     common
   HDRS
+    concurrent_queue.h
     slice.h
   SRCS
+    common.cpp
   DEPS
     glog::glog
 )
