@@ -43,8 +43,41 @@ using OutputCallback = std::function<bool(RequestOutput output)>;
 using BatchOutputCallback = std::function<bool(size_t index, RequestOutput output)>;
 class Engine{
 public:
+    struct MemoryConfig{
+        enum class MemoryManagementPolicy{VANILLA = 0, SHARED = 1};
+        MemoryManagementPolicy memory_management_policy = MemoryManagementPolicy::VANILLA;
+        int num_blocks = 10000;
+        int block_size = 16;
+    };
+    struct StageConfig{
+        int default_max_tokens = 64;
+        bool disaggregate_embed_prefill = true;
+        enum class KVcacheEvictionPolicy{NONE = 0, RANDOM = 1, STREAMINGLLM = 2};
+        KVcacheEvictionPolicy kv_cache_eviction_policy = KVcacheEvictionPolicy::NONE;
+        int window_size = 28;
+        int attention_sink_size = 4;
+        enum class TokenPruningPolicy{NONE = 0, RANDOM = 1, STREAMINGLLM = 2};
+        TokenPruningPolicy token_pruning_policy = TokenPruningPolicy::NONE;
+        int n_embed_output_tokens = 64;
+    };
+    struct SchedulerConfig{
+        enum class BatchPolicy{NOBATCH = 0, REQUESTLEVEL = 1, CONTINUOUSBATCH=2};
+        BatchPolicy batch_policy = BatchPolicy::CONTINUOUSBATCH;
+        enum class BatchPriority{PREFILL = 0, DECODE = 1};
+        BatchPriority priority = BatchPriority::PREFILL;
+        int max_running_sequences = 10;
+        int max_batch_fill_tokens = 1024;
+        int max_batch_embed_images = 3;
+        bool batch_embed_fill = true;
+        bool debug_mode = false;
+    };
     struct EngineConfig{
         int num_handling_threads = 32;
+        std::string model_path = "";
+        MemoryConfig memory_config;
+        StageConfig stage_config;
+        SchedulerConfig scheduler_config;
+        bool batch_image_embed_forward = true;
     };
     Engine(const EngineConfig& config);
 

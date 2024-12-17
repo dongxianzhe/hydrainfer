@@ -43,4 +43,10 @@ TEST(engine, add_request_async){
     engine.stop();
 }
 
+TEST(engine, engine_config){
+    Engine::EngineConfig config;
+    EXPECT_EQ(config.memory_config.block_size, 16);
+}
+
+
 }
