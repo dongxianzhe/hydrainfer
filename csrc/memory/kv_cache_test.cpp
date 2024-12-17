@@ -11,10 +11,9 @@ TEST(KVCacheTest, creation){
     int block_size = 16;
     int num_kv_heads = 32;
     int head_size = 128;
-    torch::Dtype dtype(torch::kHalf);
-    torch::Device device(torch::kCUDA);
+    torch::TensorOptions options = torch::dtype(torch::kHalf).device(torch::kCUDA);
 
-    KVCache kv_cache(num_blocks, block_size, num_kv_heads, head_size, dtype, device);
+    KVCache kv_cache(num_blocks, block_size, num_kv_heads, head_size, options);
 }
 
 TEST(KVCacheTest, set_kv_cache){
@@ -26,7 +25,8 @@ TEST(KVCacheTest, set_kv_cache){
     torch::Device device(torch::kCUDA);
     int n_tokens = 100;
 
-    KVCache kv_cache(num_blocks, block_size, num_kv_heads, head_size, dtype, device);
+    torch::TensorOptions options = torch::dtype(torch::kHalf).device(torch::kCUDA);
+    KVCache kv_cache(num_blocks, block_size, num_kv_heads, head_size, options);
     auto [key_cache, value_cache] = kv_cache.get_kv_cache();
     torch::Tensor key_cache_ref = key_cache.clone();
     torch::Tensor value_cache_ref = value_cache.clone();

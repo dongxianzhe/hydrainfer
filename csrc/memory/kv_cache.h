@@ -8,7 +8,7 @@
 namespace mllm{
 class KVCache final{
 public:
-    KVCache(int num_blocks, int block_size, int num_kv_heads, int head_size, torch::Dtype dtype, torch::Device device);
+    KVCache(int num_blocks, int block_size, int num_kv_heads, int head_size, const torch::TensorOptions& options);
 
     ~KVCache();
 
@@ -30,8 +30,7 @@ private:
     int block_size_;
     int num_kv_heads_;
     int head_size_;
-    torch::Dtype dtype_;
-    torch::Device device_;
+    torch::TensorOptions options_;
     torch::Tensor key_cache_;
     torch::Tensor value_cache_;
     BlockAllocator allocator_;

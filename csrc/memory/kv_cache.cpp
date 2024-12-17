@@ -6,9 +6,9 @@
 
 namespace mllm{
 
-KVCache::KVCache(int num_blocks, int block_size, int num_kv_heads, int head_size, torch::Dtype dtype, torch::Device device) : num_blocks_(num_blocks), block_size_(block_size), num_kv_heads_(num_kv_heads), head_size_(head_size), dtype_(dtype), device_(device), allocator_(BlockAllocator(num_blocks)){
-    key_cache_ = torch::randn({num_blocks, block_size, num_kv_heads, head_size}, torch::dtype(dtype_).device(device_));
-    value_cache_ = torch::randn({num_blocks, block_size, num_kv_heads, head_size}, torch::dtype(dtype_).device(device_));
+KVCache::KVCache(int num_blocks, int block_size, int num_kv_heads, int head_size, const torch::TensorOptions& options) : num_blocks_(num_blocks), block_size_(block_size), num_kv_heads_(num_kv_heads), head_size_(head_size), options_(options), allocator_(BlockAllocator(num_blocks)){
+    key_cache_ = torch::randn({num_blocks, block_size, num_kv_heads, head_size}, options);
+    value_cache_ = torch::randn({num_blocks, block_size, num_kv_heads, head_size}, options);
 }
 
 KVCache::~KVCache() {}
