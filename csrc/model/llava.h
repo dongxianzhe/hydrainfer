@@ -1,6 +1,7 @@
 #pragma once
 #include "clip.h"
 #include "llama.h"
+#include "model_loader/state_dict.h"
 
 namespace mllm{
 
@@ -101,7 +102,7 @@ public:
     int image_token_index_;
 public:
     LlavaForConditionalGenerationImpl(const LlavaConfig& config, const torch::TensorOptions& options) : vision_feature_layer_(config.vision_feature_layer), image_token_index_(config.vision_config.image_token_index){
-        vision_tower_ = register_module("vision_tower_", CLIPVisionModel(config.vision_config, options));
+        vision_tower_ = register_module("vision_tower", CLIPVisionModel(config.vision_config, options));
         multi_modal_projector_ = register_module("multi_modal_projector", LlavaMultiModalProjector(config, options));
         language_model_ = register_module("language_model", LlamaForCausalLM(config.text_config, options));
     }

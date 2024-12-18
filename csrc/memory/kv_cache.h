@@ -19,7 +19,7 @@ public:
 
     std::vector<int> allocate(int n_blocks);
     
-    void free(const std::vector<int> blocks);
+    void free(const std::vector<int>& blocks);
     
     std::tuple<torch::Tensor, torch::Tensor> get_kv_cache() const;
 

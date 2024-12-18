@@ -1,6 +1,7 @@
 #pragma once
 #include "stage.h"
 #include <vector>
+#include "request.h"
 
 namespace mllm{
 
@@ -8,13 +9,6 @@ struct SamplingParams{
     int max_tokens = -1;
 };
 
-struct RequestOutput{
-    std::vector<int> output_token_ids;
-    float arrival_time = 0.;
-    float first_schedule_time = 0.;
-    std::vector<int> tokens_times;
-    float finished_time = 0.;
-};
 
 struct Sequence{
     std::vector<Stage> stages;
@@ -24,6 +18,7 @@ struct Sequence{
     
     RequestOutput request_output;
     int max_tokens;
+    OnOutput on_output;
 };
 
 }

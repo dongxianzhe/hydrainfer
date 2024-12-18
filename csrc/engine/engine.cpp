@@ -102,6 +102,7 @@ void SequenceScheduler::step(std::vector<Sequence*>& this_step){
     }
     if(config.debug_mode){
         printf("------------------------------ step {%d} ------------------------------\n", step_cnt);
+        printf("stages: ");for(int i = 0;i < this_step.size();i ++)printf("%d ", static_cast<int>(this_step[i]->stages[this_step[i]->curr_stage_id].type));puts("");
     }
     running = next_step;
 }
@@ -111,13 +112,16 @@ Engine::Engine(const EngineConfig& config) : config(config) {
     options_ = torch::dtype(torch::kHalf).device(torch::kCUDA);
     const std::string tokenizer_path = config.model_path + "/tokenizer.json";
     CHECK(std::filesystem::exists(tokenizer_path));
-    auto tokenizer = HFTokenizer::from_file(tokenizer_path);
+    tokenizer = HFTokenizer::from_file(tokenizer_path);
 
     model = FakeModel(model_config, options_);
     // 2. memory
     for(int i = 0;i < model_config.n_layers;i ++){
         kv_caches.emplace_back(std::make_unique<KVCache>(config.memory_config.num_blocks / model_config.n_layers, config.memory_config.block_size, model_config.n_kv_heads, model_config.head_size, options_));
     }
+
+    // 3. scheduler
+    scheduler = std::make_unique<SequenceScheduler>(config.scheduler_config);
     
     // 3. sequence build
     for(int i = 0;i < config.num_handling_threads;i ++){
@@ -141,21 +145,20 @@ std::future<bool> Engine::add_request(std::string prompt, torch::Tensor pixel_va
     queue_.push([this, promise = std::move(promise), prompt = std::move(prompt), pixel_value=std::move(pixel_value), sp = std::move(sp), stream, callback = std::move(callback)](size_t tid) mutable {
         CHECK(!prompt.empty());
         // 1. tokenize
+        std::vector<int>encoded_token_ids;
+        CHECK(tokenizers_[tid]->encode(prompt, &encoded_token_ids));
         std::vector<int> token_ids;
-        CHECK(tokenizers_[tid]->encode(prompt, &token_ids));
-        std::vector<int> inserted_token_ids;
-        inserted_token_ids.reserve(token_ids.size() + model_config.n_image_tokens - 1);
-        for(int i = 0;i < token_ids.size();i ++){
-            if(token_ids[i] != model_config.image_token_id)inserted_token_ids.push_back(token_ids[i]);
-            else for(int i = 0;i < model_config.n_image_tokens;i ++)inserted_token_ids.push_back(token_ids[i]);
+        token_ids.reserve(encoded_token_ids.size() + model_config.n_image_tokens - 1);
+        for(int i = 0;i < encoded_token_ids.size();i ++){
+            if(encoded_token_ids[i] != model_config.image_token_id)token_ids.push_back(encoded_token_ids[i]);
+            else for(int i = 0;i < model_config.n_image_tokens;i ++)token_ids.push_back(encoded_token_ids[i]);
         }
+
         Sequence* seq = new Sequence();
-        // 2. chunked stages
+        // // 2. chunked stages
         if(config.stage_config.disaggregate_embed_prefill){
             Stage image_embed(Stage::StageType::ImageEmbed);
             Stage prefill(Stage::StageType::TextFill);
-            seq->stages.push_back(image_embed);
-            seq->stages.push_back(prefill);
             image_embed.pixel_values = pixel_value;
             image_embed.image_feature_dst_stage_id = 1;
             prefill.token_ids = token_ids;
@@ -163,30 +166,48 @@ std::future<bool> Engine::add_request(std::string prompt, torch::Tensor pixel_va
             for(int i = 0;i < token_ids.size();i ++)prefill.cache_ids.push_back(i);
             prefill.sample = true;
             prefill.sample_dst_stage_id = 2;
+            seq->stages.push_back(image_embed);
+            seq->stages.push_back(prefill);
         } 
         else{
             Stage prefill(Stage::StageType::TextFill);
-            seq->stages.push_back(prefill);
             prefill.token_ids = token_ids;
             for(int i = 0;i < token_ids.size();i ++)prefill.position_ids.push_back(i);
             for(int i = 0;i < token_ids.size();i ++)prefill.cache_ids.push_back(i);
             prefill.sample = true;
             prefill.sample_dst_stage_id = 1;
+            seq->stages.push_back(prefill);
         }
         int n_promp_tokens = token_ids.size();
         int max_tokens = sp.max_tokens != -1 ? sp.max_tokens : config.stage_config.default_max_tokens;
         for(int i = 0;i < max_tokens - 1;i ++){
             Stage decode(Stage::StageType::TextFill);
-            seq->stages.push_back(decode);
             decode.position_ids.push_back(n_promp_tokens + i);
             decode.cache_ids.push_back(n_promp_tokens + i);
             decode.sample = true;
-            decode.sample_dst_stage_id = seq->stages.size();
+            decode.sample_dst_stage_id = seq->stages.size() + 1;
+            seq->stages.push_back(decode);
         }
         Stage empty(Stage::StageType::Empty);
         seq->stages.push_back(empty);
+        seq->on_output = callback;
+        if(config.stage_config.debug_mode){
+            puts("-----------------------sequence info----------------------");
+            printf("num stages: %d", static_cast<int>(seq->stages.size()));puts("");
+            for(auto& stage : seq->stages){
+                printf("stage type: %d \n", static_cast<int>(stage.type));
+                printf("token_ids: ");for(int i = 0;i < stage.token_ids.size();i ++)printf("%d ", stage.token_ids[i]);puts("");
+                printf("position_ids: ");for(int i = 0;i < stage.position_ids.size();i ++)printf("%d ", stage.position_ids[i]);puts("");
+                printf("cache_ids: ");for(int i = 0;i < stage.cache_ids.size();i ++)printf("%d ", stage.cache_ids[i]);puts("");
+                printf("sample: %d", stage.sample);puts("");
+                printf("sample_dst_stage_id: %d", stage.sample_dst_stage_id);puts("");
+                printf("image_feature_dst_stage_id: %d", stage.image_feature_dst_stage_id);puts("");
+                puts("");
+            }
+            puts("------------------------------------------------------------");
+        }
 
-        // 3. schedule
+        // // 3. schedule
         scheduler->schedule_new(seq);
         promise.set_value(true);
     });
@@ -274,14 +295,23 @@ void Engine::step(){
         }
     }
     execute_batch_fill(fill);
-    if(config.batch_image_embed_forward)execute_batch_image_embed(fill);
+    if(config.batch_image_embed_forward)execute_batch_image_embed(image_embed);
     else CHECK(false) << "not implemented for now";
     // 3. schedule sequence
     for(int i = 0;i < this_step.size();i ++){
         Sequence* seq = this_step[i];
         seq->curr_stage_id ++;
         if(seq->curr_stage_id >= seq->stages.size()){
-            printf("todo finish sequence");
+            // 1. process request output
+            auto& output = seq->request_output;
+            output.output_text = tokenizer->decode(output.output_token_ids, true);
+
+            // 2. call back python server
+            seq->on_output(seq->request_output);
+
+            // 3. free sequence
+            kv_caches[0]->free(seq->block_tables);
+            delete seq;
         }else{
             scheduler->schedule_running(seq);
         }
@@ -362,6 +392,15 @@ void Engine::execute_batch_fill(std::vector<Sequence*>& seqs){
         layer_paged_kv_last_page_len.push_back((seq->n_kv_cache_tokens + config.memory_config.block_size - 1) % config.memory_config.block_size + 1);
     }
     // 2. prepare tensor
+    // printf("token_ids: ");for(int i = 0;i < token_ids.size();i ++)printf("%d ", token_ids[i]);puts("");
+    // printf("position_ids: ");for(int i = 0;i < position_ids.size();i ++)printf("%d ",position_ids[i]);puts("");
+    // printf("q_cu_seq_lens: ");for(int i = 0;i < q_cu_seq_lens.size();i ++)printf("%d ",q_cu_seq_lens[i]);puts("");
+    // printf("layer_new_cache_slots: ");for(int i = 0;i < layer_new_cache_slots.size();i ++)printf("%d ", layer_new_cache_slots[i]);puts("");
+    // printf("layer_block_tables: ");for(int i = 0;i < layer_block_tables.size();i ++)printf("%d ",layer_block_tables[i]);puts("");
+    // printf("layer_cu_block_lens: ");for(int i = 0;i < layer_cu_blocks_lens.size();i ++)printf("%d ", layer_cu_blocks_lens[i]);puts("");
+    // printf("layer_kv_cu_seq_lens: ");for(int i = 0;i < layer_kv_cu_seq_lens.size(); i++)printf("%d ", layer_kv_cu_seq_lens[i]);puts("");
+    // printf("select_token_ids: ");for(int i = 0;i < selected_token_ids.size();i ++)printf("%d ", selected_token_ids[i]);puts("");
+
     torch::TensorOptions int_options = torch::dtype(torch::kInt32).device(torch::kCUDA);
     auto ten_input_ids = torch::tensor(token_ids, int_options);
     auto ten_position_ids = torch::tensor(position_ids, int_options);

@@ -140,7 +140,7 @@ public:
 public:
     CLIPVisionEmbeddingsImpl(CLIPConfig config, const torch::TensorOptions& options) : hidden_size_(config.hidden_size), image_size_(config.image_size), patch_size_(config.patch_size), num_channels_(config.num_channels), num_positions_((config.image_size / config.patch_size) * (config.image_size / config.patch_size) + 1){
         class_embedding_ = register_parameter("class_embedding", torch::empty({hidden_size_}, options), false);
-        patch_embedding_ = register_module("patch_embedding_", Conv2d(config.num_channels, config.hidden_size, config.patch_size, config.patch_size, false, options));
+        patch_embedding_ = register_module("patch_embedding", Conv2d(config.num_channels, config.hidden_size, config.patch_size, config.patch_size, false, options));
         position_embedding_ = register_module("position_embedding", Embedding(num_positions_, config.hidden_size, options));
         auto p = torch::arange(num_positions_, options.dtype(torch::kInt));
         position_ids_ = register_buffer("position_ids", p); 

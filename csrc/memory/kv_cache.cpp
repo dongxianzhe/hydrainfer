@@ -17,7 +17,7 @@ std::vector<int> KVCache::allocate(int n_blocks){
     return allocator_.allocate(n_blocks);
 }
 
-void KVCache::free(const std::vector<int> blocks){
+void KVCache::free(const std::vector<int>& blocks){
     allocator_.free(blocks);
 }
 

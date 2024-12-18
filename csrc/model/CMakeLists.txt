@@ -11,6 +11,7 @@ cc_library(
   DEPS
     :memory
     :kernels
+    :state_dict
     :flash_attn.kernels
     glog::glog
     torch
@@ -36,6 +37,7 @@ cc_test(
   SRCS
     fake_model_test.cpp
   DEPS
+    :state_dict
     GTest::gtest_main
     glog::glog
     torch

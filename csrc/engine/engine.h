@@ -31,6 +31,7 @@ struct StageConfig{
     enum class TokenPruningPolicy{NONE = 0, RANDOM = 1, STREAMINGLLM = 2};
     TokenPruningPolicy token_pruning_policy = TokenPruningPolicy::NONE;
     int n_embed_output_tokens = 64;
+    bool debug_mode = false;
 };
 struct SchedulerConfig{
     enum class BatchPolicy{NOBATCH = 0, REQUESTLEVEL = 1, CONTINUOUSBATCH=2};
@@ -89,8 +90,6 @@ private:
     std::unique_ptr<std::vector<std::future<bool>>> futures_;
 };
 
-using OutputCallback = std::function<bool(RequestOutput output)>;
-using BatchOutputCallback = std::function<bool(size_t index, RequestOutput output)>;
 class Engine{
 public:
     Engine(const EngineConfig& config);
@@ -101,9 +100,9 @@ private:
         const SamplingParams& sp, 
         bool stream,
         OutputCallback callback);
-    void step();
 
 public:
+    void step();
     std::future<bool> add_request_async(std::string prompt,
         torch::Tensor pixel_value, 
         const SamplingParams& sp, 
@@ -124,6 +123,7 @@ private:
     ConcurrentQueue<Task> queue_;
     std::vector<std::thread> handling_threads_;
     std::vector<std::unique_ptr<Tokenizer>> tokenizers_;
+    std::unique_ptr<Tokenizer> tokenizer;
     std::thread loop_thread_;
     std::atomic_bool stoped_{false};
     std::atomic_bool running_{false};

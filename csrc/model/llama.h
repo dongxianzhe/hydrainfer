@@ -7,7 +7,8 @@
 #include "position_embed.h"
 #include "linear.h"
 #include "embedding.h"
-#includee "model_params.h"
+#include "model_params.h"
+#include "attention_params.h"
 
 namespace mllm{
 
@@ -91,7 +92,7 @@ public:
             config.head_size
         ));
     }
-    torch::Tensor forward(torch::Tensor hidden_states, torch::Tensor position_ids, const AttentionParams& attention_params){
+    torch::Tensor forward(torch::Tensor hidden_states, torch::Tensor position_ids, const AttentionParameters& attention_params){
         auto query = q_proj_(hidden_states);
         auto key   = k_proj_(hidden_states);
         auto value = v_proj_(hidden_states);
@@ -124,7 +125,7 @@ public:
     torch::Tensor forward(torch::Tensor hidden_states, torch::Tensor position_ids, const ModelParameters& model_params){
         auto residual = hidden_states;
         hidden_states = input_layernorm_(hidden_states);
-        hidden_states = self_attn_(hidden_states, position_ids, *model_params.attention_params[layer_id_]);
+        hidden_states = self_attn_(hidden_states, position_ids, model_params.attention_params[layer_id_]);
         hidden_states = residual + hidden_states;
         residual = hidden_states;
         hidden_states = post_attention_layernorm_(hidden_states);
@@ -153,7 +154,10 @@ public:
         norm_ = register_module("norm", LlamaRMSNorm(config.hidden_size, config.rms_norm_eps, options));
     }
     torch::Tensor forward(torch::Tensor input_ids, torch::Tensor position_ids, const ModelParameters& model_params){
-        auto hidden_states = embed_tokens_(input_ids);
+        // if input_ids not int32, then it is already embeded
+        torch::Tensor hidden_states;
+        if(input_ids.dtype() == torch::kInt32)hidden_states = embed_tokens_(input_ids);
+        else hidden_states = input_ids;
         for(int i = 0;i < layers_.size();i ++){
             auto& layer = layers_[i];
             hidden_states = layer(hidden_states, position_ids, model_params);
