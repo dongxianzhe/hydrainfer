@@ -35,4 +35,6 @@ cc_library(
     huggingface
     # glog::glog
     # re2::re2
+  COPTS
+    -fPIC
 )

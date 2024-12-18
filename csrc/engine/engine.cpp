@@ -263,11 +263,11 @@ void Engine::stop(){
     for(auto& thread : handling_threads_)thread.join();
 }
 
-void Engine::step(){
+int Engine::step(){
     // 1. schedule sequence
     std::vector<Sequence*> this_step;
     scheduler->step(this_step);
-    if(this_step.size() == 0)return;
+    if(this_step.size() == 0)return 0;
     // 2. batch sequence and execute
     std::vector<Sequence*> fill;
     std::vector<Sequence*> image_embed;
@@ -316,6 +316,7 @@ void Engine::step(){
             scheduler->schedule_running(seq);
         }
     }
+    return static_cast<int>(this_step.size());
 }
 
 
@@ -476,6 +477,13 @@ void Engine::execute_batch_image_embed(std::vector<Sequence*>& seqs){
         int right = left + n_images[i];
         seq->stages[stage->image_feature_dst_stage_id].image_features = image_features.index({torch::indexing::Slice(left, right), torch::indexing::Slice(), torch::indexing::Slice()});
         left += n_images[i];
+    }
+}
+
+void Engine::run_until_complete(){
+    while(true){
+        int num_seqs = step();
+        if(num_seqs == 0)break;
     }
 }
 

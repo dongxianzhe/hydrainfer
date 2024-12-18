@@ -15,6 +15,8 @@ cc_library(
   DEPS
     glog::glog
     torch
+  COPTS
+    -fPIC
   DEFINES
     # __CUDA_NO_HALF_OPERATORS__
 )

@@ -102,7 +102,8 @@ private:
         OutputCallback callback);
 
 public:
-    void step();
+    int step();
+    void run_until_complete();
     std::future<bool> add_request_async(std::string prompt,
         torch::Tensor pixel_value, 
         const SamplingParams& sp, 
@@ -110,11 +111,12 @@ public:
         OutputCallback callback);
 
     BatchFuture add_requests_async(
-        std::vector<std::string> prompts,
+        std::vector<std::string> prompts, 
         std::vector<torch::Tensor> pixel_values, 
         std::vector<SamplingParams> sps, 
         bool stream,
-        BatchOutputCallback callback);
+        BatchOutputCallback callback
+        );
 
     void stop();
 private:

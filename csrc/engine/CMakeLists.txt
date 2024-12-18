@@ -1,4 +1,4 @@
-
+include(pybind_extension)
 include(cc_library)
 include(cc_test)
 
@@ -18,6 +18,8 @@ cc_library(
     absl::synchronization
     glog::glog
     torch
+  COPTS
+    -fPIC
 )
 
 cc_test(
@@ -48,4 +50,25 @@ cc_test(
   DEPS
     GTest::gtest_main
     torch
+)
+
+pybind_extension(
+  NAME
+    fast_engine
+  COPTS
+    -DPY_MODULE_NAME=fast_engine
+  SRCS
+    engine_pybind.cpp
+  DEFINES 
+    PYBIND11_DETAILED_ERROR_MESSAGES=1
+  LINKDIRS
+    ${TORCH_INSTALL_PREFIX}/lib
+  DEPS
+    :engine
+    torch
+    torch_python
+    absl::strings
+    gflags::gflags
+    glog::glog
+    Python::Module
 )
