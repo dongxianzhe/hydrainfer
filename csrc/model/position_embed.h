@@ -6,11 +6,7 @@
 
 namespace mllm{
 
-torch::Tensor compute_default_inv_freq(int64_t rotary_dim, float theta) {
-    CHECK(rotary_dim % 2 == 0) << "rotary_dim must be even";
-    const auto slice = torch::arange(0, rotary_dim, 2, torch::kFloat32);
-    return 1.0 / torch::pow(theta, slice / rotary_dim);
-}
+torch::Tensor compute_default_inv_freq(int64_t rotary_dim, float theta);
 
 class RotaryEmbeddingImpl : public torch::nn::Module{
 public:
@@ -28,11 +24,11 @@ public:
         cos_sin_cache_ =register_buffer("cos_sin_cache_", cos_sin.to(options)); 
     }
 
-    std::tuple<torch::Tensor, torch::Tensor> forward(const torch::Tensor& query, const torch::Tensor& key, const torch::Tensor& position_ids){
+    std::tuple<torch::Tensor, torch::Tensor> forward(torch::Tensor query, torch::Tensor key, torch::Tensor position_ids){
         torch::Tensor _query = query;
         torch::Tensor _key = key;
         kernel::apply_rotary_pos_emb(_query, _key, position_ids, cos_sin_cache_, rotary_dim_, interleaved_);
-        return std::make_tuple(query, key);
+        return std::make_tuple(_query, _key);
     }
 };
 

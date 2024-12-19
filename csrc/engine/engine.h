@@ -8,7 +8,7 @@
 #include <torch/torch.h>
 
 #include "memory/kv_cache.h"
-#include "model/fake_model.h"
+#include "model/models.h"
 #include "tokenizer/tokenizer.h"
 #include "sequence.h"
 #include "common/concurrent_queue.h"
@@ -132,11 +132,14 @@ private:
     torch::TensorOptions options_;
     std::vector<std::unique_ptr<KVCache>> kv_caches;
     EngineConfig config;
-    FakeConfig model_config;
-    FakeModel model{nullptr};
+    // FakeConfig model_config;
+    // FakeModel model{nullptr};
+    LlavaConfig model_config;
+    LlavaForConditionalGeneration model{nullptr};
     std::unique_ptr<SequenceScheduler> scheduler;
     void execute_batch_fill(std::vector<Sequence*>& seqs);
     void execute_batch_image_embed(std::vector<Sequence*>& seqs);
+    void init_model();
 };
 
 

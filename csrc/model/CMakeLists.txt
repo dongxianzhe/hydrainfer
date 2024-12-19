@@ -8,6 +8,7 @@ cc_library(
     models.h
   SRCS
     models.cpp
+    position_embed.cpp
   DEPS
     :memory
     :kernels
@@ -15,6 +16,8 @@ cc_library(
     :flash_attn.kernels
     glog::glog
     torch
+  COPTS
+    -fPIC
 )
 
 cc_test(

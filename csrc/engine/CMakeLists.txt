@@ -10,6 +10,7 @@ cc_library(
   SRCS
     engine.cpp
   DEPS
+    :models
     :common
     :memory
     :tokenizer

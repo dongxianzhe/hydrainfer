@@ -13,6 +13,8 @@ cc_library(
     torch
     glog::glog
     Folly::folly
+  COPTS
+    -fPIC
 )
 
 cc_test(

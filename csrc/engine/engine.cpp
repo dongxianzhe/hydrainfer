@@ -2,7 +2,8 @@
 #include <iostream>
 #include <filesystem>
 #include "tokenizer/hf_tokenizer.h"
-#include "model/fake_model.h"
+// #include "model/fake_model.h"
+#include "model/models.h"
 #include "memory/kv_cache.h"
 #include "model/model_params.h"
 
@@ -113,8 +114,7 @@ Engine::Engine(const EngineConfig& config) : config(config) {
     const std::string tokenizer_path = config.model_path + "/tokenizer.json";
     CHECK(std::filesystem::exists(tokenizer_path));
     tokenizer = HFTokenizer::from_file(tokenizer_path);
-
-    model = FakeModel(model_config, options_);
+    init_model();
     // 2. memory
     for(int i = 0;i < model_config.n_layers;i ++){
         kv_caches.emplace_back(std::make_unique<KVCache>(config.memory_config.num_blocks / model_config.n_layers, config.memory_config.block_size, model_config.n_kv_heads, model_config.head_size, options_));
@@ -151,14 +151,14 @@ std::future<bool> Engine::add_request(std::string prompt, torch::Tensor pixel_va
         token_ids.reserve(encoded_token_ids.size() + model_config.n_image_tokens - 1);
         for(int i = 0;i < encoded_token_ids.size();i ++){
             if(encoded_token_ids[i] != model_config.image_token_id)token_ids.push_back(encoded_token_ids[i]);
-            else for(int i = 0;i < model_config.n_image_tokens;i ++)token_ids.push_back(encoded_token_ids[i]);
+            else for(int i = 0;i < model_config.n_image_tokens;i ++)token_ids.push_back(model_config.image_token_id);
         }
 
         Sequence* seq = new Sequence();
         // // 2. chunked stages
         if(config.stage_config.disaggregate_embed_prefill){
             Stage image_embed(Stage::StageType::ImageEmbed);
-            Stage prefill(Stage::StageType::TextFill);
+            Stage prefill(Stage::StageType::ImageEmbedFill);
             image_embed.pixel_values = pixel_value;
             image_embed.image_feature_dst_stage_id = 1;
             prefill.token_ids = token_ids;
@@ -170,7 +170,7 @@ std::future<bool> Engine::add_request(std::string prompt, torch::Tensor pixel_va
             seq->stages.push_back(prefill);
         } 
         else{
-            Stage prefill(Stage::StageType::TextFill);
+            Stage prefill(Stage::StageType::ImageFill);
             prefill.token_ids = token_ids;
             for(int i = 0;i < token_ids.size();i ++)prefill.position_ids.push_back(i);
             for(int i = 0;i < token_ids.size();i ++)prefill.cache_ids.push_back(i);
@@ -334,7 +334,7 @@ void Engine::execute_batch_fill(std::vector<Sequence*>& seqs){
             pixel_values.push_back(stage->pixel_values);
             has_image_fill = true;
         }
-        else if(stage->type == Stage::StageType::ImageFill){
+        else if(stage->type == Stage::StageType::ImageEmbedFill){
             image_features.push_back(stage->image_features);
             has_image_embed_fill = true;
         }
@@ -365,6 +365,7 @@ void Engine::execute_batch_fill(std::vector<Sequence*>& seqs){
     std::vector<int> layer_blocks_lens;
     std::vector<int> layer_cu_blocks_lens{0};
     std::vector<int> layer_new_cache_slots;
+    int max_kv_seq_len = 0;
 
     for(Sequence* seq : seqs){
         Stage* stage = &(seq->stages[seq->curr_stage_id]);
@@ -386,6 +387,7 @@ void Engine::execute_batch_fill(std::vector<Sequence*>& seqs){
             layer_new_cache_slots.push_back(slot_id);
         }
         layer_kv_seq_lens.push_back(seq->n_kv_cache_tokens);
+        max_kv_seq_len = std::max(max_kv_seq_len, seq->n_kv_cache_tokens);
         layer_kv_cu_seq_lens.push_back(layer_kv_cu_seq_lens.back() + seq->n_kv_cache_tokens);
         for(int block_id : seq->block_tables)layer_block_tables.push_back(block_id);
         layer_blocks_lens.push_back(seq->block_tables.size());
@@ -425,8 +427,8 @@ void Engine::execute_batch_fill(std::vector<Sequence*>& seqs){
             attention_params.cu_block_lens = ten_layer_cu_blocks_lens;
             attention_params.num_sequences = num_sequences;
             attention_params.all_sequences_decode = all_sequences_decode;
-            attention_params.q_max_seq_len = 128;
-            attention_params.k_max_seq_len = 128;
+            attention_params.q_max_seq_len = q_max_seq_len;
+            attention_params.k_max_seq_len = max_kv_seq_len;
             model_params.attention_params.push_back(attention_params);
         }
     }else{
@@ -441,7 +443,8 @@ void Engine::execute_batch_fill(std::vector<Sequence*>& seqs){
 
     if(selected_token_ids.size()){
         auto ten_selected_token_ids = torch::tensor(selected_token_ids, int_options);
-        auto sample_token_ids = torch::argmax(logits.index_select(0, ten_selected_token_ids), -1, false);
+        auto select_token_logits = logits.index_select(0, ten_selected_token_ids);
+        auto sample_token_ids = torch::argmax(select_token_logits, -1, false);
         int i = 0;
         for(Sequence* seq : seqs){
             Stage* stage = &(seq->stages[seq->curr_stage_id]);
@@ -484,6 +487,30 @@ void Engine::run_until_complete(){
     while(true){
         int num_seqs = step();
         if(num_seqs == 0)break;
+    }
+}
+
+void Engine::init_model(){
+    std::vector<std::string> model_weights_files;
+    for (const auto& entry : std::filesystem::directory_iterator(config.model_path)) {
+        if (entry.path().extension() == ".safetensors") {
+            model_weights_files.push_back(entry.path().string());
+        }
+    }
+
+    // LlavaConfig config;
+    // torch::TensorOptions options = torch::dtype(torch::kHalf).device(torch::kCUDA);
+    model = LlavaForConditionalGeneration(model_config, options_);
+
+    auto dict = model->named_parameters();
+    for(int i = 0;i < model_weights_files.size();i ++){
+        auto state_dict = StateDict::load_safetensors(model_weights_files[i]);
+
+        for(auto it = state_dict->begin(); it != state_dict->end(); it ++){
+            std::string key = it->first;
+            torch::Tensor weight = it->second;
+            dict[key].copy_(weight);
+        }
     }
 }
 

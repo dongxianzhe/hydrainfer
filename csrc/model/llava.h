@@ -70,6 +70,21 @@ public:
     CLIPConfig vision_config;
     LlamaConfig text_config;
     int vision_feature_layer = -2;
+
+    // language model config
+    int hidden_size = 4096;
+    int intermediate_size = 11008;
+    int n_qo_heads = 32;
+    int n_kv_heads = 32;
+    int head_size = 128;
+    int max_position_embeddings = 4096;
+    float rope_theta = 10000;
+    int n_layers = 32;
+    float rms_norm_eps = 1e-5;
+    int vocab_size = 32064;
+    // vision model config
+    int n_image_tokens = 576;
+    int image_token_id = 32000;
 };
 
 class LlavaMultiModalProjectorImpl : public torch::nn::Module{
@@ -119,6 +134,7 @@ public:
     }
 
     torch::Tensor merge_embed(torch::Tensor input_embeds, torch::Tensor image_features, torch::Tensor image_overwrite_mask){
+        if(torch::sum(image_overwrite_mask, false).item<int>() != image_features.view({-1, input_embeds.size(-1)}).size(0))return input_embeds;
         input_embeds.index_put_({image_overwrite_mask, torch::indexing::Slice()}, image_features.view({-1, input_embeds.size(-1)}));
         return input_embeds;
     }
@@ -128,13 +144,14 @@ public:
         if(pixel_values.defined()){
             auto image_overwrite_mask = input_ids == image_token_index_;
             auto image_features = image_embed(pixel_values, model_params);
-            auto embeds = merge_embed(input_embeds, image_features, image_overwrite_mask);
+            input_embeds = merge_embed(input_embeds, image_features, image_overwrite_mask);
         }
-        if(image_features.defined()){
+        else if(image_features.defined()){
             auto image_overwrite_mask = input_ids == image_token_index_;
-            auto embeds = merge_embed(input_embeds, image_features, image_overwrite_mask);
+            input_embeds = merge_embed(input_embeds, image_features, image_overwrite_mask);
         }
         auto logits = language_model_(input_embeds, position_ids, model_params);
+
         return logits;
     }
 };

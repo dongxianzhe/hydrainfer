@@ -17,6 +17,7 @@ class MLLM:
         config = EngineConfig()
         config.model_path = model_path
         config.memory_config.num_blocks = 30000
+        config.scheduler_config.debug_mode=False
 
         self.engine = FastEngine(config)
     
@@ -82,8 +83,8 @@ if __name__ == '__main__':
         },
         # "max_tokens":0, 
         # "max_tokens":random.randint(30, 70), 
-        "max_tokens": 10, 
-        # "max_tokens": i * 10, ``
+        # "max_tokens": 10, 
+        "max_tokens": i * 10,
     } for i in range(batch_size)]
     mllm = MLLM()
 

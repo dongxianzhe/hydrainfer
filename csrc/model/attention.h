@@ -18,9 +18,9 @@ public:
         int seq_len     = query.size(1);
         int hidden_size = query.size(2);
 
-        query = query.view({batch_size, seq_len, n_heads_, head_size_});
-        key   = key.view(  {batch_size, seq_len, n_heads_, head_size_});
-        value = value.view({batch_size, seq_len, n_heads_, head_size_});
+        query = query.view({batch_size * seq_len, n_heads_, head_size_});
+        key   = key.view(  {batch_size * seq_len, n_heads_, head_size_});
+        value = value.view({batch_size * seq_len, n_heads_, head_size_});
         
         auto o = torch::empty({batch_size * seq_len, n_heads_, head_size_}, options_);
         auto q_cu_seq_lens = torch::arange(0, (batch_size + 1) * seq_len, seq_len, options_.dtype(torch::kInt32));
@@ -43,7 +43,7 @@ public:
             -1, 
             0
         );
-        return o;
+        return o.view({batch_size, seq_len, hidden_size});
     }
 };
 TORCH_MODULE(MultiHeadAttention);

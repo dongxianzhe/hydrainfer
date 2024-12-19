@@ -149,7 +149,7 @@ public:
         int batch_size = pixel_values.size(0);
         auto patch_embeds = patch_embedding_(pixel_values.to(patch_embedding_->weight_.dtype()));
         patch_embeds = patch_embeds.flatten(2).transpose(1, 2);
-        auto class_embeds = class_embedding_.index({torch::indexing::None, torch::indexing::None, torch::indexing::Slice()});
+        auto class_embeds = class_embedding_.index({torch::indexing::None, torch::indexing::None, torch::indexing::Slice()}).expand({batch_size, 1, -1});
         auto embeddings = torch::cat({class_embeds, patch_embeds}, 1);
         embeddings = embeddings + position_embedding_(position_ids_.unsqueeze(0));
         return embeddings;

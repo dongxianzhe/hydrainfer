@@ -32,6 +32,8 @@ cc_library(
   DEPS
     torch
     cutlass
+  COPTS
+    -fPIC
 )
 
 pybind_extension(
