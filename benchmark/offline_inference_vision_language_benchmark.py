@@ -193,6 +193,76 @@ def main(args: argparse.Namespace):
         if args.output_text:
             for output in outputs:
                 print(output.text)
+    else:
+        import torch
+        from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
+        from dxz.memory.virtual_kv_cache import MemoryConfig
+        from dxz.memory.compiler import CompilerConfig
+        from dxz.mllm import MLLM
+        mllm = MLLM(
+            model_name = model_name, 
+            num_blocks = 34000, 
+            priority='prefill', 
+            max_running_sequences = 20, 
+            max_batch_fill_tokens = 1024, 
+            max_batch_embed_images= 3, 
+            batch_embed_fill=True,
+            debug_mode=args.debug,
+            disaggregate_embed_prefill = True, 
+            batch_image_embed=True, 
+        )
+
+        start = time.perf_counter()
+
+        outputs = mllm.generate(inputs)
+
+        end = time.perf_counter()
+        duration = end - start
+        completed = len(outputs)
+        input_lens = []
+        latencies = []
+        ttfts = []
+        tpots = []
+        output_lens = []
+        print(f'duration {duration}')
+        # for output in outputs:
+        #     input_lens.append(output.input_len)
+        #     latencies.append(output.latency)
+        #     ttfts.append(output.ttft)
+        #     tpots += output.tpot
+        #     output_lens.append(len(output.tpot) + 1)
+
+        # metrics = BenchmarkMetrics(
+        #     benchmark_duration=duration, 
+        #     completed=completed,
+        #     total_input=sum(input_lens),
+        #     total_output=sum(output_lens),
+        #     mean_input_len=np.mean(input_lens),
+        #     median_input_len=np.median(input_lens),
+        #     max_input_len=max(input_lens),
+        #     mean_output_len=np.mean(output_lens),
+        #     median_output_len=np.median(output_lens),
+        #     max_output_len=max(output_lens),
+        #     request_throughput=completed / duration,
+        #     input_throughput=sum(input_lens) / duration,
+        #     output_throughput=sum(output_lens) / duration,
+        #     mean_latency_ms=np.mean(latencies) * 1000,
+        #     median_latency_ms=np.median(latencies) * 1000,
+        #     p90_latency_ms=np.percentile(latencies, 90) * 1000,
+        #     p99_latency_ms=np.percentile(latencies, 99) * 1000,
+        #     mean_ttft_ms=np.mean(ttfts or 0) * 1000,
+        #     median_ttft_ms=np.median(ttfts or 0) * 1000,
+        #     p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
+        #     p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
+        #     mean_tpot_ms=np.mean(tpots) * 1000,
+        #     median_tpot_ms=np.median(tpots) * 1000,
+        #     p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
+        #     p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
+        # )
+        # metrics.print()
+        if args.output_text:
+            for output in outputs:
+                print(output.text)
 
 
 if __name__ == '__main__':
@@ -200,7 +270,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "--backend", 
         type=str,
-        choices=["vllm", "dxz"],
+        choices=["vllm", "dxz", 'cdxz'],
         default="vllm",
     )
     parser.add_argument(
