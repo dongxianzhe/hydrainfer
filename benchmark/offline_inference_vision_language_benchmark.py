@@ -1,3 +1,4 @@
+import random
 import numpy as np
 import time
 from PIL import Image
@@ -23,6 +24,8 @@ def main(args: argparse.Namespace):
     # 1. prepare input
     from transformers import AutoProcessor
     model_name = "llava-hf/llava-1.5-7b-hf"
+
+    random.seed(args.seed)
     if args.only_prefill:
         inputs = SimulatedDataset(
             processor=AutoProcessor.from_pretrained(model_name), 
@@ -32,12 +35,15 @@ def main(args: argparse.Namespace):
             output_text_lens = [1 for i in range(args.num_prompts)]
             )
     else:
+        # [((i + 1) % 3 + 1) for i in range(args.num_prompts)]
+        output_text_lens = [random.randint(args.min_tokens, args.max_tokens) for _ in range(args.num_prompts)]
+        print(output_text_lens)
         inputs = SimulatedDataset(
             processor=AutoProcessor.from_pretrained(model_name), 
             image_path=image_path, 
             has_images=[True for _ in range(args.num_prompts)], 
             prompt_text_lens = [17 for i in range(args.num_prompts)], 
-            output_text_lens = [(i + 1) * 10 for i in range(args.num_prompts)]
+            output_text_lens = output_text_lens
             )
     # inputs = [{
     #     "prompt" : prompt, 
@@ -117,16 +123,18 @@ def main(args: argparse.Namespace):
             device = torch.device('cuda:0'), 
             memory_config=MemoryConfig(
                 memory_management_policy='vanilla', 
-                num_blocks = 34000, 
+                num_blocks = 25000, 
                 block_size = 16, 
             ), 
+            multi_threads_forward=True, 
+            multi_streams_forward=True, 
             scheduler_config=SchedulerConfig(
                 batch_policy = 'continuousbatch', 
-                priority='prefill', 
-                max_running_sequences = 20, 
+                priority='decode', 
+                max_running_sequences = 10, 
                 max_batch_fill_tokens = 1024, 
                 max_batch_embed_images= 3, 
-                batch_embed_fill=True,
+                batch_embed_fill=False,
                 debug_mode=args.debug, 
             ), 
             compiler_config=CompilerConfig(
@@ -299,6 +307,24 @@ if __name__ == '__main__':
         default=False,
         help='print scheduler step info'
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=2025,
+        help="seed",
+    )
+    parser.add_argument(
+        "--min-tokens",
+        type=int,
+        default=3,
+        help="min number of tokens generated.",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=10,
+        help="max number of tokens genreated.",
+    )
 
+    args = parser.parse_args()
     main(args)

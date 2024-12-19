@@ -39,6 +39,8 @@ class EngineConfig:
     scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
     multi_thread_request_process : bool = True
     batch_image_embed: bool = True
+    multi_streams_forward: bool = False
+    multi_threads_forward: bool = False
 
 @dataclass
 class GenerateOutput:
@@ -197,6 +199,10 @@ class Engine:
 
         # 6. multi threads request process optimization
         self.executor = ThreadPoolExecutor(max_workers=32)
+
+        # 7. multi stream and threads forward optimization
+        self.streams: list[torch.cuda.Stream] = [torch.cuda.Stream(), torch.cuda.Stream()]
+        self.forward_executor = ThreadPoolExecutor(max_workers=2)
 
     def generate(self, inputs):
         """ 
@@ -471,6 +477,11 @@ class Engine:
             instruction.image_featues_dst.image_features = image_features[left: right, :, :]
             left += n_images[i]
 
+    def execute_batch_image_embed_streams_decorator(self, contexts: list[tuple[Sequence, Instruction]], stream: torch.cuda.Stream):
+        with torch.cuda.stream(stream):
+            self.execute_batch_image_embed(contexts)
+            stream.synchronize()
+
     def execute_image_embed(self, context: tuple[Sequence, Instruction]):
         sequence, instruction = context
         pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
@@ -506,12 +517,25 @@ class Engine:
                 continue
             raise Exception(f'unsupported instrction {type(instruction)}')
 
-        output_tokens = self.execute_batch_fill(fill_contexts)
-        if self.config.batch_image_embed:
-            self.execute_batch_image_embed(image_embed_contexts)
+        if self.config.multi_threads_forward:
+            if(len(image_embed_contexts) > 0):
+                if self.config.multi_streams_forward:
+                    embed_future = self.forward_executor.submit(self.execute_batch_image_embed_streams_decorator, image_embed_contexts, self.streams[1])
+                else:
+                    embed_future = self.forward_executor.submit(self.execute_batch_image_embed, image_embed_contexts)
+            output_tokens = self.execute_batch_fill(fill_contexts)
+            if(len(image_embed_contexts) > 0):
+                embed_future.result()
         else:
-            for context in image_embed_contexts:
-                self.execute_image_embed(context)
+            output_tokens = self.execute_batch_fill(fill_contexts)
+            if self.config.batch_image_embed:
+                if self.config.multi_streams_forward:
+                    self.execute_batch_image_embed_streams_decorator(image_embed_contexts, self.streams[1])
+                else:
+                    self.execute_batch_image_embed(image_embed_contexts)
+            else:
+                for context in image_embed_contexts:
+                    self.execute_image_embed(context)
 
         # 3. scheduler sequence
         t = time.perf_counter()
@@ -606,8 +630,8 @@ if __name__ == '__main__':
         },
         # "max_tokens":0, 
         # "max_tokens":random.randint(30, 70), 
-        "max_tokens": 1, 
-        # "max_tokens": i * 10, ``
+        # "max_tokens": 1, 
+        "max_tokens": i * 10,
     } for i in range(batch_size)]
 
     import time
