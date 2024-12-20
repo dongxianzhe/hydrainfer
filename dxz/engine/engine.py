@@ -48,6 +48,7 @@ class GenerateOutput:
     text : str
     ttft : float
     tpot : list[float]
+    tokens_time: list[float]
     latency : float
 
 class SequenceScheduler:
@@ -243,6 +244,7 @@ class Engine:
                 text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
                 ttft = sequence.metric.tokens_time[0] - sequence.metric.arrival_time,
                 tpot = [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
+                tokens_time = sequence.metric.tokens_time, 
                 latency = sequence.metric.finished_time - sequence.metric.arrival_time
             ))
 

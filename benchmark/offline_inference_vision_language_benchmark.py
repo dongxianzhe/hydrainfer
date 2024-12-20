@@ -112,6 +112,15 @@ def main(args: argparse.Namespace):
             for output in outputs:
                 print(output.outputs[0].text)
 
+        if args.output_token_latencies:
+            token_latencies = []
+            for output in outputs:
+                for i in range(0, len(output.metrics.token_times)):
+                    token_latencies.append(output.metrics.token_times[i] - start)
+            print('-----------------------------token latencies-------------------------------')
+            for token_latency in token_latencies:
+                print(token_latency)
+
     elif args.backend == 'dxz':
         import torch
         from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
@@ -123,7 +132,7 @@ def main(args: argparse.Namespace):
             device = torch.device('cuda:0'), 
             memory_config=MemoryConfig(
                 memory_management_policy='vanilla', 
-                num_blocks = 25000, 
+                num_blocks = 22000, 
                 block_size = 16, 
             ), 
             multi_threads_forward=True, 
@@ -132,7 +141,7 @@ def main(args: argparse.Namespace):
                 batch_policy = 'continuousbatch', 
                 priority='decode', 
                 max_running_sequences = 10, 
-                max_batch_fill_tokens = 1024, 
+                max_batch_fill_tokens = 512, 
                 max_batch_embed_images= 3, 
                 batch_embed_fill=False,
                 debug_mode=args.debug, 
@@ -201,6 +210,15 @@ def main(args: argparse.Namespace):
         if args.output_text:
             for output in outputs:
                 print(output.text)
+
+        if args.output_token_latencies:
+            token_latencies = []
+            for output in outputs:
+                for i in range(0, len(output.tokens_time)):
+                    token_latencies.append(output.tokens_time[i] - start)
+            print('-----------------------------token latencies-------------------------------')
+            for token_latency in token_latencies:
+                print(token_latency)
     else:
         import torch
         from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
@@ -324,6 +342,12 @@ if __name__ == '__main__':
         type=int,
         default=10,
         help="max number of tokens genreated.",
+    )
+    parser.add_argument(
+        '--output-token-latencies',
+        action='store_true',
+        default=False,
+        help='print each generated token latencies'
     )
 
     args = parser.parse_args()
