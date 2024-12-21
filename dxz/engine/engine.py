@@ -390,7 +390,9 @@ class Engine:
                     kv_cache=self.mmu.kv_caches[layer_id],
                     new_cache_slots = ten_layers_new_cache_slots[0],
                     flash_infer_handler=flash_infer_handler,
-                )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
+                )for layer_id in range(self.model_config.text_config.num_hidden_layers)], 
+                all_sequences_decode = all_sequences_decode, 
+                selected_token_ids = selected_token_ids, 
             )
         elif self.config.memory_config.memory_management_policy == 'shared_layers':
             ten_layers_kv_cu_seq_lens = torch.tensor(layers_kv_cu_seq_lens, dtype=torch.int, device=self.config.device)
@@ -405,7 +407,9 @@ class Engine:
                     num_sequences = num_sequences, 
                     q_max_seq_len = q_max_seq_len, 
                     kv_max_seq_len = max(layers_kv_seq_lens[layer_id]), 
-                )for layer_id in range(self.model_config.text_config.num_hidden_layers)]
+                )for layer_id in range(self.model_config.text_config.num_hidden_layers)], 
+                all_sequences_decode = all_sequences_decode, 
+                selected_token_ids = selected_token_ids, 
             )
 
         if len(pixel_values):
@@ -416,13 +420,13 @@ class Engine:
             image_featues = torch.cat(image_featues, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:
             image_featues = None
-            
+
         # 3. forward and sample
-        logits = self.model_runner(ten_input_ids, pixel_values, image_featues, ten_position_ids, model_params)
+        sample_token_ids = self.model_runner(ten_input_ids, pixel_values, image_featues, ten_position_ids, model_params)
+        sample_token_ids = sample_token_ids.tolist()
         output_tokens = {} # sid -> token_id
         if len(selected_token_ids) > 0:
             t = time.perf_counter()
-            sample_token_ids = torch.argmax(logits[selected_token_ids, :], dim=-1, keepdim=False).tolist()
             i = 0
             for sequence, instruction in contexts:
                 if (isinstance(instruction, Fill)) and instruction.sample:
@@ -619,6 +623,7 @@ if __name__ == '__main__':
             token_pruning_policy = None, 
             n_embed_output_tokens = 64, 
         ), 
+        multi_thread_request_process = False, 
         batch_image_embed = True, 
     )
     engine = Engine(config)
@@ -630,7 +635,7 @@ if __name__ == '__main__':
         },
         # "max_tokens":0, 
         # "max_tokens":random.randint(30, 70), 
-        # "max_tokens": 1, 
+        # "max_tokens": 10, 
         "max_tokens": i * 10,
     } for i in range(batch_size)]
 

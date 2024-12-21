@@ -4,7 +4,7 @@ import torch
 from torch import nn, Tensor
 from transformers import LlavaConfig, LlamaConfig, CLIPVisionConfig
 from dxz.model.parameters import ModelParameters
-from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm
+from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm, LlamaForCausalLM
 from typing import Optional, Union
 from dxz.model.clip import CLIPEncoderLayer, CLIPVisionEmbeddings
 
@@ -49,31 +49,6 @@ class CLIPVisionModel(nn.Module):
         return self.vision_model(pixel_values, vision_feature_layer, model_params)
 
 
-class LlamaModel(nn.Module):
-    def __init__(self, config: LlamaConfig):
-        super().__init__()
-        self.embed_tokens = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
-        self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
-        self.norm = LlamaRMSNorm(config)
-    
-    def forward(self, input_embeds: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
-        hidden_states = input_embeds
-        for i, layer in enumerate(self.layers):
-            hidden_states = layer(hidden_states, position_ids, model_params)
-        return self.norm(hidden_states)
-
-class LlamaForCausalLM(nn.Module):
-    def __init__(self, config: LlamaConfig):
-        super().__init__()
-        self.config = config
-        self.model = LlamaModel(config)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-    
-    def forward(self, input_embeds: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
-        hidden_state = self.model(input_embeds, position_ids, model_params)
-        logits = self.lm_head(hidden_state)
-        return logits
-
 class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: LlavaConfig):
         super().__init__()
@@ -117,10 +92,8 @@ class LlavaForConditionalGeneration(nn.Module):
         if image_features is not None:
             image_overwrite_mask = input_ids == self.config.image_token_index
             embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
-        # 4. compute logits
-        logits = self.language_model(input_embeds, position_ids, model_params)
-
-        return logits
+        # 4. compute sample_token_ids
+        return self.language_model(input_embeds, position_ids, model_params)
 
     
     @classmethod

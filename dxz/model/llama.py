@@ -71,6 +71,7 @@ class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig, layer_id: int):
         super().__init__()
         self.layer_id = layer_id
+        self.n_layers = config.num_hidden_layers
         self.self_attn = LlamaSdpaAttention(config)
         self.mlp = LlamaMLP(config)
         self.input_layernorm = LlamaRMSNorm(config)
@@ -81,6 +82,10 @@ class LlamaDecoderLayer(nn.Module):
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id])
         hidden_states = residual + hidden_states
+
+        if not model_params.all_sequences_decode and self.layer_id == self.n_layers - 1:
+            hidden_states = hidden_states[model_params.selected_token_ids, :]
+
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
@@ -95,7 +100,13 @@ class LlamaModel(nn.Module):
         self.norm = LlamaRMSNorm(config)
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
-        hidden_states = self.embed_tokens(input_ids)
+        if input_ids.size == torch.int:
+            # input_ids is token_ids
+            hidden_states = self.embed_tokens(input_ids)
+        else:
+            # input_ids is input embeds
+            hidden_states = input_ids
+
         for i, layer in enumerate(self.layers):
             hidden_states = layer(hidden_states, position_ids, model_params)
         return self.norm(hidden_states)
@@ -108,9 +119,12 @@ class LlamaForCausalLM(nn.Module):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
+        # input_ids is token_ids or input embeds
         hidden_state = self.model(input_ids, position_ids, model_params)
         logits = self.lm_head(hidden_state)
-        return logits
+        sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False)
+        # sample_token_ids = torch.argmax(logits[model_params.selected_token_ids, :], dim=-1, keepdim=False)
+        return sample_token_ids
     
     @classmethod
     def from_safetensor(cls, model_weights_path: str, dtype: torch.dtype, device: torch.device):

@@ -114,6 +114,8 @@ class AttentionParameters:
 @dataclass
 class ModelParameters:
     attention_params: Optional[list[AttentionParameters]] = None
+    all_sequences_decode: bool = False
+    selected_token_ids: list[int] = None
     embed_token_pruning_params: Optional[dict] = None
     prefill_token_pruning_params: Optional[dict] = None
     decode_kvcache_eviction_parmas: Optional[dict] = None
