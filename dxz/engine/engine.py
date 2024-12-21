@@ -41,6 +41,7 @@ class EngineConfig:
     batch_image_embed: bool = True
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
+    warm_up: bool = True
 
 @dataclass
 class GenerateOutput:
@@ -203,6 +204,36 @@ class Engine:
         # 7. multi stream and threads forward optimization
         self.streams: list[torch.cuda.Stream] = [torch.cuda.Stream(), torch.cuda.Stream()]
         self.forward_executor = ThreadPoolExecutor(max_workers=2)
+
+        # 8. model warm up optimization
+        if config.warm_up:
+            self.warm_up()
+
+    def warm_up(self):
+        n_tokens = 596
+        n_blocks = (n_tokens + self.config.memory_config.block_size - 1) // self.config.memory_config.block_size
+        params = ModelParameters(
+            attention_params=[AttentionParameters(
+                kv_cache = self.mmu.kv_caches[0], 
+                q_cu_seq_lens = torch.tensor([0, n_tokens], dtype=torch.int, device=self.config.device), 
+                kv_cu_seq_lens = torch.tensor([0, n_tokens], dtype=torch.int, device=self.config.device), 
+                paged_kv_last_page_len = None, 
+                new_cache_slots = torch.arange(n_tokens, dtype=torch.int, device=self.config.device),
+                block_tables = torch.arange(n_blocks, dtype=torch.int, device=self.config.device), 
+                cu_blocks_lens = torch.tensor([0, n_blocks], dtype=torch.int, device=self.config.device), 
+                num_sequences = 1, 
+                all_sequences_decode = False, 
+                q_max_seq_len = n_tokens, 
+                kv_max_seq_len = n_tokens, 
+            ) for _ in range(self.model_config.text_config.num_hidden_layers)],
+            all_sequences_decode=False,  
+        )
+        input_ids = torch.zeros(n_tokens, dtype=torch.int, device=self.config.device)
+        position_ids = torch.arange(n_tokens, dtype=torch.int, device=self.config.device)
+        pixel_values = None
+        image_features = None
+        for i in range(3):
+            self.model(input_ids, pixel_values, image_features, position_ids, params)
 
     def generate(self, inputs):
         """ 
