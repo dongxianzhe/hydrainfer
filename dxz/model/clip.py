@@ -2,6 +2,7 @@ import torch
 from torch import nn, Tensor
 from transformers import CLIPVisionConfig
 import math
+from dxz.model.parameters import VisionModelParameters, VisionModelOutput
 
 class CLIPSdpaAttention(nn.Module):
     def __init__(self, config: CLIPVisionConfig):
@@ -17,7 +18,7 @@ class CLIPSdpaAttention(nn.Module):
         from dxz.layer.attention import FlashMultiHeadAttention
         self.flash_attention = FlashMultiHeadAttention(self.n_heads, self.head_dim)
     
-    def forward(self, hidden_states: Tensor, return_scores: bool=False) -> Tensor:
+    def forward(self, hidden_states: Tensor, return_scores: bool = False) -> Tensor:
         batch_size, n_tokens, embed_dim = hidden_states.size()
         query = self.q_proj(hidden_states)
         key   = self.k_proj(hidden_states)
@@ -52,43 +53,42 @@ class CLIPMLP(nn.Module):
         return hidden_states
 
 class CLIPEncoderLayer(nn.Module):
-    def __init__(self, config: CLIPVisionConfig):
+    def __init__(self, config: CLIPVisionConfig, layer_id: int):
         super().__init__()
+        self.layer_id = layer_id
         self.self_attn = CLIPSdpaAttention(config)
         self.layer_norm1 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.mlp = CLIPMLP(config)
         self.layer_norm2 = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
     
-    def forward(self, hidden_states: Tensor, return_scores: bool=False) -> Tensor:
+    def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: VisionModelParameters, output: VisionModelOutput) -> Tensor:
         residual = hidden_states
         hidden_states = self.layer_norm1(hidden_states)
-        if return_scores:
-            hidden_states, scores = self.self_attn(hidden_states, return_scores)
+        if self.layer_id == vision_feature_layer and model_params.return_last_layer_attention:
+            hidden_states, scores = self.self_attn(hidden_states, True)
+            output.scores = scores 
         else:
-            hidden_states = self.self_attn(hidden_states, return_scores)
+            hidden_states = self.self_attn(hidden_states, False)
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self.layer_norm2(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
 
-        if return_scores:
-            return hidden_states, scores
-        else:
-            return hidden_states
+        return hidden_states
 
-class CLIPEncoder(nn.Module):
-    def __init__(self, config: CLIPVisionConfig):
-        super().__init__()
-        self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
+# class CLIPEncoder(nn.Module):
+#     def __init__(self, config: CLIPVisionConfig):
+#         super().__init__()
+#         self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
     
-    def forward(self, hidden_states: Tensor) -> tuple[list[Tensor], Tensor]:
-        all_hidden_states = []
-        all_hidden_states.append(hidden_states)
-        for _, encoder_layer in enumerate(self.layers):
-            hidden_states = encoder_layer(hidden_states)
-            all_hidden_states.append(hidden_states)
-        return hidden_states, all_hidden_states
+#     def forward(self, hidden_states: Tensor) -> tuple[list[Tensor], Tensor]:
+#         all_hidden_states = []
+#         all_hidden_states.append(hidden_states)
+#         for _, encoder_layer in enumerate(self.layers):
+#             hidden_states = encoder_layer(hidden_states)
+#             all_hidden_states.append(hidden_states)
+#         return hidden_states, all_hidden_states
 
 class CLIPVisionEmbeddings(nn.Module):
     def __init__(self, config: CLIPVisionConfig):
@@ -118,6 +118,45 @@ class CLIPVisionEmbeddings(nn.Module):
         embeddings = embeddings + self.position_embedding(self.position_ids[None, :]) # (gird * grid + 1) -> (1, grid * grid + 1) -> (1, grid * grid + 1, hidden_size)
         return embeddings
 
+# class CLIPVisionTransformer(nn.Module):
+#     def __init__(self, config: CLIPVisionConfig):
+#         super().__init__()
+#         self.embeddings = CLIPVisionEmbeddings(config)
+#         self.pre_layrnorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+#         self.encoder = CLIPEncoder(config)
+#         self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
+    
+#     def forward(self, pixel_values: Tensor) -> Tensor:
+#         # pixel_values (batch_size, channels, width, height)
+#         hidden_states = self.embeddings(pixel_values) # (batch_size, n_tokens, hidden_size)
+#         hidden_states = self.pre_layrnorm(hidden_states)
+#         last_hidden_state, hidden_states = self.encoder(hidden_states)
+#         pooled_output = last_hidden_state[:, 0, :]
+#         pooled_output = self.post_layernorm(pooled_output)
+#         return pooled_output, last_hidden_state, hidden_states
+
+# class CLIPVisionModel(nn.Module):
+#     def __init__(self, config: CLIPVisionConfig):
+#         super().__init__()
+#         self.vision_model = CLIPVisionTransformer(config)
+
+#     def forward(self, pixel_values: Tensor) -> Tensor:
+#         # pixel_values (n_pictures, n_channels, width, height)
+#         return self.vision_model(pixel_values)
+
+class CLIPEncoder(nn.Module):
+    def __init__(self, config: CLIPVisionConfig):
+        super().__init__()
+        self.layers = nn.ModuleList([CLIPEncoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
+    
+    def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> Tensor:
+        vision_feature_layer = (vision_feature_layer + len(self.layers)) % len(self.layers)
+        output = VisionModelOutput()
+        for i, encoder_layer in enumerate(self.layers[:vision_feature_layer + 1]): #
+            hidden_states = self.layers[i](hidden_states, vision_feature_layer, model_params, output)
+            
+        return hidden_states, output
+
 class CLIPVisionTransformer(nn.Module):
     def __init__(self, config: CLIPVisionConfig):
         super().__init__()
@@ -126,20 +165,18 @@ class CLIPVisionTransformer(nn.Module):
         self.encoder = CLIPEncoder(config)
         self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
     
-    def forward(self, pixel_values: Tensor) -> Tensor:
+    def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> tuple[Tensor, VisionModelOutput]:
         # pixel_values (batch_size, channels, width, height)
         hidden_states = self.embeddings(pixel_values) # (batch_size, n_tokens, hidden_size)
         hidden_states = self.pre_layrnorm(hidden_states)
-        last_hidden_state, hidden_states = self.encoder(hidden_states)
-        pooled_output = last_hidden_state[:, 0, :]
-        pooled_output = self.post_layernorm(pooled_output)
-        return pooled_output, last_hidden_state, hidden_states
+        hidden_states, output = self.encoder(hidden_states, vision_feature_layer, model_params)
+        return hidden_states, output
 
 class CLIPVisionModel(nn.Module):
     def __init__(self, config: CLIPVisionConfig):
         super().__init__()
         self.vision_model = CLIPVisionTransformer(config)
 
-    def forward(self, pixel_values: Tensor) -> Tensor:
+    def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> tuple[Tensor, VisionModelOutput]:
         # pixel_values (n_pictures, n_channels, width, height)
-        return self.vision_model(pixel_values)
+        return self.vision_model(pixel_values, vision_feature_layer, model_params)

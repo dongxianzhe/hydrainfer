@@ -112,6 +112,13 @@ class AttentionParameters:
     flash_infer_handler: "flashinfer.BatchPrefillWithPagedKVCacheWrapper" = None
 
 @dataclass
+class VisionModelParameters:
+    return_last_layer_attention: bool = False
+
+class VisionModelOutput:
+    scores: Tensor = None
+
+@dataclass
 class ModelParameters:
     attention_params: Optional[list[AttentionParameters]] = None
     all_sequences_decode: bool = False
@@ -119,3 +126,4 @@ class ModelParameters:
     embed_token_pruning_params: Optional[dict] = None
     prefill_token_pruning_params: Optional[dict] = None
     decode_kvcache_eviction_parmas: Optional[dict] = None
+    vision_params: VisionModelParameters = None

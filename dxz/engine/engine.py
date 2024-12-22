@@ -13,7 +13,8 @@ from typing import Literal
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
-from dxz.model.parameters import AttentionParameters, ModelParameters
+from dxz.model.parameters import AttentionParameters, ModelParameters, VisionModelParameters
+
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
@@ -503,7 +504,12 @@ class Engine:
             n_images.append(pixel_values.shape[0])
         pixel_values = torch.cat(batch_pixel_values, dim=0) 
 
-        model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
+        model_params = ModelParameters(
+            embed_token_pruning_params=instruction.token_pruning_params, 
+            vision_params=VisionModelParameters(
+                return_last_layer_attention=True if instruction.token_pruning_params.get('policy', None) else None
+            )
+        )
         image_features = self.model.image_embed(pixel_values, model_params) # (batch_size, n_tokens, vision_hidden_size)
 
         left = 0
@@ -520,7 +526,12 @@ class Engine:
     def execute_image_embed(self, context: tuple[Sequence, Instruction]):
         sequence, instruction = context
         pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
-        model_params = ModelParameters(embed_token_pruning_params=instruction.token_pruning_params)
+        model_params = ModelParameters(
+            embed_token_pruning_params=instruction.token_pruning_params, 
+            vision_params=VisionModelParameters(
+                return_last_layer_attention=True if instruction.token_pruning_params else None
+            )
+        )
         image_features = self.model.image_embed(pixel_values, model_params)
         instruction.image_featues_dst.image_features = image_features
 

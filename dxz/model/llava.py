@@ -6,47 +6,8 @@ from transformers import LlavaConfig, LlamaConfig, CLIPVisionConfig
 from dxz.model.parameters import ModelParameters
 from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm, LlamaForCausalLM
 from typing import Optional, Union
-from dxz.model.clip import CLIPEncoderLayer, CLIPVisionEmbeddings
+from dxz.model.clip import CLIPEncoderLayer, CLIPVisionEmbeddings, CLIPVisionModel
 
-class CLIPEncoder(nn.Module):
-    def __init__(self, config: CLIPVisionConfig):
-        super().__init__()
-        self.layers = nn.ModuleList([CLIPEncoderLayer(config) for _ in range(config.num_hidden_layers)])
-    
-    def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: ModelParameters) -> Tensor:
-        for i, encoder_layer in enumerate(self.layers[:(vision_feature_layer + len(self.layers)) % len(self.layers) + 1]): #
-            return_scores = i==(vision_feature_layer + len(self.layers)) % len(self.layers)
-            if return_scores:
-                hidden_states, scores = encoder_layer(hidden_states, return_scores=return_scores)
-                model_params.clip_scores = scores
-            else:
-                hidden_states = encoder_layer(hidden_states, return_scores=return_scores)
-            
-        return hidden_states
-
-class CLIPVisionTransformer(nn.Module):
-    def __init__(self, config: CLIPVisionConfig):
-        super().__init__()
-        self.embeddings = CLIPVisionEmbeddings(config)
-        self.pre_layrnorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-        self.encoder = CLIPEncoder(config)
-        self.post_layernorm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
-    
-    def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: ModelParameters) -> Tensor:
-        # pixel_values (batch_size, channels, width, height)
-        hidden_states = self.embeddings(pixel_values) # (batch_size, n_tokens, hidden_size)
-        hidden_states = self.pre_layrnorm(hidden_states)
-        hidden_states = self.encoder(hidden_states, vision_feature_layer, model_params)
-        return hidden_states
-
-class CLIPVisionModel(nn.Module):
-    def __init__(self, config: CLIPVisionConfig):
-        super().__init__()
-        self.vision_model = CLIPVisionTransformer(config)
-
-    def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: ModelParameters) -> Tensor:
-        # pixel_values (n_pictures, n_channels, width, height)
-        return self.vision_model(pixel_values, vision_feature_layer, model_params)
 
 
 class LlavaMultiModalProjector(nn.Module):
@@ -124,21 +85,18 @@ class LlavaForConditionalGeneration(nn.Module):
 
         return model
 
-    def get_num_image_token_ids(self) -> int:
-        return 576
-
     def input_embed(self, input_ids: Tensor) -> Tensor:
         input_embeds = self.language_model.model.embed_tokens(input_ids)
         return input_embeds
 
     def image_embed(self, pixel_values: Tensor, model_params: ModelParameters) -> Tensor:
-        hidden_states = self.vision_tower(pixel_values, self.config.vision_feature_layer, model_params)
+        hidden_states, output = self.vision_tower(pixel_values, self.config.vision_feature_layer, model_params.vision_params)
         selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
         if model_params.embed_token_pruning_params and model_params.embed_token_pruning_params.get('policy', "") == 'focal':
             from dxz.layer import token_prunning
             selected_image_feature = token_prunning.focal_prunning(
                 selected_image_feature,
-                model_params.clip_scores[:, :, 1:, 1:], # (batch_size, n_images, 576, 576)
+                model_params.output.scores [:, :, 1:, 1:], # (batch_size, n_images, 576, 576)
                 n_output_tokens=model_params.embed_token_pruning_params['n_output_tokens'],
                 strategy='rank',
             )
