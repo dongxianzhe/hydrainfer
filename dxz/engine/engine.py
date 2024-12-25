@@ -39,7 +39,7 @@ class EngineConfig:
     compiler_config  : CompilerConfig  = field(default_factory=CompilerConfig)
     scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
     multi_thread_request_process : bool = True
-    batch_image_embed: bool = True
+    batch_image_embed_forward: bool = True
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
     warm_up: bool = True
@@ -48,9 +48,9 @@ class EngineConfig:
 class GenerateOutput:
     input_len: int
     text : str
-    ttft : float
-    tpot : list[float]
-    latency : float
+    arrival_time: float
+    finished_time: float
+    token_times: list[float]
 
 class SequenceScheduler:
     def __init__(self, config: SchedulerConfig):
@@ -236,7 +236,7 @@ class Engine:
         for i in range(3):
             self.model(input_ids, pixel_values, image_features, position_ids, params)
 
-    def generate(self, inputs):
+    def generate(self, inputs) -> list[GenerateOutput]:
         """ 
         genreate is used in offline inference
         inputs example
@@ -267,15 +267,16 @@ class Engine:
             finished += f
             bar.update(len(f))
 
+        finished_time = time.perf_counter()
         finished = sorted(finished, key=lambda seq: seq.sid)
 
         for sequence in finished:
             outputs.append(GenerateOutput(
                 input_len = sequence.static_info.n_prompt_tokens, 
                 text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
-                ttft = sequence.metric.tokens_time[0] - sequence.metric.arrival_time,
-                tpot = [sequence.metric.tokens_time[i] - sequence.metric.tokens_time[i - 1] for i in range(1, len(sequence.metric.tokens_time))], 
-                latency = sequence.metric.finished_time - sequence.metric.arrival_time
+                arrival_time = sequence.metric.arrival_time, 
+                finished_time = finished_time, 
+                token_times = sequence.metric.tokens_time, 
             ))
 
         return outputs
@@ -631,63 +632,3 @@ class AsyncEngine:
                 del self.is_stream_output[seq.id]
                 del self.output_streams[seq.id]
             await asyncio.sleep(1)
-
-if __name__ == '__main__':
-    image_path = f'/home/xzd/projects/dxz/benchmark/dataset/cherry_blossom.jpg'
-    image = Image.open(image_path)
-    question = "What is the content of this image?"
-    prompt = f"USER: <image>\n{question}\nASSISTANT:"
-
-    # ['nobatch', 'requestlevel', 'continuousbatch']
-    # ['random', 'streamingllm']
-    config = EngineConfig(
-        model_name = "llava-hf/llava-1.5-7b-hf", 
-        dtype = torch.half, 
-        device = torch.device('cuda:0'), 
-        memory_config=MemoryConfig(
-            memory_management_policy='vanilla',
-            num_blocks = 20000, 
-            block_size = 16, 
-        ), 
-        scheduler_config=SchedulerConfig(
-            batch_policy = 'continuousbatch', 
-            max_running_sequences = 10, 
-            max_batch_fill_tokens = 500, 
-            max_batch_embed_images= 3, 
-            debug_mode = True, 
-        ), 
-        compiler_config=CompilerConfig(
-            max_tokens = 64, 
-            disaggregate_embed_prefill=True, 
-            kv_cache_eviction_policy = None, 
-            window_size = 28, 
-            attention_sink_size = 4, 
-            token_pruning_policy = None, 
-            n_embed_output_tokens = 64, 
-        ), 
-        multi_thread_request_process = False, 
-        batch_image_embed = True, 
-    )
-    engine = Engine(config)
-    batch_size = 10
-    inputs = [{
-        "prompt" : prompt, 
-        "multi_modal_data":{
-            "image": image
-        },
-        # "max_tokens":0, 
-        # "max_tokens":random.randint(30, 70), 
-        # "max_tokens": 10, 
-        "max_tokens": i * 10,
-    } for i in range(batch_size)]
-
-    import time
-    start = time.perf_counter()
-
-    outputs = engine.generate(inputs)
-
-    end = time.perf_counter()
-    duration = end - start
-    print(f'duration {duration}')
-    for output in outputs:
-        print(output.text)

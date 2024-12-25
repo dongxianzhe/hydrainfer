@@ -5,29 +5,105 @@ from PIL import Image
 import argparse
 import time
 import os
-from offline_inference_metric import BenchmarkMetrics
+from benchmark_metric import BenchmarkMetrics, BenchmarkMetricsBuilder
 from simulated_dataset import SimulatedDataset
+from transformers import AutoProcessor
 
+model_name = "llava-hf/llava-1.5-7b-hf"
 image_path = f'./dataset/cherry_blossom.jpg'
 image = Image.open(image_path)
 question = "What is the content of this image?"
-# a prompt with image first
 prompt = f"USER: <image>\n{question}\nASSISTANT:"
 
-# a prompt with image second
-# prompt = f"USER: \n{question}<image>\nASSISTANT:"
+def vllm_benchmark(dataset: SimulatedDataset): 
+    from vllm import LLM, SamplingParams
+    llm = LLM(model=model_name, max_model_len=4096, enforce_eager=True)
 
-# a prompt with image first after decoded
-# prompt = f"USER: <image>\n{question}\nASSISTANT:The image features a tall tower with a spire, surrounded by a beautiful cherry blossom tree. The tree is filled with pink flowers, creating a picturesque scene. The tower stands tall in the background, with the blossoming tree in the foreground. The combination of the tower and the tree creates a captivating and serene atmosphere."
+    sampling_params = [SamplingParams(temperature=0, max_tokens=input['max_tokens'], ignore_eos=True) for input in dataset]
+
+    metric_builder = BenchmarkMetricsBuilder()
+    outputs = llm.generate(dataset, sampling_params=sampling_params)
+
+    for output in outputs:
+        metric_builder.append(
+            input_len = len(output.prompt_token_ids), 
+            success = True, 
+            output_len = len(output.outputs[0].token_ids), 
+            arrival_time = output.metrics.arrival_time, 
+            finished_time = output.metrics.finished_time, 
+            token_times = output.metrics.token_times if hasattr(output.metrics, "token_times") else [], 
+        )
+    metrics = metric_builder.get_metrics()
+    metrics.print()
+
+    if args.output_text:
+        for output in outputs:
+            print(output.outputs[0].text)
+
+def dxz_benchmark(dataset: SimulatedDataset):
+    import torch
+    from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
+    from dxz.memory.virtual_kv_cache import MemoryConfig
+    from dxz.memory.compiler import CompilerConfig
+    config = EngineConfig(
+        model_name = model_name, 
+        dtype = torch.half, 
+        device = torch.device('cuda:0'), 
+        memory_config=MemoryConfig(
+            memory_management_policy='vanilla', 
+            num_blocks = 25000, 
+            block_size = 16, 
+        ), 
+        multi_threads_forward=True, 
+        multi_streams_forward=True, 
+        scheduler_config=SchedulerConfig(
+            batch_policy = 'continuousbatch', 
+            priority='decode', 
+            max_running_sequences = 10, 
+            max_batch_fill_tokens = 1024, 
+            max_batch_embed_images= 3, 
+            batch_embed_fill=False,
+            debug_mode=args.debug, 
+        ), 
+        compiler_config=CompilerConfig(
+            max_tokens = 64, 
+            disaggregate_embed_prefill = True, 
+            kv_cache_eviction_policy = None, 
+            window_size = 28, 
+            attention_sink_size = 4, 
+            token_pruning_policy = None, 
+            n_embed_output_tokens = 460,
+        ), 
+        multi_thread_request_process=True, 
+        batch_image_embed_forward=True, 
+    )
+    engine = Engine(config)
+
+    metric_builder = BenchmarkMetricsBuilder()
+    outputs = engine.generate(dataset)
+
+    for output in outputs:
+        metric_builder.append(
+            input_len = output.input_len, 
+            success = True, 
+            output_len = len(output.token_times), 
+            arrival_time = output.arrival_time, 
+            finished_time = output.finished_time, 
+            token_times = output.token_times, 
+            )
+
+    metrics = metric_builder.get_metrics()
+    metrics.print()
+
+    if args.output_text:
+        for output in outputs:
+            print(output.text)
 
 def main(args: argparse.Namespace):
-    # 1. prepare input
-    from transformers import AutoProcessor
-    model_name = "llava-hf/llava-1.5-7b-hf"
-
     random.seed(args.seed)
+
     if args.only_prefill:
-        inputs = SimulatedDataset(
+        dataset = SimulatedDataset(
             processor=AutoProcessor.from_pretrained(model_name), 
             image_path=image_path, 
             has_images=[True for _ in range(args.num_prompts)], 
@@ -35,242 +111,21 @@ def main(args: argparse.Namespace):
             output_text_lens = [1 for i in range(args.num_prompts)]
             )
     else:
-        # [((i + 1) % 3 + 1) for i in range(args.num_prompts)]
         output_text_lens = [random.randint(args.min_tokens, args.max_tokens) for _ in range(args.num_prompts)]
         print(output_text_lens)
-        inputs = SimulatedDataset(
+        dataset = SimulatedDataset(
             processor=AutoProcessor.from_pretrained(model_name), 
             image_path=image_path, 
             has_images=[True for _ in range(args.num_prompts)], 
             prompt_text_lens = [17 for i in range(args.num_prompts)], 
             output_text_lens = output_text_lens
             )
-    # inputs = [{
-    #     "prompt" : prompt, 
-    #     "multi_modal_data":{
-    #         "image": image
-    #     }, 
-    #     "max_tokens": (i + 1) * 10,
-    # } for i in range(args.num_prompts)]
 
     # 2. generate
     if args.backend == 'vllm':
-        from vllm import LLM, SamplingParams
-        llm = LLM(model=model_name, max_model_len=4096, enforce_eager=True)
-
-        sampling_params = [SamplingParams(temperature=0, max_tokens=input['max_tokens'], ignore_eos=True) for input in inputs]
-
-        start = time.perf_counter()
-        outputs = llm.generate(inputs, sampling_params=sampling_params)
-        end = time.perf_counter()
-        duration = end - start
-        completed = len(outputs)
-        input_lens = []
-        latencies = []
-        ttfts = []
-        tpots = []
-        output_lens = []
-        for output in outputs:
-            input_lens.append(len(output.prompt_token_ids))
-            latencies.append(output.metrics.finished_time - output.metrics.arrival_time)
-            ttfts.append(output.metrics.first_token_time - output.metrics.first_scheduled_time)
-            if hasattr(output.metrics, "token_times"):
-                for i in range(1, len(output.metrics.token_times)):
-                    tpot = output.metrics.token_times[i] - output.metrics.token_times[i - 1]
-                    tpots.append(tpot)
-            output_lens.append(len(output.outputs[0].token_ids))
-        metrics = BenchmarkMetrics(
-            benchmark_duration=duration, 
-            completed=completed,
-            total_input=sum(input_lens),
-            total_output=sum(output_lens),
-            mean_input_len=np.mean(input_lens),
-            median_input_len=np.median(input_lens),
-            max_input_len=max(input_lens),
-            mean_output_len=np.mean(output_lens),
-            median_output_len=np.median(output_lens),
-            max_output_len=max(output_lens),
-            request_throughput=completed / duration,
-            input_throughput=sum(input_lens) / duration,
-            output_throughput=sum(output_lens) / duration,
-            mean_latency_ms=np.mean(latencies) * 1000,
-            median_latency_ms=np.median(latencies) * 1000,
-            p90_latency_ms=np.percentile(latencies, 90) * 1000,
-            p99_latency_ms=np.percentile(latencies, 99) * 1000,
-            mean_ttft_ms=np.mean(ttfts or 0) * 1000,
-            median_ttft_ms=np.median(ttfts or 0) * 1000,
-            p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
-            p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
-            mean_tpot_ms=np.mean(tpots) * 1000,
-            median_tpot_ms=np.median(tpots) * 1000,
-            p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
-            p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
-        )
-        metrics.print()
-
-        if args.output_text:
-            for output in outputs:
-                print(output.outputs[0].text)
-
+        vllm_benchmark(dataset)
     elif args.backend == 'dxz':
-        import torch
-        from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
-        from dxz.memory.virtual_kv_cache import MemoryConfig
-        from dxz.memory.compiler import CompilerConfig
-        config = EngineConfig(
-            model_name = model_name, 
-            dtype = torch.half, 
-            device = torch.device('cuda:0'), 
-            memory_config=MemoryConfig(
-                memory_management_policy='vanilla', 
-                num_blocks = 25000, 
-                block_size = 16, 
-            ), 
-            multi_threads_forward=True, 
-            multi_streams_forward=True, 
-            scheduler_config=SchedulerConfig(
-                batch_policy = 'continuousbatch', 
-                priority='decode', 
-                max_running_sequences = 10, 
-                max_batch_fill_tokens = 1024, 
-                max_batch_embed_images= 3, 
-                batch_embed_fill=False,
-                debug_mode=args.debug, 
-            ), 
-            compiler_config=CompilerConfig(
-                max_tokens = 64, 
-                disaggregate_embed_prefill = True, 
-                kv_cache_eviction_policy = None, 
-                window_size = 28, 
-                attention_sink_size = 4, 
-                token_pruning_policy = None, 
-                n_embed_output_tokens = 460,
-            ), 
-            multi_thread_request_process=True, 
-            batch_image_embed=True, 
-        )
-        engine = Engine(config)
-
-        start = time.perf_counter()
-
-        outputs = engine.generate(inputs)
-
-        end = time.perf_counter()
-        duration = end - start
-        completed = len(outputs)
-        input_lens = []
-        latencies = []
-        ttfts = []
-        tpots = []
-        output_lens = []
-        for output in outputs:
-            input_lens.append(output.input_len)
-            latencies.append(output.latency)
-            ttfts.append(output.ttft)
-            tpots += output.tpot
-            output_lens.append(len(output.tpot) + 1)
-
-        metrics = BenchmarkMetrics(
-            benchmark_duration=duration, 
-            completed=completed,
-            total_input=sum(input_lens),
-            total_output=sum(output_lens),
-            mean_input_len=np.mean(input_lens),
-            median_input_len=np.median(input_lens),
-            max_input_len=max(input_lens),
-            mean_output_len=np.mean(output_lens),
-            median_output_len=np.median(output_lens),
-            max_output_len=max(output_lens),
-            request_throughput=completed / duration,
-            input_throughput=sum(input_lens) / duration,
-            output_throughput=sum(output_lens) / duration,
-            mean_latency_ms=np.mean(latencies) * 1000,
-            median_latency_ms=np.median(latencies) * 1000,
-            p90_latency_ms=np.percentile(latencies, 90) * 1000,
-            p99_latency_ms=np.percentile(latencies, 99) * 1000,
-            mean_ttft_ms=np.mean(ttfts or 0) * 1000,
-            median_ttft_ms=np.median(ttfts or 0) * 1000,
-            p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
-            p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
-            mean_tpot_ms=np.mean(tpots) * 1000,
-            median_tpot_ms=np.median(tpots) * 1000,
-            p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
-            p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
-        )
-        metrics.print()
-        if args.output_text:
-            for output in outputs:
-                print(output.text)
-    else:
-        import torch
-        from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
-        from dxz.memory.virtual_kv_cache import MemoryConfig
-        from dxz.memory.compiler import CompilerConfig
-        from dxz.mllm import MLLM
-        mllm = MLLM(
-            model_name = model_name, 
-            num_blocks = 34000, 
-            priority='prefill', 
-            max_running_sequences = 20, 
-            max_batch_fill_tokens = 1024, 
-            max_batch_embed_images= 3, 
-            batch_embed_fill=True,
-            debug_mode=args.debug,
-            disaggregate_embed_prefill = True, 
-            batch_image_embed=True, 
-        )
-
-        start = time.perf_counter()
-
-        outputs = mllm.generate(inputs)
-
-        end = time.perf_counter()
-        duration = end - start
-        completed = len(outputs)
-        input_lens = []
-        latencies = []
-        ttfts = []
-        tpots = []
-        output_lens = []
-        print(f'duration {duration}')
-        # for output in outputs:
-        #     input_lens.append(output.input_len)
-        #     latencies.append(output.latency)
-        #     ttfts.append(output.ttft)
-        #     tpots += output.tpot
-        #     output_lens.append(len(output.tpot) + 1)
-
-        # metrics = BenchmarkMetrics(
-        #     benchmark_duration=duration, 
-        #     completed=completed,
-        #     total_input=sum(input_lens),
-        #     total_output=sum(output_lens),
-        #     mean_input_len=np.mean(input_lens),
-        #     median_input_len=np.median(input_lens),
-        #     max_input_len=max(input_lens),
-        #     mean_output_len=np.mean(output_lens),
-        #     median_output_len=np.median(output_lens),
-        #     max_output_len=max(output_lens),
-        #     request_throughput=completed / duration,
-        #     input_throughput=sum(input_lens) / duration,
-        #     output_throughput=sum(output_lens) / duration,
-        #     mean_latency_ms=np.mean(latencies) * 1000,
-        #     median_latency_ms=np.median(latencies) * 1000,
-        #     p90_latency_ms=np.percentile(latencies, 90) * 1000,
-        #     p99_latency_ms=np.percentile(latencies, 99) * 1000,
-        #     mean_ttft_ms=np.mean(ttfts or 0) * 1000,
-        #     median_ttft_ms=np.median(ttfts or 0) * 1000,
-        #     p90_ttft_ms=np.percentile(ttfts or 0, 90) * 1000,
-        #     p99_ttft_ms=np.percentile(ttfts or 0, 99) * 1000,
-        #     mean_tpot_ms=np.mean(tpots) * 1000,
-        #     median_tpot_ms=np.median(tpots) * 1000,
-        #     p90_tpot_ms=np.percentile(tpots, 90) * 1000 if len(tpots) > 0 else np.nan,
-        #     p99_tpot_ms=np.percentile(tpots, 99) * 1000 if len(tpots) > 0 else np.nan,
-        # )
-        # metrics.print()
-        if args.output_text:
-            for output in outputs:
-                print(output.text)
+        dxz_benchmark(dataset)
 
 
 if __name__ == '__main__':
@@ -278,7 +133,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "--backend", 
         type=str,
-        choices=["vllm", "dxz", 'cdxz'],
+        choices=["vllm", "dxz"],
         default="vllm",
     )
     parser.add_argument(
