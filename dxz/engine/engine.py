@@ -9,8 +9,9 @@ from PIL import Image
 from dataclasses import dataclass, field
 import torch
 from torch import Tensor
-from typing import Literal
+from typing import Literal, Optional
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
+from dxz.engine.request import Request
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import AttentionParameters, ModelParameters, VisionModelParameters
@@ -236,32 +237,21 @@ class Engine:
         for i in range(3):
             self.model(input_ids, pixel_values, image_features, position_ids, params)
 
-    def generate(self, inputs) -> list[GenerateOutput]:
-        """ 
-        genreate is used in offline inference
-        inputs example
-        [{
-            "prompt" : prompt, 
-            "multi_modal_data":{
-                "image": image
-            },
-            "max_tokens": 50,
-        }, ...]
-        """
+    def generate(self, requests: list[Request]) -> list[GenerateOutput]:
         if self.config.multi_thread_request_process:
             self.add_request_lock = threading.Lock()
-            def fun(input):
+            def add_request_async(request: Request):
                 with self.add_request_lock:
-                    return self.add_request(input)
-            self.executor.map(fun, inputs)
+                    return self.add_request(request)
+            self.executor.map(add_request_async, requests)
         else:
-            for input in inputs:
-                self.add_request(input)
+            for request in requests:
+                self.add_request(request)
 
         outputs = []
         finished: list[Sequence] = []
-        bar = tqdm(range(len(inputs)))
-        while len(finished) < len(inputs):
+        bar = tqdm(range(len(requests)))
+        while len(finished) < len(requests):
             self.step()
             f = self.scheduler.pop_finished() 
             finished += f
@@ -281,20 +271,20 @@ class Engine:
 
         return outputs
     
-    def add_request(self, input):
+    def add_request(self, request: Request):
         arrival_time = time.perf_counter()
         static_info = self.compiler.compile(
-            prompt = input['prompt'], 
-            images = [input['multi_modal_data']['image']], 
-            compile_params = CompileParameters(max_tokens = input.get('max_tokens', None))
+            prompt = request.prompt, 
+            images = request.image, 
+            compile_params = CompileParameters(max_tokens = request.max_tokens)
             )
         sequence = Sequence(
             static_info=static_info, 
             sid = self.sid_allocator, 
             instructions = static_info.instructions, 
             virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
-            max_tokens = input.get('max_tokens', 50), 
-            eos_token_id = input.get('eos_token_id', None), 
+            max_tokens = request.max_tokens, 
+            eos_token_id = None, 
             max_seq_len = self.model_config.text_config.max_position_embeddings, 
         )
         sequence.metric.arrival_time = arrival_time
@@ -575,7 +565,7 @@ class Engine:
                 embed_future.result()
         else:
             output_tokens = self.execute_batch_fill(fill_contexts)
-            if self.config.batch_image_embed:
+            if self.config.batch_image_embed_forward:
                 if self.config.multi_streams_forward:
                     self.execute_batch_image_embed_streams_decorator(image_embed_contexts, self.streams[1])
                 else:
@@ -594,41 +584,3 @@ class Engine:
                 self.scheduler.schedule_unfinished([sequence])
         
         return output_tokens
-
-from dxz.entrypoint.async_stream import AsyncStream
-import asyncio
-class AsyncEngine:
-    def __init__(self, config: Engine):
-        self.engine = Engine(config=config)
-        self.tokenizer = self.engine.tokenizer
-        self.is_stream_output:dict[int, bool]        = {} # sequence.id -> wheather stream output
-        self.output_streams  :dict[int, AsyncStream] = {} # sequence.id -> output generator
-
-    def generate(self, input, stream: bool) -> AsyncStream:
-        id = self.engine.add_request(prompt).sid
-        output_stream = AsyncStream()
-        self.is_stream_output[id] = stream
-        self.output_streams  [id] = output_stream
-        return output_stream
-    
-    async def loop(self):
-        while True:
-            print('looping...')
-            output_tokens = self.engine.step()
-            print(output_tokens)
-            for sid, token_id in output_tokens.items():
-                if self.is_stream_output[sid]:
-                    output_text = self.tokenizer.decode(token_id)
-                    output_stream = self.output_streams[sid]
-                    output_stream.put(output_stream)
-
-            finished = self.engine.scheduler.pop_finished()
-            for seq in finished:
-                if not self.is_stream_output[sid]:
-                    output_text = self.tokenizer.decode(seq.output_token_ids)
-                    output_stream = self.output_streams[seq.sid]
-                    output_text.put(output_text)
-                output_stream.put(StopAsyncIteration())
-                del self.is_stream_output[seq.id]
-                del self.output_streams[seq.id]
-            await asyncio.sleep(1)

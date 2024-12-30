@@ -1,4 +1,25 @@
 from PIL import Image
+try:
+    from dxz.engine.request import Request
+except:
+    from typing import Optional
+    from PIL import Image
+    from dataclasses import dataclass
+
+    @dataclass
+    class Request:
+        prompt: str
+        image: Optional[Image.Image] = None
+        image_base64: str = ""
+        max_tokens: int = 50
+
+import base64
+
+def encode_base64_content_from_path(image_path):
+    with open(image_path, "rb") as image_file:
+        encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
+    return encoded_string
+
 class SimulatedDataset:
     """
         an artifical dataset constructed used to profile engine in different scenarios
@@ -41,7 +62,13 @@ class SimulatedDataset:
             token_ids += suffix[:suffix_len]
 
             prompt = self.tokenizer.decode(token_ids, skip_special_tokens=False)
-            self.data.append({"prompt": prompt, "multi_modal_data":{"image":image}, "max_tokens": output_text_len})
+            image_base64 = encode_base64_content_from_path(image_path=image_path)
+            self.data.append(Request(
+                prompt = prompt, 
+                image = image, 
+                image_base64 = image_base64,
+                max_tokens = output_text_len,
+            ))
     
     def __iter__(self):
         return iter(self.data)
