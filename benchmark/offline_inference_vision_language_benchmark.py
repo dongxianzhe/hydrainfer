@@ -19,10 +19,21 @@ def vllm_benchmark(dataset: SimulatedDataset):
     from vllm import LLM, SamplingParams
     llm = LLM(model=model_name, max_model_len=4096, enforce_eager=True)
 
-    sampling_params = [SamplingParams(temperature=0, max_tokens=input['max_tokens'], ignore_eos=True) for input in dataset]
+    sampling_params = []
 
     metric_builder = BenchmarkMetricsBuilder()
-    outputs = llm.generate(dataset, sampling_params=sampling_params)
+    inputs = []
+    for request in dataset:
+        inputs.append({
+            "prompt": request.prompt, 
+            "multi_modal_data": {
+                "image" : request.image, 
+            }, 
+            "max_tokens": request
+        })
+        sampling_params.append(SamplingParams(temperature=0, max_tokens=request.max_tokens, ignore_eos=True))
+        
+    outputs = llm.generate(inputs, sampling_params=sampling_params)
 
     for output in outputs:
         metric_builder.append(

@@ -1,3 +1,5 @@
+import io
+import base64
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from tqdm import tqdm
@@ -201,6 +203,7 @@ class Engine:
         self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
 
         # 6. multi threads request process optimization
+        self.add_request_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=32)
 
         # 7. multi stream and threads forward optimization
@@ -238,15 +241,8 @@ class Engine:
             self.model(input_ids, pixel_values, image_features, position_ids, params)
 
     def generate(self, requests: list[Request]) -> list[GenerateOutput]:
-        if self.config.multi_thread_request_process:
-            self.add_request_lock = threading.Lock()
-            def add_request_async(request: Request):
-                with self.add_request_lock:
-                    return self.add_request(request)
-            self.executor.map(add_request_async, requests)
-        else:
-            for request in requests:
-                self.add_request(request)
+        for request in requests:
+            self.add_request(request)
 
         outputs = []
         finished: list[Sequence] = []
@@ -270,9 +266,22 @@ class Engine:
             ))
 
         return outputs
-    
+
     def add_request(self, request: Request):
+        if self.config.multi_thread_request_process:
+            self.executor.map(self._add_request_async, [request])
+        else:
+            self._add_request(request)
+
+    def _add_request_async(self, request: Request):
+        with self.add_request_lock:
+            self._add_request(request)
+    
+    def _add_request(self, request: Request):
+        if request.image is None and request.image_base64 is not None:
+            request.image = Image.open(io.BytesIO(base64.b64decode(request.image_base64)))
         arrival_time = time.perf_counter()
+
         static_info = self.compiler.compile(
             prompt = request.prompt, 
             images = request.image, 
@@ -286,11 +295,11 @@ class Engine:
             max_tokens = request.max_tokens, 
             eos_token_id = None, 
             max_seq_len = self.model_config.text_config.max_position_embeddings, 
+            rid = request.request_id, 
         )
         sequence.metric.arrival_time = arrival_time
         self.sid_allocator += 1
         self.scheduler.schedule_new([sequence])
-        return sequence
     
     def execute_batch_fill(self, contexts: list[tuple[Sequence, Instruction]]) -> dict[int, int]:
         if len(contexts) == 0:
@@ -447,7 +456,7 @@ class Engine:
         # 3. forward and sample
         sample_token_ids = self.model_runner(ten_input_ids, pixel_values, image_featues, ten_position_ids, model_params)
         sample_token_ids = sample_token_ids.tolist()
-        output_tokens = {} # sid -> token_id
+        output_tokens = {} # rid -> token_id
         if len(selected_token_ids) > 0:
             t = time.perf_counter()
             i = 0
@@ -458,7 +467,7 @@ class Engine:
                     sequence.output_token_ids.append(next_token_id)
                     sequence.metric.tokens_time.append(t)
                     i += 1
-                    output_tokens[sequence.sid] = next_token_id
+                    output_tokens[sequence.rid] = next_token_id
         return output_tokens
 
     def execute_mov(self, context: tuple[Sequence, Instruction]):

@@ -8,3 +8,4 @@ class Request:
     image: Optional[Image.Image] = None
     image_base64: str = ""
     max_tokens: int = 50
+    request_id: int = 0

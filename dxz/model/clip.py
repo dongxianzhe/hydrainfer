@@ -3,6 +3,7 @@ from torch import nn, Tensor
 from transformers import CLIPVisionConfig
 import math
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput
+from dxz.layer.activation import QuickGELUActivation
 
 class CLIPSdpaAttention(nn.Module):
     def __init__(self, config: CLIPVisionConfig):
@@ -32,12 +33,7 @@ class CLIPSdpaAttention(nn.Module):
             o = self.out_proj(o)
             return o
 
-class QuickGELUActivation(nn.Module):
-    """
-    Applies GELU approximation that is fast but somewhat inaccurate. See: https://github.com/hendrycks/GELUs
-    """
-    def forward(self, input: Tensor) -> Tensor:
-        return input * torch.sigmoid(1.702 * input)
+
 
 class CLIPMLP(nn.Module):
     def __init__(self, config: CLIPVisionConfig):

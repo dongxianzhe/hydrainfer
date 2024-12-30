@@ -29,13 +29,9 @@ class RequestOutput:
     token_times: list[float] = field(default_factory=list)
 
 
-def encode_base64_content_from_path(image_path):
-    with open(image_path, "rb") as image_file:
-        encoded_string = base64.b64encode(image_file.read()).decode("utf-8")
-    return encoded_string
 
 openai_api_key = "EMPTY"
-openai_api_base = "http://localhost:8000/v1"
+openai_api_base = "http://localhost:8888/v1"
 client = AsyncOpenAI(
     api_key=openai_api_key,
     base_url=openai_api_base,
@@ -43,7 +39,6 @@ client = AsyncOpenAI(
 
 prompt = "What is the content of this image?"
 image_path = f'./dataset/cherry_blossom.jpg'
-image_base64 = encode_base64_content_from_path(image_path)
 model_name = "llava-hf/llava-1.5-7b-hf"
 image_path = f'./dataset/cherry_blossom.jpg'
 
@@ -83,6 +78,31 @@ async def vllm_request_func(input: RequestInput, pbar: Optional[tqdm] = None) ->
 
     return output
 
+async def dxz_request_func(input: RequestInput, pbar: Optional[tqdm] = None) -> RequestOutput:
+    response = await client.chat.completions.create(
+        messages=[{
+            "role":"user",
+            "content" : input.prompt, 
+            "image" : input.image_base64, 
+        }],
+        model=model_name,
+        max_tokens = input.max_tokens, 
+        stream=True, 
+    )
+    output = RequestOutput()
+    output.success = True
+    output.start_time = time.perf_counter()
+    async for chunk in response:
+        content = chunk.choices[0].delta.content
+        output.output_text += content + " "
+        output.token_times.append(time.perf_counter())
+
+    output.prompt = input.prompt
+    if pbar:
+        pbar.update(1)
+
+    return output
+
 async def benchmark(dataset, args: argparse.Namespace):
     pbar = tqdm(total=len(dataset))
     start = time.perf_counter()
@@ -101,8 +121,14 @@ async def benchmark(dataset, args: argparse.Namespace):
     metric_builder = BenchmarkMetricsBuilder()
     tasks = []
     async for request in get_request(dataset, args.request_rate):
-        request_func_input = RequestInput(prompt=prompt, image_base64=image_base64, max_tokens=request['max_tokens'])
-        tasks.append(asyncio.create_task(vllm_request_func(request_func_input, pbar=pbar)))
+        request_func_input = RequestInput(prompt=request.prompt, image_base64=request.image_base64, max_tokens=request.max_tokens)
+        if args.backend == 'vllm':
+            tasks.append(asyncio.create_task(vllm_request_func(request_func_input, pbar=pbar)))
+        elif args.backend == 'dxz':
+            tasks.append(asyncio.create_task(dxz_request_func(request_func_input, pbar=pbar)))
+        else:
+            raise Exception(f'invalid backend {args.backend}')
+
     outputs: list[RequestOutput] = await asyncio.gather(*tasks)
 
     pbar.close()
@@ -120,7 +146,7 @@ async def benchmark(dataset, args: argparse.Namespace):
 
     if args.output_text:
         for i, output in enumerate(outputs):
-            print(f'{output.prompt}: {output.output_text}')
+            print(f'{output.prompt} {output.output_text}')
 
 def main(args: argparse.Namespace):
     # 1. set seed
@@ -146,6 +172,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Benchmark the online serving throughput.")
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument(
+        "--backend", 
+        type=str,
+        choices=["vllm", "dxz"],
+        default="vllm",
+    )
     parser.add_argument(
         "--num-prompts",
         type=int,

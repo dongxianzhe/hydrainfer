@@ -1,17 +1,15 @@
 from PIL import Image
-try:
-    from dxz.engine.request import Request
-except:
-    from typing import Optional
-    from PIL import Image
-    from dataclasses import dataclass
+from typing import Optional
+from PIL import Image
+from dataclasses import dataclass
 
-    @dataclass
-    class Request:
-        prompt: str
-        image: Optional[Image.Image] = None
-        image_base64: str = ""
-        max_tokens: int = 50
+@dataclass
+class Request:
+    prompt: str
+    image: Optional[Image.Image] = None
+    image_base64: str = ""
+    max_tokens: int = 50
+    question: str = ""
 
 import base64
 
@@ -68,6 +66,7 @@ class SimulatedDataset:
                 image = image, 
                 image_base64 = image_base64,
                 max_tokens = output_text_len,
+                question = question
             ))
     
     def __iter__(self):
