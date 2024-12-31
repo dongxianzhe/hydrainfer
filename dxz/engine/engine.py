@@ -11,27 +11,15 @@ from PIL import Image
 from dataclasses import dataclass, field
 import torch
 from torch import Tensor
-from typing import Literal, Optional
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 from dxz.engine.request import Request
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
 from dxz.model.parameters import AttentionParameters, ModelParameters, VisionModelParameters
-
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
-from queue import Queue
-
-@dataclass
-class SchedulerConfig:
-    batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
-    priority: Literal['prefill', 'decode'] = 'prefill'
-    max_running_sequences: int = 10
-    max_batch_fill_tokens: int = 1024
-    max_batch_embed_images: int = 3
-    batch_embed_fill: bool = False
-    debug_mode: bool = False
+from dxz.engine.scheduler import SchedulerConfig, SequenceScheduler
 
 @dataclass
 class EngineConfig:
@@ -55,108 +43,6 @@ class GenerateOutput:
     finished_time: float
     token_times: list[float]
 
-class SequenceScheduler:
-    def __init__(self, config: SchedulerConfig):
-        self.config = config
-        self.waiting = Queue()
-        self.running: list[Sequence] = []
-        self.finished: list[Sequence] = []
-        self.step_cnt = 0
-    
-    def schedule_new(self, sequences: list[Sequence]):
-        for sequence in sequences:
-            self.waiting.put(sequence)
-    
-    def schedule_running(self, sequences: list[Sequence]):
-        self.running += sequences
-
-    def schedule_unfinished(self, sequences: list[Sequence]):
-        self.running += sequences
-    
-    def schedule_finished(self, sequences: list[Sequence]):
-        self.finished += sequences
-
-    def pop_finished(self) -> list[Sequence]:
-        finished = self.finished
-        self.finished = []
-        return finished
-
-    def step(self) -> list[tuple[Sequence, Instruction]]:
-        self.step_cnt += 1
-        schedule_time = time.perf_counter()
-        # 1. get enough sequences to participate in the batch
-        if self.config.batch_policy == 'nobatch':
-            if len(self.running) == 0:
-                if not self.waiting.empty():
-                    sequence = self.waiting.get()
-                    self.running.append(sequence)
-        elif self.config.batch_policy == 'requestlevel':
-            if len(self.running) == 0:
-                while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
-                    sequence = self.waiting.get()
-                    self.running.append(sequence)
-        elif self.config.batch_policy == 'continuousbatch':
-            while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
-                sequence = self.waiting.get()
-                self.running.append(sequence)
-        if len(self.running) == 0:
-            return []
-
-        batch_fill_tokens = 0
-        batch_embed_images = 0
-        prefill_seqs: list[Sequence] = []
-        decode_seqs : list[Sequence] = []
-        embed_seqs  : list[Sequence] = []
-        next_step: list[Sequence] = []
-        this_step: list[Sequence] = []
-        for sequence in self.running:
-            inst = sequence.curr_instruction()
-            if isinstance(inst, Fill):
-                if len(inst.token_ids) == 1:
-                    decode_seqs.append(sequence)
-                else:
-                    prefill_seqs.append(sequence)
-            elif isinstance(inst, ImageEmbed):
-                embed_seqs.append(sequence)
-            else:
-                this_step.append(sequence)
-
-
-        if len(prefill_seqs) > 0 and not self.config.batch_embed_fill:
-            next_step += embed_seqs
-        else:
-            for seq in embed_seqs:
-                if batch_embed_images < self.config.max_batch_embed_images:
-                    this_step.append(seq)
-                    batch_embed_images += 1 # todo cope with multi image
-                else:
-                    next_step.append(seq)
-
-        fill_seqs = prefill_seqs + decode_seqs if self.config.priority == 'prefill' else decode_seqs + prefill_seqs
-            
-        for seq in fill_seqs:
-            inst = seq.curr_instruction()
-            if batch_fill_tokens < self.config.max_batch_fill_tokens:
-                this_step.append(seq)
-                batch_fill_tokens += len(inst.token_ids)
-            else:
-                next_step.append(seq)
-
-        if self.config.debug_mode:
-            print(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
-            print(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
-            print(f'pc  : ' + ' '.join(f'{seq.pc : 2}'                 for seq in this_step))
-            print(f'inst: ' + ' '.join(f'{seq.curr_instruction()}' for seq in this_step))
-
-        for seq in this_step:
-            if seq.metric.first_schedule_time == 0.:
-                seq.metric.first_schedule_time = schedule_time
-
-        self.running = next_step
-        return [(seq, seq.next_instruction()) for seq in this_step]
-
-    def __repr__(self):
-        return f'{len(self.waiting)} {len(self.running)} {len(self.finished)}'
 
 class Engine:
     def __init__(self, config: EngineConfig):

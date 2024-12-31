@@ -65,8 +65,8 @@ def dxz_benchmark(dataset: SimulatedDataset):
             num_blocks = 25000, 
             block_size = 16, 
         ), 
-        multi_threads_forward=True, 
-        multi_streams_forward=True, 
+        multi_threads_forward=False, 
+        multi_streams_forward=False, 
         scheduler_config=SchedulerConfig(
             batch_policy = 'continuousbatch', 
             priority='decode', 
@@ -85,7 +85,7 @@ def dxz_benchmark(dataset: SimulatedDataset):
             token_pruning_policy = None, 
             n_embed_output_tokens = 460,
         ), 
-        multi_thread_request_process=True, 
+        multi_thread_request_process=False, 
         batch_image_embed_forward=True, 
     )
     engine = Engine(config)

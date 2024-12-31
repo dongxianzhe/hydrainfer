@@ -10,6 +10,7 @@ class Request:
     image_base64: str = ""
     max_tokens: int = 50
     question: str = ""
+    request_id: int = 0
 
 import base64
 
@@ -40,7 +41,7 @@ class SimulatedDataset:
         question = self.tokenizer.encode( "What is the content of this image?")[1:] # skip <bos>
         suffix = self.tokenizer.encode( "ASSISTANT:")[1:] # skip <bos>
 
-        for has_image, prompt_text_len, output_text_len in zip(has_images, prompt_text_lens, output_text_lens):
+        for i, (has_image, prompt_text_len, output_text_len) in enumerate(zip(has_images, prompt_text_lens, output_text_lens)):
             token_ids = []
             # 1. prefix
             token_ids += prefix[:prompt_text_len]
@@ -66,7 +67,8 @@ class SimulatedDataset:
                 image = image, 
                 image_base64 = image_base64,
                 max_tokens = output_text_len,
-                question = question
+                question = question, 
+                request_id = i,
             ))
     
     def __iter__(self):
