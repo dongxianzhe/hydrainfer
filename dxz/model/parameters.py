@@ -126,4 +126,4 @@ class ModelParameters:
     embed_token_pruning_params: Optional[dict] = None
     prefill_token_pruning_params: Optional[dict] = None
     decode_kvcache_eviction_parmas: Optional[dict] = None
-    vision_params: VisionModelParameters = None
+    vision_params: VisionModelParameters = VisionModelParameters()

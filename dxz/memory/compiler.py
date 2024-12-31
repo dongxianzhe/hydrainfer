@@ -1,14 +1,15 @@
 import random
 from torch import Tensor
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from transformers import AutoTokenizer, AutoProcessor
 from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill
 from PIL import Image
 from typing import Literal, Optional
+import argparse
 
 @dataclass
 class CompilerConfig:
-    max_tokens: int = 64
+    default_max_tokens: int = 64
     disaggregate_embed_prefill: bool = True
     # chunked_prefill: bool = True
     # max_chunk_size: int = 256
@@ -17,6 +18,23 @@ class CompilerConfig:
     attention_sink_size: int = 4 
     token_pruning_policy: Literal[None, 'focal'] = None
     n_embed_output_tokens: int = 64
+
+    @classmethod
+    def from_cli_args(cls, args: argparse.Namespace) -> 'CompilerConfig':
+        attrs = [attr.name for attr in fields(cls)]
+        config = cls(**{attr: getattr(args, attr) for attr in attrs})
+        return config
+
+    @staticmethod
+    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        parser.add_argument('--default-max-tokens', type=int, default=64, help='Maximum default number of output tokens.')
+        parser.add_argument('--disaggregate-embed-prefill', action='store_true', help='Enable disaggregation of embedding prefill.')
+        parser.add_argument('--kv-cache-eviction-policy', type=str, choices=[None, 'random', 'streamingllm'], default=None, help='Eviction policy for key-value cache.')
+        parser.add_argument('--window-size', type=int, default=28, help='Size of the attention window.')
+        parser.add_argument('--attention-sink-size', type=int, default=4, help='Size of the attention sink.')
+        parser.add_argument('--token-pruning-policy', type=str, choices=[None, 'focal'], default=None, help='Token pruning policy.')
+        parser.add_argument('--n-embed-output-tokens', type=int, default=64, help='Number of output tokens for embedding.')
+        return parser
 
 @dataclass
 class CompilerContext:
@@ -101,7 +119,7 @@ class Compiler:
             last_prefill_instruction = fill_inst
 
         # 3. decode (kv_cache eviction)
-        max_tokens = compile_param.max_tokens if compile_param.max_tokens is not None else self.config.max_tokens
+        max_tokens = compile_param.max_tokens if compile_param.max_tokens is not None else self.config.default_max_tokens
         curr_fill_inst = last_prefill_instruction
         for _ in range(max_tokens - 1):
             cache_ids: list[int] = []

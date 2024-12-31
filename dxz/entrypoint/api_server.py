@@ -1,3 +1,4 @@
+import argparse
 import torch
 import time
 import shortuuid
@@ -9,37 +10,13 @@ from contextlib import asynccontextmanager
 import asyncio
 from typing import AsyncGenerator
 from dxz.entrypoint.api_protocol import CompletionRequest, CompletionResponse, CompletionResponseChoice, CompletionResponseStreamChoice, CompletionStreamResponse, ChatCompletionRequest, ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse, DeltaMessage
-from dxz.engine.engine import EngineConfig, SchedulerConfig
+from dxz.engine.engine import EngineConfig
 from dxz.engine.async_engine import AsyncEngine
-from dxz.memory.virtual_kv_cache import MemoryConfig
-from dxz.memory.compiler import CompilerConfig
 
-config = EngineConfig(
-    model_name = "llava-hf/llava-1.5-7b-hf", 
-    dtype = torch.half, 
-    device = torch.device('cuda:0'), 
-    memory_config=MemoryConfig(
-        num_blocks = 20000, 
-        block_size = 16, 
-    ), 
-    scheduler_config=SchedulerConfig(
-        batch_policy = 'continuousbatch', 
-        max_running_sequences = 10, 
-        max_batch_fill_tokens = 1024, 
-        debug_mode = False, 
-    ), 
-    compiler_config=CompilerConfig(
-        max_tokens = 64, 
-        disaggregate_embed_prefill=True, 
-        kv_cache_eviction_policy = None, 
-        window_size = 28, 
-        attention_sink_size = 4, 
-        token_pruning_policy = None, 
-        n_embed_output_tokens = 64, 
-    ), 
-    batch_image_embed_forward = True, 
-    multi_thread_request_process=True, 
-)
+parser = argparse.ArgumentParser()
+parser = EngineConfig.add_cli_args(parser)
+args = parser.parse_args()
+config = EngineConfig.from_cli_args(args)
 async_engine = AsyncEngine(config)
 
 @asynccontextmanager

@@ -1,4 +1,5 @@
 import random
+import torch
 import numpy as np
 import time
 from PIL import Image
@@ -51,43 +52,13 @@ def vllm_benchmark(dataset: SimulatedDataset):
         for output in outputs:
             print(output.outputs[0].text)
 
-def dxz_benchmark(dataset: SimulatedDataset):
-    import torch
+def dxz_benchmark(dataset: SimulatedDataset, args: argparse.Namespace):
     from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
     from dxz.memory.virtual_kv_cache import MemoryConfig
     from dxz.memory.compiler import CompilerConfig
-    config = EngineConfig(
-        model_name = model_name, 
-        dtype = torch.half, 
-        device = torch.device('cuda:0'), 
-        memory_config=MemoryConfig(
-            memory_management_policy='vanilla', 
-            num_blocks = 25000, 
-            block_size = 16, 
-        ), 
-        multi_threads_forward=False, 
-        multi_streams_forward=False, 
-        scheduler_config=SchedulerConfig(
-            batch_policy = 'continuousbatch', 
-            priority='decode', 
-            max_running_sequences = 10, 
-            max_batch_fill_tokens = 1024, 
-            max_batch_embed_images= 3, 
-            batch_embed_fill=False,
-            debug_mode=args.debug, 
-        ), 
-        compiler_config=CompilerConfig(
-            max_tokens = 64, 
-            disaggregate_embed_prefill = True, 
-            kv_cache_eviction_policy = None, 
-            window_size = 28, 
-            attention_sink_size = 4, 
-            token_pruning_policy = None, 
-            n_embed_output_tokens = 460,
-        ), 
-        multi_thread_request_process=False, 
-        batch_image_embed_forward=True, 
-    )
+    config = EngineConfig.from_cli_args(args)
+
+    print(config)
     engine = Engine(config)
 
     metric_builder = BenchmarkMetricsBuilder()
@@ -136,11 +107,11 @@ def main(args: argparse.Namespace):
     if args.backend == 'vllm':
         vllm_benchmark(dataset)
     elif args.backend == 'dxz':
-        dxz_benchmark(dataset)
+        dxz_benchmark(dataset, args)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Benchmark the online serving throughput.")
+    parser = argparse.ArgumentParser(description="Benchmark the offline serving.")
     parser.add_argument(
         "--backend", 
         type=str,
@@ -191,6 +162,11 @@ if __name__ == '__main__':
         default=10,
         help="max number of tokens genreated.",
     )
+    try:
+        from dxz.engine.engine import EngineConfig
+        parser = EngineConfig.add_cli_args(parser)
+    except:
+        pass
 
     args = parser.parse_args()
     main(args)

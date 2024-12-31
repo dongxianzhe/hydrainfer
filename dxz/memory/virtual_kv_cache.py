@@ -1,15 +1,29 @@
 import torch
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from dxz.memory.kv_cache import KVCache
 from dxz.memory.block_allocator import BlockAllocator
 from typing import Literal
+import argparse
 
 @dataclass
 class MemoryConfig:
     memory_management_policy: Literal['vanilla', 'shared_layers'] = 'vanilla'
-    num_blocks: int = 10000
+    num_blocks: int = 20000
     block_size: int = 16
-     
+
+    @classmethod
+    def from_cli_args(cls, args: argparse.Namespace) -> 'MemoryConfig':
+        attrs = [attr.name for attr in fields(cls)]
+        config = cls(**{attr: getattr(args, attr) for attr in attrs})
+        return config
+
+    @staticmethod
+    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        parser.add_argument('--memory-management-policy', type=str, choices=['vanilla', 'shared_layers'], default='vanilla', help='Memory management policy.')
+        parser.add_argument('--num-blocks', type=int, default=20000, help='Number of GPU kvcache blocks.')
+        parser.add_argument('--block-size', type=int, default=16, help='Size of each block.')
+        return parser
+
 
 @dataclass
 class MemoryContext:

@@ -8,7 +8,7 @@ import random
 from itertools import accumulate
 from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 import torch
 from torch import Tensor
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
@@ -20,6 +20,7 @@ from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
 from dxz.engine.scheduler import SchedulerConfig, SequenceScheduler
+import argparse
 
 @dataclass
 class EngineConfig:
@@ -34,6 +35,28 @@ class EngineConfig:
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
     warm_up: bool = True
+
+    @classmethod
+    def from_cli_args(cls, args: argparse.Namespace) -> 'MemoryConfig':
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['model_name', 'dtype', 'device', 'memory_config', 'compiler_config', 'scheduler_config']]
+        memory_config = MemoryConfig.from_cli_args(args)
+        compiler_config = CompilerConfig.from_cli_args(args)
+        scheduler_config = SchedulerConfig.from_cli_args(args)
+        config = cls(memory_config=memory_config, compiler_config=compiler_config, scheduler_config=scheduler_config, **{attr: getattr(args, attr) for attr in attrs})
+        return config
+
+    @staticmethod
+    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        parser = MemoryConfig.add_cli_args(parser)
+        parser = CompilerConfig.add_cli_args(parser)
+        parser = SchedulerConfig.add_cli_args(parser)
+        parser.add_argument('--model-name', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
+        parser.add_argument('--multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
+        parser.add_argument('--batch-image-embed-forward', action='store_true', help='Enable batch image embedding forwarding.')
+        parser.add_argument('--multi-streams-forward', action='store_true', help='Enable multi-stream forwarding.')
+        parser.add_argument('--multi-threads-forward', action='store_true', help='Enable multi-thread forwarding.')
+        parser.add_argument('--warm-up', action='store_true', help='Enable warm-up phase.')
+        return parser
 
 @dataclass
 class GenerateOutput:

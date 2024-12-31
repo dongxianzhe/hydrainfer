@@ -10,7 +10,7 @@ import argparse
 class SchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     priority: Literal['prefill', 'decode'] = 'prefill'
-    max_running_sequences: int = 10
+    max_running_sequences: int = 15
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
     batch_embed_fill: bool = False
@@ -26,7 +26,7 @@ class SchedulerConfig:
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         parser.add_argument('--batch_policy', type=str, choices=['nobatch', 'requestlevel', 'continuousbatch'], default='continuousbatch', help='Batch policy for scheduling.')
         parser.add_argument('--priority', type=str, choices=['prefill', 'decode'], default='prefill', help='Prefill prioritize or decode prioritize')
-        parser.add_argument('--max-running-sequences', type=int, default=10, help='Maximum number of sequences running concurrently. other sequences will waiting in queue.')
+        parser.add_argument('--max-running-sequences', type=int, default=15, help='Maximum number of sequences running concurrently. other sequences will waiting in queue.')
         parser.add_argument('--max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
         parser.add_argument('--max-batch-embed-images', type=int, default=3, help='Maximum number of images to embed in each batch.')
         parser.add_argument('--batch-embed-fill', action='store_true', help='Enable batch embedding fill.')
