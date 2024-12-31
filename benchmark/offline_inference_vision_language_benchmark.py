@@ -53,16 +53,15 @@ def vllm_benchmark(dataset: SimulatedDataset):
             print(output.outputs[0].text)
 
 def dxz_benchmark(dataset: SimulatedDataset, args: argparse.Namespace):
-    from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
-    from dxz.memory.virtual_kv_cache import MemoryConfig
-    from dxz.memory.compiler import CompilerConfig
+    from dxz.engine.engine import EngineConfig
+    from dxz.entrypoint.mllm import MLLM
     config = EngineConfig.from_cli_args(args)
-
     print(config)
-    engine = Engine(config)
+
+    mllm = MLLM(config)
 
     metric_builder = BenchmarkMetricsBuilder()
-    outputs = engine.generate(dataset)
+    outputs = mllm.generate(dataset)
 
     for output in outputs:
         metric_builder.append(
@@ -136,13 +135,6 @@ if __name__ == '__main__':
         action='store_true',
         default=False,
         help='only test prefill performance'
-    )
-
-    parser.add_argument(
-        '--debug',
-        action='store_true',
-        default=False,
-        help='print scheduler step info'
     )
     parser.add_argument(
         "--seed",

@@ -30,7 +30,7 @@ class SchedulerConfig:
         parser.add_argument('--max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
         parser.add_argument('--max-batch-embed-images', type=int, default=3, help='Maximum number of images to embed in each batch.')
         parser.add_argument('--batch-embed-fill', action='store_true', help='Enable batch embedding fill.')
-        parser.add_argument('--debug_mode', action='store_true', help='Enable debug mode for more detailed logging.')
+        parser.add_argument('--debug-mode', action='store_true', help='Enable debug mode for more detailed logging.')
         return parser
 
 

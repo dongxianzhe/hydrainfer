@@ -2,7 +2,6 @@ import io
 import base64
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
 import time
 import random
 from itertools import accumulate
@@ -57,14 +56,6 @@ class EngineConfig:
         parser.add_argument('--multi-threads-forward', action='store_true', help='Enable multi-thread forwarding.')
         parser.add_argument('--warm-up', action='store_true', help='Enable warm-up phase.')
         return parser
-
-@dataclass
-class GenerateOutput:
-    input_len: int
-    text : str
-    arrival_time: float
-    finished_time: float
-    token_times: list[float]
 
 
 class Engine:
@@ -149,32 +140,6 @@ class Engine:
         for i in range(3):
             self.model(input_ids, pixel_values, image_features, position_ids, params)
 
-    def generate(self, requests: list[Request]) -> list[GenerateOutput]:
-        for request in requests:
-            self.add_request(request)
-
-        outputs = []
-        finished: list[Sequence] = []
-        bar = tqdm(range(len(requests)))
-        while len(finished) < len(requests):
-            self.step()
-            f = self.scheduler.pop_finished() 
-            finished += f
-            bar.update(len(f))
-
-        finished_time = time.perf_counter()
-        finished = sorted(finished, key=lambda seq: seq.sid)
-
-        for sequence in finished:
-            outputs.append(GenerateOutput(
-                input_len = sequence.static_info.n_prompt_tokens, 
-                text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
-                arrival_time = sequence.metric.arrival_time, 
-                finished_time = finished_time, 
-                token_times = sequence.metric.tokens_time, 
-            ))
-
-        return outputs
 
     def add_request(self, request: Request):
         if self.config.multi_thread_request_process:
