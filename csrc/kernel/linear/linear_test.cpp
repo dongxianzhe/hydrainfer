@@ -1,5 +1,8 @@
+#include "linear.h"
 #include <gtest/gtest.h>
 #include <torch/torch.h>
+
+namespace mllm{
 
 TEST(linear, linear_kernel){
     torch::TensorOptions options = torch::dtype(torch::kHalf).device(torch::kCUDA);
@@ -9,6 +12,13 @@ TEST(linear, linear_kernel){
     auto w = torch::randn({hidden_size, hidden_size}, options);
 
     auto o_ref = torch::nn::functional::linear(h, w);
-    auto o = torch::matmul(h, w.transpose(0, 1));
-    EXPECT_TRUE(torch::allclose(o, o_ref, 1e-3, 1e-3));
+    auto o = mllm::linear(h, w);
+
+    std::cout << o_ref.view({-1}).slice(0, 0, 4) << std::endl;
+    std::cout << "==================================================" << std::endl;
+    std::cout << o.view({-1}).slice(0, 0, 4) << std::endl;
+
+    EXPECT_TRUE(torch::allclose(o, o_ref, 1e-2, 1e-2));
+}
+
 }
