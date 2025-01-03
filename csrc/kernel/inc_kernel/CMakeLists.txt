@@ -10,4 +10,5 @@ DEPS
     torch
     GTest::gtest_main
     glog::glog
+    cutlass
 )

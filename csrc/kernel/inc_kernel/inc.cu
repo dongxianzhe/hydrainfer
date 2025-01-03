@@ -1,13 +1,19 @@
 #include<torch/torch.h>
-#include <glog/logging.h>
+#include<glog/logging.h>
+#include<cute/layout.hpp>
+#include<cute/stride.hpp>
+#include<cute/tensor.hpp>
 
 template<int n_blocks>
 __global__ void inc(half* a, int delta){
+    using namespace cute;
+    constexpr int warp_size = 32;
     int bid = blockIdx.x;
     int tid = threadIdx.x;
+    Tensor gA = make_tensor(make_gmem_ptr(a), make_shape(n_blocks, warp_size), make_stride(warp_size, 1));
 #pragma unroll
     for(int i = 0;i < delta;i ++){
-        a[bid * blockDim.x + tid] ++;
+        gA(bid, tid) += 1;
     }
 }
 
