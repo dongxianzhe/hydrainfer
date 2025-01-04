@@ -12,3 +12,17 @@ DEPS
     glog::glog
     cutlass
 )
+
+cc_binary(
+NAME
+    linear_benchmark
+SRCS
+    linear_benchmark.cpp
+    linear.cu
+DEPS
+    torch
+    glog::glog
+    cutlass
+    benchmark::benchmark
+    benchmark::benchmark_main
+)
