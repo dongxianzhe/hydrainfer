@@ -31,7 +31,7 @@ cc_binary(
 NAME
     cute_test
 SRCS
-    cute_test.cpp
+    cute_test.cu
 DEPS
     torch
     glog::glog

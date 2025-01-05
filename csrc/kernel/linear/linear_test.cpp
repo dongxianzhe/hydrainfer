@@ -12,8 +12,16 @@ TEST(linear, linear_kernel){
     auto w = torch::randn({hidden_size, hidden_size}, options);
 
     auto o_ref = torch::nn::functional::linear(h, w);
+    const float atol = 0.8;
+    const float rtol = 0.1;
+
     auto o1 = mllm::linear_naive(h, w);
-    auto o = mllm::linear(h, w);
+    EXPECT_TRUE(torch::allclose(o1, o_ref, rtol, atol));
+
+    auto o2 = mllm::linear_smem(h, w);
+    EXPECT_TRUE(torch::allclose(o2 , o_ref, rtol, atol));
+
+    auto o = mllm::linear_smem_v2(h, w);
 
     std::cout << o_ref.view({-1}).slice(0, 0, 4) << std::endl;
     std::cout << "--------------------------------------------------" << std::endl;
@@ -21,9 +29,6 @@ TEST(linear, linear_kernel){
 
     auto abs_error = torch::abs(o - o_ref).view({-1});
     int max_abs_error_id = torch::argmax(abs_error).item<int>();
-
-    const float atol = 0.8;
-    const float rtol = 0.1;
     std::cout << "max abs error: " << abs_error.max().item<float>() << 
         " at " << max_abs_error_id << " " << 
         o.view({-1})[max_abs_error_id].item<float>() << " " << o_ref.view({-1})[max_abs_error_id].item<float>() << std::endl;
@@ -33,7 +38,6 @@ TEST(linear, linear_kernel){
     std::cout << "max rel error: " << rel_error.max().item<float>() << 
         " at " << max_rel_error_id << " " << 
         o.view({-1})[max_rel_error_id].item<float>() << " " << o_ref.view({-1})[max_rel_error_id].item<float>() << std::endl;
-    EXPECT_TRUE(torch::allclose(o1, o_ref, rtol, atol));
     EXPECT_TRUE(torch::allclose(o , o_ref, rtol, atol));
 }
 

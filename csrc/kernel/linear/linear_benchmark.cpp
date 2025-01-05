@@ -8,7 +8,8 @@ namespace mllm{
 
 std::vector<std::tuple<std::string, linear_func>> kernels{
     {"linear_naive", mllm::linear_naive}, 
-    {"linear", mllm::linear}
+    {"linear_smem", linear_smem}, 
+    {"linear_smem_v2", linear_smem_v2}
 };
 
 static void BM_linear_kernel(benchmark::State& state){
@@ -91,7 +92,7 @@ const std::vector<long int> dtypes = {
 };
 
 BENCHMARK(BM_linear_kernel)
-    ->ArgsProduct({{0, 1}, dtypes, {4096}, {4096}});
+    ->ArgsProduct({{0, 1, 2}, dtypes, {4096}, {4096}});
 
 BENCHMARK(BM_linear_baseline)
     ->ArgsProduct({dtypes, {4096}, {4096}});
