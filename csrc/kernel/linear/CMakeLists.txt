@@ -26,3 +26,15 @@ DEPS
     benchmark::benchmark
     benchmark::benchmark_main
 )
+
+cc_binary(
+NAME
+    cute_test
+SRCS
+    cute_test.cpp
+DEPS
+    torch
+    glog::glog
+    cutlass
+    GTest::gtest_main
+)

@@ -6,14 +6,21 @@
 
 namespace mllm{
 
+std::vector<std::tuple<std::string, linear_func>> kernels{
+    {"linear_naive", mllm::linear_naive}, 
+    {"linear", mllm::linear}
+};
+
 static void BM_linear_kernel(benchmark::State& state){
     if(!torch::cuda::is_available()){
         state.SkipWithMessage("CUDA is not availabe");
         return;
     }
-    torch::ScalarType dtype = static_cast<torch::ScalarType>(state.range(0));
-    int n_tokens = static_cast<int>(state.range(1));
-    int hidden_size = static_cast<int>(state.range(2));
+
+    auto [kernel_name, kernel] = kernels[state.range(0)];
+    torch::ScalarType dtype = static_cast<torch::ScalarType>(state.range(1));
+    int n_tokens = static_cast<int>(state.range(2));
+    int hidden_size = static_cast<int>(state.range(3));
 
     torch::TensorOptions options = torch::dtype(torch::kHalf).device(torch::kCUDA);
     auto h = torch::randn({n_tokens, hidden_size}, options);
@@ -25,7 +32,7 @@ static void BM_linear_kernel(benchmark::State& state){
     for(auto _ : state){
         cudaEventRecord(start);
 
-        auto o = mllm::linear(h, w);
+        auto o = kernel(h, w);
         benchmark::DoNotOptimize(o);
 
         cudaEventRecord(stop);
@@ -36,6 +43,10 @@ static void BM_linear_kernel(benchmark::State& state){
         state.SetIterationTime(milliseconds / 1000);
         state.ResumeTiming();
     }
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    state.SetLabel(kernel_name + " " + torch::toString(dtype));
 }
 
 static void BM_linear_baseline(benchmark::State& state){
@@ -68,6 +79,11 @@ static void BM_linear_baseline(benchmark::State& state){
         state.SetIterationTime(milliseconds / 1000);
         state.ResumeTiming();
     }
+
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
+
+    state.SetLabel(std::string("pytorch linear ") + torch::toString(dtype));
 }
 
 const std::vector<long int> dtypes = {
@@ -75,7 +91,7 @@ const std::vector<long int> dtypes = {
 };
 
 BENCHMARK(BM_linear_kernel)
-    ->ArgsProduct({dtypes, {4096}, {4096}});
+    ->ArgsProduct({{0, 1}, dtypes, {4096}, {4096}});
 
 BENCHMARK(BM_linear_baseline)
     ->ArgsProduct({dtypes, {4096}, {4096}});
