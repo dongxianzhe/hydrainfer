@@ -38,3 +38,30 @@ DEPS
     cutlass
     GTest::gtest_main
 )
+
+cc_binary(
+NAME
+    tile_linear_test
+SRCS
+    tile_linear_test.cpp
+    tile_linear.cu
+DEPS
+    torch
+    GTest::gtest_main
+    glog::glog
+    cutlass
+)
+
+cc_binary(
+NAME
+    tile_linear_benchmark
+SRCS
+    tile_linear_benchmark.cpp
+    tile_linear.cu
+DEPS
+    torch
+    glog::glog
+    cutlass
+    benchmark::benchmark
+    benchmark::benchmark_main
+)
