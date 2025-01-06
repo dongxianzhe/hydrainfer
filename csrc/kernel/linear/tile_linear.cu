@@ -13,9 +13,11 @@ __global__ void tile_linear_kernel(half* hptr, half* wptr, half* optr){
     Tensor go = make_tensor(make_gmem_ptr(optr), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
     int i = threadIdx.x;
     for(int j = 0;j < 128;j ++){
+        half sum = 0;
         for(int k = 0;k < 32;k ++){
-            go(i, j) += gh(i, k) * gw(j, k);
+            sum += gh(i, k) * gw(j, k);
         }
+        go(i, j) = sum;
     }
 }
 
