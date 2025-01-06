@@ -6,18 +6,42 @@
 
 namespace mllm{
 
-__global__ void tile_linear_kernel(half* hptr, half* wptr, half* optr){
+__global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     using namespace cute;
-    Tensor gh = make_tensor(make_gmem_ptr(hptr), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
-    Tensor gw = make_tensor(make_gmem_ptr(wptr), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
-    Tensor go = make_tensor(make_gmem_ptr(optr), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
-    int i = threadIdx.x;
-    for(int j = 0;j < 128;j ++){
-        half sum = 0;
-        for(int k = 0;k < 32;k ++){
-            sum += gh(i, k) * gw(j, k);
+    Tensor ga = make_tensor(make_gmem_ptr(aptr), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    Tensor gb = make_tensor(make_gmem_ptr(bptr), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    Tensor gc = make_tensor(make_gmem_ptr(cptr), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
+    __shared__ half ashm [128 * 32];
+    __shared__ half bshm [128 * 32];
+    __shared__ half cshm [128 * 128];
+    Tensor sa = make_tensor(make_gmem_ptr(ashm), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    Tensor sb = make_tensor(make_gmem_ptr(bshm), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    Tensor sc = make_tensor(make_gmem_ptr(cshm), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
+    // 1. g2s
+    {
+        int i = threadIdx.x;
+        for(int j = 0;j < 32;j ++)sa(i, j) = ga(i, j);
+        for(int j = 0;j < 32;j ++)sb(i, j) = gb(i, j);
+        for(int j = 0;j < 128;j ++)sc(i, j) = gc(i, j);
+        __syncthreads();
+    }
+
+    // 2. compute
+    {
+        int i = threadIdx.x;
+        for(int j = 0;j < 128;j ++){
+            half sum = 0;
+            for(int k = 0;k < 32;k ++){
+                sum += ga(i, k) * gb(j, k);
+            }
+            sc(i, j) += sum;
         }
-        go(i, j) = sum;
+        __syncthreads();
+    }
+    // 3. s2g
+    {
+        int i = threadIdx.x;
+        for(int j = 0;j < 128;j ++)gc(i, j) = sc(i, j);
     }
 }
 
