@@ -40,45 +40,35 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
 
     {
     // 2. s2r
-    Tensor ra = make_tensor<half>(make_shape(Int<8>{}, Int<2>{}, Int<2>{}), make_stride(Int<1>{}, Int<8>{}, Int<16>{}));
-    Tensor rb = make_tensor<half>(make_shape(Int<4>{}, Int<16>{}, Int<2>{}), make_stride(Int<1>{}, Int<4>{}, Int<64>{}));
-    Tensor rc = make_tensor<half>(make_shape(Int<4>{}, Int<2>{}, Int<16>{}), make_stride(Int<1>{}, Int<4>{}, Int<8>{}));
-    Tensor s2r_sa = make_tensor(
-        make_smem_ptr(ashm), 
-        make_shape (make_shape (Int<2>{}, Int<2>{}     , Int<2>{}, Int<2>{}      , Int<2>{} ), Int<4>{}, Int<8>{} , Int<4>{}     ), 
-        make_stride(make_stride(Int<1>{}, Int<8 * 32>{}, Int<8>{}, Int<64 * 32>{}, Int<16>{}), Int<2>{}, Int<32>{}, Int<16 * 32>{})
-        );
-    Tensor s2r_ra = make_tensor(
-        make_rmem_ptr(ra.data()),
-        make_shape(Int<2>{}, Int<2>{}, Int<2>{}, Int<2>{}, Int<2>{}), 
-        make_stride(Int<1>{}, Int<2>{}, Int<4>{}, Int<8>{}, Int<16>{})
-        );
-    Tensor s2r_sb = make_tensor(
-        make_smem_ptr(bshm), 
-        make_shape (make_shape (Int<2>{}, Int<2>{}, Int<16>{}    , Int<2>{} ), Int<4>{}, Int<8>{} , Int<4>{}), 
-        make_stride(make_stride(Int<1>{}, Int<8>{}, Int<8 * 32>{}, Int<16>{}), Int<2>{}, Int<32>{}, Int<0>{})
-    );
-    Tensor s2r_rb = make_tensor(
-        make_rmem_ptr(rb.data()), 
-        make_shape (Int<2>{}, Int<2>{}, Int<16>{}, Int<2>{}), 
-        make_stride(Int<1>{}, Int<2>{}, Int<4>{} , Int<64>{})
-    );
-    const int warp_id = threadIdx.x / 32;
-    const int lane_id = threadIdx.x % 32;
-    for(int i = 0;i < 8 * 2 * 2;i ++)s2r_ra(i) = s2r_sa(i, lane_id % 4, lane_id / 4, warp_id);                   
-    for(int i = 0;i < 4 * 16 * 2;i ++)s2r_rb(i) = s2r_sb(i, lane_id % 4, lane_id / 4, warp_id);
-    clear(rc);
-    __syncthreads();
-    // 3. compute
     auto mma_atom = SM80_16x8x16_F16F16F16F16_TN{};
     auto thr_layout = make_layout(make_shape(Int<4>{}, Int<1>{}, Int<1>{}));  // m n k
     auto permutations = Tile<Int<64>, Int<32>, Int<16>>{}; // todo is there make_tile?
     auto tiled_mma = make_tiled_mma(mma_atom, thr_layout, permutations);
+
+    Tensor ra = make_tensor<half>(make_shape(Int<8>{}, Int<2>{}, Int<2>{}), make_stride(Int<1>{}, Int<8>{}, Int<16>{}));
+    Tensor rb = make_tensor<half>(make_shape(Int<4>{}, Int<16>{}, Int<2>{}), make_stride(Int<1>{}, Int<4>{}, Int<64>{}));
+    Tensor rc = make_tensor<half>(make_shape(Int<4>{}, Int<2>{}, Int<16>{}), make_stride(Int<1>{}, Int<4>{}, Int<8>{}));
+
+    auto s2r_tiled_copy_a = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, half>{}, tiled_mma);
+    auto s2r_thr_copy_a = s2r_tiled_copy_a.get_slice(threadIdx.x);
+    auto s2r_sa = s2r_thr_copy_a.partition_S(sa); // (8, 2, 2)
+    auto s2r_ra = s2r_thr_copy_a.retile_D(ra);    // (8, 2, 2)
+
+    auto s2r_tiled_copy_b = make_tiled_copy_B(Copy_Atom<SM75_U32x4_LDSM_N, half>{}, tiled_mma);
+    auto s2r_thr_copy_b = s2r_tiled_copy_b.get_slice(threadIdx.x);
+    auto s2r_sb = s2r_thr_copy_b.partition_S(sb); // (16, 4, 2)
+    auto s2r_rb = s2r_thr_copy_b.retile_D(rb);    // (16, 4, 2)
+
+    clear(rc);
+    // 3. compute
     for(int ik = 0;ik < 2; ik ++){
+        cute::copy(s2r_tiled_copy_a, s2r_sa(_, _, ik), s2r_ra(_, _, ik));
+        cute::copy(s2r_tiled_copy_b, s2r_sb(_, _, ik), s2r_rb(_, _, ik));
         cute::gemm(tiled_mma, rc, ra(_, _, ik), rb(_, _, ik), rc);
     }
-    __syncthreads();
     // 4. r2s
+    const int warp_id = threadIdx.x / 32;
+    const int lane_id = threadIdx.x % 32;
     Tensor r2s_rc = make_tensor(
         make_rmem_ptr(rc.data()), 
         make_shape (Int<2>{}, Int<2>{}, Int<2>{}, Int<16>{}), 
