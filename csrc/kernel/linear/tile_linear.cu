@@ -43,28 +43,46 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     Tensor ra = make_tensor<half>(make_shape(Int<8>{}, Int<2>{}, Int<2>{}), make_stride(Int<1>{}, Int<8>{}, Int<16>{}));
     Tensor rb = make_tensor<half>(make_shape(Int<4>{}, Int<16>{}, Int<2>{}), make_stride(Int<1>{}, Int<4>{}, Int<64>{}));
     Tensor rc = make_tensor<half>(make_shape(Int<4>{}, Int<2>{}, Int<16>{}), make_stride(Int<1>{}, Int<4>{}, Int<8>{}));
-    int sa_m_offset = threadIdx.x / 32 * 16 + threadIdx.x % 32 / 4;
-    int sa_k_offset = threadIdx.x % 32 % 4 * 2;
+    Tensor s2r_sa = make_tensor(
+        make_smem_ptr(ashm), 
+        make_shape (Int<2>{}, Int<2>{}     , Int<2>{}, Int<2>{}      , Int<2>{} , Int<4>{}, Int<8>{} , Int<4>{}     ), 
+        make_stride(Int<1>{}, Int<8 * 32>{}, Int<8>{}, Int<64 * 32>{}, Int<16>{}, Int<2>{}, Int<32>{}, Int<16 * 32>{})
+        );
+    Tensor s2r_ra = make_tensor(
+        make_rmem_ptr(ra.data()),
+        make_shape(Int<2>{}, Int<2>{}, Int<2>{}, Int<2>{}, Int<2>{}), 
+        make_stride(Int<1>{}, Int<2>{}, Int<4>{}, Int<8>{}, Int<16>{})
+        );
+    Tensor s2r_sb = make_tensor(
+        make_smem_ptr(bshm), 
+        make_shape (Int<2>{}, Int<2>{}, Int<16>{}    , Int<2>{} , Int<4>{}, Int<8>{} , Int<4>{}), 
+        make_stride(Int<1>{}, Int<8>{}, Int<8 * 32>{}, Int<16>{}, Int<2>{}, Int<32>{}, Int<0>{})
+    );
+    Tensor s2r_rb = make_tensor(
+        make_rmem_ptr(rb.data()), 
+        make_shape (Int<2>{}, Int<2>{}, Int<16>{}, Int<2>{}), 
+        make_stride(Int<1>{}, Int<2>{}, Int<4>{} , Int<64>{})
+    );
+    const int warp_id = threadIdx.x / 32;
+    const int lane_id = threadIdx.x % 32;
     for(int i = 0;i < 2;i ++){
         for(int j = 0;j < 2;j ++){
-            ra(0, i, j) = sa(i * 64 + sa_m_offset, j * 16 + sa_k_offset);
-            ra(1, i, j) = sa(i * 64 + sa_m_offset, j * 16 + sa_k_offset + 1);
-            ra(2, i, j) = sa(i * 64 + sa_m_offset + 8, j * 16 + sa_k_offset);
-            ra(3, i, j) = sa(i * 64 + sa_m_offset + 8, j * 16 + sa_k_offset + 1);
-            ra(4, i, j) = sa(i * 64 + sa_m_offset, j * 16 + sa_k_offset + 8);
-            ra(5, i, j) = sa(i * 64 + sa_m_offset, j * 16 + sa_k_offset + 8 + 1);
-            ra(6, i, j) = sa(i * 64 + sa_m_offset + 8, j * 16 + sa_k_offset + 8);
-            ra(7, i, j) = sa(i * 64 + sa_m_offset + 8, j * 16 + sa_k_offset + 8 + 1);
+            for(int k = 0;k < 2;k ++){
+                for(int x = 0;x < 2;x ++){
+                    for(int y = 0;y < 2;y ++){
+                        s2r_ra(i, j, k, x, y) = s2r_sa(i, j, k, x, y, lane_id % 4, lane_id / 4, warp_id);                   
+                    }
+                }
+            }
         }
     }
-    int sb_n_offset = threadIdx.x % 32 / 4;
-    int sb_k_offset = threadIdx.x % 32% 4 * 2;
-    for(int i = 0;i < 16;i ++){
+    for(int i = 0;i < 2;i ++){
         for(int j = 0;j < 2;j ++){
-            rb(0, i, j) = sb(i * 8 + sb_n_offset, j * 16 + sb_k_offset);
-            rb(1, i, j) = sb(i * 8 + sb_n_offset, j * 16 + sb_k_offset + 1);
-            rb(2, i, j) = sb(i * 8 + sb_n_offset, j * 16 + sb_k_offset + 8);
-            rb(3, i, j) = sb(i * 8 + sb_n_offset, j * 16 + sb_k_offset + 9);
+            for(int x = 0;x < 16;x ++){
+                for(int y = 0;y < 2;y ++){
+                    s2r_rb(i, j, x, y) = s2r_sb(i, j, x, y, lane_id % 4, lane_id / 4, warp_id);
+                }
+            }
         }
     }
     clear(rc);
@@ -79,14 +97,23 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     }
     __syncthreads();
     // 4. r2s
-    int sc_m_offset = threadIdx.x / 32 * 16 + threadIdx.x % 32 / 4;
-    int sc_n_offset = threadIdx.x % 32 % 4 * 2;
+    Tensor r2s_rc = make_tensor(
+        make_rmem_ptr(rc.data()), 
+        make_shape (Int<2>{}, Int<2>{}, Int<2>{}, Int<16>{}), 
+        make_stride(Int<1>{}, Int<2>{}, Int<4>{}, Int<8>{} )
+        );
+    Tensor r2s_sc = make_tensor(
+        make_smem_ptr(cshm), 
+        make_shape (Int<2>{}, Int<2>{}      , Int<2>{}       , Int<16>{}, Int<4>{}, Int<8>{}  , Int<4>{}       ), 
+        make_stride(Int<1>{}, Int<8 * 128>{}, Int<64 * 128>{}, Int<8>{} , Int<2>{}, Int<128>{}, Int<16 * 128>{})
+    );
     for(int i = 0;i < 2;i ++){
-        for(int j = 0;j < 16;j ++){
-            sc(i * 64 + sc_m_offset, j * 8 + sc_n_offset) = rc(0, i, j);
-            sc(i * 64 + sc_m_offset, j * 8 + sc_n_offset + 1) = rc(1, i, j);
-            sc(i * 64 + sc_m_offset + 8, j * 8 + sc_n_offset) = rc(2, i, j);
-            sc(i * 64 + sc_m_offset + 8, j * 8 + sc_n_offset + 1) = rc(3, i, j);
+        for(int j = 0;j < 2;j ++){
+            for(int m = 0;m < 2;m ++){
+                for(int n = 0;n < 16;n ++){
+                    r2s_sc(i, j, m, n, lane_id % 4, lane_id / 4, warp_id) = r2s_rc(i, j, m, n);
+                }
+            }
         }
     }
     __syncthreads();
