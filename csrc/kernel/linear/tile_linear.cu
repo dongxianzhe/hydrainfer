@@ -65,22 +65,22 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     );
     const int warp_id = threadIdx.x / 32;
     const int lane_id = threadIdx.x % 32;
-    for(int i = 0;i < 2;i ++){
-        for(int j = 0;j < 2;j ++){
-            for(int k = 0;k < 2;k ++){
-                for(int x = 0;x < 2;x ++){
-                    for(int y = 0;y < 2;y ++){
-                        s2r_ra(i, j, k, x, y) = s2r_sa(i, j, k, x, y, lane_id % 4, lane_id / 4, warp_id);                   
+    for(int x = 0;x < 2;x ++){
+        for(int y = 0;y < 2;y ++){
+            for(int i = 0;i < 2;i ++){
+                for(int j = 0;j < 2;j ++){
+                    for(int k = 0;k < 2;k ++){
+                        s2r_ra(k, j, i, x, y) = s2r_sa(k, j, i, x, y, lane_id % 4, lane_id / 4, warp_id);                   
                     }
                 }
             }
         }
     }
-    for(int i = 0;i < 2;i ++){
-        for(int j = 0;j < 2;j ++){
-            for(int x = 0;x < 16;x ++){
-                for(int y = 0;y < 2;y ++){
-                    s2r_rb(i, j, x, y) = s2r_sb(i, j, x, y, lane_id % 4, lane_id / 4, warp_id);
+    for(int x = 0;x < 16;x ++){
+        for(int y = 0;y < 2;y ++){
+            for(int i = 0;i < 2;i ++){
+                for(int j = 0;j < 2;j ++){
+                    s2r_rb(j, i, x, y) = s2r_sb(j, i, x, y, lane_id % 4, lane_id / 4, warp_id);
                 }
             }
         }
@@ -107,11 +107,11 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
         make_shape (Int<2>{}, Int<2>{}      , Int<2>{}       , Int<16>{}, Int<4>{}, Int<8>{}  , Int<4>{}       ), 
         make_stride(Int<1>{}, Int<8 * 128>{}, Int<64 * 128>{}, Int<8>{} , Int<2>{}, Int<128>{}, Int<16 * 128>{})
     );
-    for(int i = 0;i < 2;i ++){
-        for(int j = 0;j < 2;j ++){
-            for(int m = 0;m < 2;m ++){
-                for(int n = 0;n < 16;n ++){
-                    r2s_sc(i, j, m, n, lane_id % 4, lane_id / 4, warp_id) = r2s_rc(i, j, m, n);
+    for(int m = 0;m < 2;m ++){
+        for(int n = 0;n < 16;n ++){
+            for(int i = 0;i < 2;i ++){
+                for(int j = 0;j < 2;j ++){
+                    r2s_sc(j, i, m, n, lane_id % 4, lane_id / 4, warp_id) = r2s_rc(j, i, m, n);
                 }
             }
         }
