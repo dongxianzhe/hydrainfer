@@ -14,18 +14,28 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     __shared__ half ashm [128 * 32];
     __shared__ half bshm [128 * 32];
     __shared__ half cshm [128 * 128];
-    Tensor sa = make_tensor(make_gmem_ptr(ashm), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
-    Tensor sb = make_tensor(make_gmem_ptr(bshm), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
-    Tensor sc = make_tensor(make_gmem_ptr(cshm), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
+    Tensor sa = make_tensor(make_smem_ptr(ashm), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    Tensor sb = make_tensor(make_smem_ptr(bshm), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    Tensor sc = make_tensor(make_smem_ptr(cshm), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
     // 1. g2s
     {
-        int i = threadIdx.x;
-        for(int j = 0;j < 32;j ++)sa(i, j) = ga(i, j);
-        for(int j = 0;j < 32;j ++)sb(i, j) = gb(i, j);
-        for(int j = 0;j < 128;j ++)sc(i, j) = gc(i, j);
+        using g2s_copy_op = SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>;
+        using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
+        using g2s_copy_atom = Copy_Atom<g2s_copy_traits, half>;
+        auto thr_layout = make_layout(make_shape(Int<32>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{}));
+        auto val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
+        auto g2s_tiled_copy = make_tiled_copy(g2s_copy_atom{}, thr_layout, val_layout);
+        auto g2s_thr_copy = g2s_tiled_copy.get_slice(threadIdx.x);
+        auto g2s_ga = g2s_thr_copy.partition_S(ga); // (8, 128 / 32 / 1, 32 / 4 / 8)
+        auto g2s_sa = g2s_thr_copy.partition_D(sa); // (8, 128 / 32 / 1, 32 / 4 / 8)
+        auto g2s_gb = g2s_thr_copy.partition_S(gb); // (8, 128 / 32 / 1, 32 / 4 / 8)
+        auto g2s_sb = g2s_thr_copy.partition_D(sb); // (8, 128 / 32 / 1, 32 / 4 / 8)
+        cute::copy(g2s_tiled_copy, g2s_ga(_, _, _), g2s_sa(_, _, _));
+        cute::copy(g2s_tiled_copy, g2s_gb(_, _, _), g2s_sb(_, _, _));
+        cp_async_fence();
+        cp_async_wait<0>();
         __syncthreads();
     }
-
     // 2. compute
     {
         int i = threadIdx.x;
@@ -34,14 +44,20 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
             for(int k = 0;k < 32;k ++){
                 sum += ga(i, k) * gb(j, k);
             }
-            sc(i, j) += sum;
+            sc(i, j) = sum;
         }
         __syncthreads();
     }
     // 3. s2g
     {
-        int i = threadIdx.x;
-        for(int j = 0;j < 128;j ++)gc(i, j) = sc(i, j);
+        auto s2g_copy_atom = Copy_Atom<UniversalCopy<cute::uint128_t>, half>{};
+        auto thr_layout = make_layout(make_shape(Int<4>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+        auto val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
+        auto s2g_tiled_copy = make_tiled_copy(s2g_copy_atom, thr_layout, val_layout);
+        auto s2g_thr_copy = s2g_tiled_copy.get_thread_slice(threadIdx.x);
+        auto s2g_sc = s2g_thr_copy.partition_S(sc); // (8, 128 / 4 / 1, 128 / 32 / 8)
+        auto s2g_gc = s2g_thr_copy.partition_D(gc); // (8, 128 / 4 / 1, 128 / 32 / 8)
+        cute::copy(s2g_tiled_copy, s2g_sc(_, _, _), s2g_gc(_, _, _));
     }
 }
 
