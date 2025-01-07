@@ -20,7 +20,7 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
 
     // 1. g2s
     auto g2s_copy_atom = Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>, half>{};
-    auto g2s_thr_layout = make_layout(make_shape(Int<128>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{}));
+    auto g2s_thr_layout = make_layout(make_shape(Int<32>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{}));
     auto g2s_val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
     auto g2s_tiled_copy = make_tiled_copy(g2s_copy_atom, g2s_thr_layout, g2s_val_layout);
     auto g2s_thr_copy = g2s_tiled_copy.get_slice(threadIdx.x);
@@ -36,7 +36,7 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
 
     // 2. s2r
     auto mma_atom = SM80_16x8x16_F16F16F16F16_TN{};
-    auto thr_layout = make_layout(make_shape(Int<8>{}, Int<2>{}, Int<1>{}));  // m n k
+    auto thr_layout = make_layout(make_shape(Int<4>{}, Int<1>{}, Int<1>{}));  // m n k
     auto permutations = Tile<Int<128>, Int<32>, Int<16>>{};
     auto tiled_mma = make_tiled_mma(mma_atom, thr_layout, permutations);
     auto thr_mma = tiled_mma.get_slice(threadIdx.x);
@@ -72,7 +72,7 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
 
     // 5. s2g
     auto s2g_copy_atom = Copy_Atom<UniversalCopy<cute::uint128_t>, half>{};
-    auto s2g_thr_layout = make_layout(make_shape(Int<16>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    auto s2g_thr_layout = make_layout(make_shape(Int<4>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
     auto s2g_val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
     auto s2g_tiled_copy = make_tiled_copy(s2g_copy_atom, s2g_thr_layout, s2g_val_layout);
     auto s2g_thr_copy = s2g_tiled_copy.get_thread_slice(threadIdx.x);
@@ -103,7 +103,7 @@ torch::Tensor tile_linear(torch::Tensor a, torch::Tensor b){
     auto c = torch::zeros({M, N}, options);
 
     dim3 gridDim{1};
-    dim3 blockDim{512};
+    dim3 blockDim{128};
     tile_linear_kernel<<<gridDim, blockDim>>>(
         static_cast<half*>(a.data_ptr()), 
         static_cast<half*>(b.data_ptr()),

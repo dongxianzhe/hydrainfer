@@ -65,3 +65,20 @@ DEPS
     benchmark::benchmark
     benchmark::benchmark_main
 )
+
+cc_binary(
+  NAME 
+    tile_linear_nvbench
+  SRCS 
+    tile_linear_nvbench.cpp
+    tile_linear.cu
+  DEPS
+    nvbench::nvbench
+    nvbench::main
+  DEPS
+    torch
+    glog::glog
+    cutlass
+  COPTS
+    -lineinfo 
+)

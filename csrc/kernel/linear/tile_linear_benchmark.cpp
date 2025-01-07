@@ -91,10 +91,11 @@ const std::vector<long int> dtypes = {
     static_cast<long int>(torch::kHalf)
 };
 
-BENCHMARK(BM_tile_linear_kernel)
-    ->ArgsProduct({{0}, dtypes, {128}, {128}, {32}});
 
 BENCHMARK(BM_tile_linear_baseline)
     ->ArgsProduct({dtypes, {128}, {128} , {32}});
+
+BENCHMARK(BM_tile_linear_kernel)
+    ->ArgsProduct({{0}, dtypes, {128}, {128}, {32}});
 
 }

@@ -16,3 +16,5 @@ cc_library(
   INCLUDES
     flashinfer/include
 )
+
+add_subdirectory(nvbench)
