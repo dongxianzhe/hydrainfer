@@ -44,10 +44,11 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     auto thr_layout = make_layout(make_shape(Int<4>{}, Int<1>{}, Int<1>{}));  // m n k
     auto permutations = Tile<Int<64>, Int<32>, Int<16>>{};
     auto tiled_mma = make_tiled_mma(mma_atom, thr_layout, permutations);
+    auto thr_mma = tiled_mma.get_slice(threadIdx.x);
 
-    Tensor ra = make_tensor<half>(make_shape(Int<8>{}, Int<2>{}, Int<2>{}), make_stride(Int<1>{}, Int<8>{}, Int<16>{}));
-    Tensor rb = make_tensor<half>(make_shape(Int<4>{}, Int<16>{}, Int<2>{}), make_stride(Int<1>{}, Int<4>{}, Int<64>{}));
-    Tensor rc = make_tensor<half>(make_shape(Int<4>{}, Int<2>{}, Int<16>{}), make_stride(Int<1>{}, Int<4>{}, Int<8>{}));
+    Tensor ra = thr_mma.partition_fragment_A(sa);
+    Tensor rb = thr_mma.partition_fragment_B(sb);
+    Tensor rc = thr_mma.partition_fragment_C(sc);
 
     auto s2r_tiled_copy_a = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, half>{}, tiled_mma);
     auto s2r_thr_copy_a = s2r_tiled_copy_a.get_slice(threadIdx.x);
@@ -72,7 +73,6 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     auto r2s_rc1 = r2s_thr_copy_c.retile_S(rc);
     auto r2s_sc1 = r2s_thr_copy_c.partition_D(sc);
     cute::copy(r2s_tiled_copy_c, r2s_rc1, r2s_sc1);
-
     __syncthreads();
     }
 
