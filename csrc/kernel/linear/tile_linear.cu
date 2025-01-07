@@ -19,12 +19,10 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     Tensor sc = make_tensor(make_smem_ptr(cshm), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
 
     // 1. g2s
-    using g2s_copy_op = SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>;
-    using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
-    using g2s_copy_atom = Copy_Atom<g2s_copy_traits, half>;
+    auto g2s_copy_atom = Copy_Atom<SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>, half>{};
     auto g2s_thr_layout = make_layout(make_shape(Int<128>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{}));
     auto g2s_val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
-    auto g2s_tiled_copy = make_tiled_copy(g2s_copy_atom{}, g2s_thr_layout, g2s_val_layout);
+    auto g2s_tiled_copy = make_tiled_copy(g2s_copy_atom, g2s_thr_layout, g2s_val_layout);
     auto g2s_thr_copy = g2s_tiled_copy.get_slice(threadIdx.x);
     auto g2s_ga = g2s_thr_copy.partition_S(ga);
     auto g2s_sa = g2s_thr_copy.partition_D(sa);
