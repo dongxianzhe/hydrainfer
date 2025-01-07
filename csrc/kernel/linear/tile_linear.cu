@@ -18,31 +18,28 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     Tensor sb = make_tensor(make_smem_ptr(bshm), make_shape(Int<128>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
     Tensor sc = make_tensor(make_smem_ptr(cshm), make_shape(Int<128>{}, Int<128>{}), make_stride(Int<128>{}, Int<1>{}));
 
-    {
     // 1. g2s
     using g2s_copy_op = SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>;
     using g2s_copy_traits = Copy_Traits<g2s_copy_op>;
     using g2s_copy_atom = Copy_Atom<g2s_copy_traits, half>;
-    auto thr_layout = make_layout(make_shape(Int<32>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{}));
-    auto val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
-    auto g2s_tiled_copy = make_tiled_copy(g2s_copy_atom{}, thr_layout, val_layout);
+    auto g2s_thr_layout = make_layout(make_shape(Int<128>{}, Int<4>{}), make_stride(Int<4>{}, Int<1>{}));
+    auto g2s_val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
+    auto g2s_tiled_copy = make_tiled_copy(g2s_copy_atom{}, g2s_thr_layout, g2s_val_layout);
     auto g2s_thr_copy = g2s_tiled_copy.get_slice(threadIdx.x);
-    auto g2s_ga = g2s_thr_copy.partition_S(ga); // (8, 128 / 32 / 1, 32 / 4 / 8)
-    auto g2s_sa = g2s_thr_copy.partition_D(sa); // (8, 128 / 32 / 1, 32 / 4 / 8)
-    auto g2s_gb = g2s_thr_copy.partition_S(gb); // (8, 128 / 32 / 1, 32 / 4 / 8)
-    auto g2s_sb = g2s_thr_copy.partition_D(sb); // (8, 128 / 32 / 1, 32 / 4 / 8)
-    cute::copy(g2s_tiled_copy, g2s_ga(_, _, _), g2s_sa(_, _, _));
-    cute::copy(g2s_tiled_copy, g2s_gb(_, _, _), g2s_sb(_, _, _));
+    auto g2s_ga = g2s_thr_copy.partition_S(ga);
+    auto g2s_sa = g2s_thr_copy.partition_D(sa);
+    auto g2s_gb = g2s_thr_copy.partition_S(gb);
+    auto g2s_sb = g2s_thr_copy.partition_D(sb);
+    cute::copy(g2s_tiled_copy, g2s_ga, g2s_sa);
+    cute::copy(g2s_tiled_copy, g2s_gb, g2s_sb);
     cp_async_fence();
     cp_async_wait<0>();
     __syncthreads();
-    }
 
-    {
     // 2. s2r
     auto mma_atom = SM80_16x8x16_F16F16F16F16_TN{};
-    auto thr_layout = make_layout(make_shape(Int<4>{}, Int<1>{}, Int<1>{}));  // m n k
-    auto permutations = Tile<Int<64>, Int<32>, Int<16>>{};
+    auto thr_layout = make_layout(make_shape(Int<8>{}, Int<2>{}, Int<1>{}));  // m n k
+    auto permutations = Tile<Int<128>, Int<32>, Int<16>>{};
     auto tiled_mma = make_tiled_mma(mma_atom, thr_layout, permutations);
     auto thr_mma = tiled_mma.get_slice(threadIdx.x);
 
@@ -52,13 +49,13 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
 
     auto s2r_tiled_copy_a = make_tiled_copy_A(Copy_Atom<SM75_U32x4_LDSM_N, half>{}, tiled_mma);
     auto s2r_thr_copy_a = s2r_tiled_copy_a.get_slice(threadIdx.x);
-    auto s2r_sa = s2r_thr_copy_a.partition_S(sa); // (8, 2, 2)
-    auto s2r_ra = s2r_thr_copy_a.retile_D(ra);    // (8, 2, 2)
+    auto s2r_sa = s2r_thr_copy_a.partition_S(sa);
+    auto s2r_ra = s2r_thr_copy_a.retile_D(ra);
 
     auto s2r_tiled_copy_b = make_tiled_copy_B(Copy_Atom<SM75_U32x4_LDSM_N, half>{}, tiled_mma);
     auto s2r_thr_copy_b = s2r_tiled_copy_b.get_slice(threadIdx.x);
-    auto s2r_sb = s2r_thr_copy_b.partition_S(sb); // (16, 4, 2)
-    auto s2r_rb = s2r_thr_copy_b.retile_D(rb);    // (16, 4, 2)
+    auto s2r_sb = s2r_thr_copy_b.partition_S(sb);
+    auto s2r_rb = s2r_thr_copy_b.retile_D(rb);
 
     clear(rc);
     // 3. compute
@@ -74,19 +71,16 @@ __global__ void tile_linear_kernel(half* aptr, half* bptr, half* cptr){
     auto r2s_sc1 = r2s_thr_copy_c.partition_D(sc);
     cute::copy(r2s_tiled_copy_c, r2s_rc1, r2s_sc1);
     __syncthreads();
-    }
 
-    {
     // 5. s2g
     auto s2g_copy_atom = Copy_Atom<UniversalCopy<cute::uint128_t>, half>{};
-    auto thr_layout = make_layout(make_shape(Int<4>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
-    auto val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
-    auto s2g_tiled_copy = make_tiled_copy(s2g_copy_atom, thr_layout, val_layout);
+    auto s2g_thr_layout = make_layout(make_shape(Int<16>{}, Int<32>{}), make_stride(Int<32>{}, Int<1>{}));
+    auto s2g_val_layout = make_layout(make_shape(Int<1>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{}));
+    auto s2g_tiled_copy = make_tiled_copy(s2g_copy_atom, s2g_thr_layout, s2g_val_layout);
     auto s2g_thr_copy = s2g_tiled_copy.get_thread_slice(threadIdx.x);
-    auto s2g_sc = s2g_thr_copy.partition_S(sc); // (8, 128 / 4 / 1, 128 / 32 / 8)
-    auto s2g_gc = s2g_thr_copy.partition_D(gc); // (8, 128 / 4 / 1, 128 / 32 / 8)
-    cute::copy(s2g_tiled_copy, s2g_sc(_, _, _), s2g_gc(_, _, _));
-    }
+    auto s2g_sc = s2g_thr_copy.partition_S(sc);
+    auto s2g_gc = s2g_thr_copy.partition_D(gc);
+    cute::copy(s2g_tiled_copy, s2g_sc, s2g_gc);
 }
 
 torch::Tensor tile_linear(torch::Tensor a, torch::Tensor b){
@@ -111,7 +105,7 @@ torch::Tensor tile_linear(torch::Tensor a, torch::Tensor b){
     auto c = torch::zeros({M, N}, options);
 
     dim3 gridDim{1};
-    dim3 blockDim{128};
+    dim3 blockDim{512};
     tile_linear_kernel<<<gridDim, blockDim>>>(
         static_cast<half*>(a.data_ptr()), 
         static_cast<half*>(b.data_ptr()),
