@@ -42,7 +42,7 @@ pybind_extension(
   COPTS
     -DPY_MODULE_NAME=flash_attn
   SRCS
-    flash_attn.cpp
+    flash_attn_pybind.cpp
     flash_api.cpp
     ${GENERATED_SRC_FILES}
   HDRS

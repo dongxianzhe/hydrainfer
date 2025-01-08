@@ -8,6 +8,8 @@
 
 /* Silu Activation */
 
+namespace mllm::kernel{
+
 template <typename T>
 struct SiluActivation {
   using return_type = T;
@@ -51,4 +53,6 @@ torch::Tensor silu(torch::Tensor input) {
   torch::Tensor out = torch::empty_like(input);
   launch_activation<SiluActivation>(out, input);
   return out;
+}
+
 }
