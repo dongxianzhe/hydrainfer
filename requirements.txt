@@ -2,5 +2,10 @@ torch==2.4.0
 shortuuid
 fastapi
 uvicorn
-transformers
+transformers==4.45.1
+pillow==10.2.0
+matplotlib==3.9.2
+seaborn==0.13.2
 flash-attn==2.7.0.post2
+openai==1.51.2
+httpx==0.23.3

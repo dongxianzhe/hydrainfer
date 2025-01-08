@@ -101,25 +101,25 @@ class CMakeBuild(build_ext):
             self.build_extension(ext)
     
     def build_extension(self, ext: CMakeExtension):
-        print('start build ============================================================')
-        print(f'ext.path      : {ext.path}')
+        print('============================= start build ===============================')
+        print(f'ext.path: {ext.path}')
 
         ninja_dir = shutil.which("ninja")
         print(f'ninja_dir: {ninja_dir}')
 
         extdir = os.path.abspath(os.path.dirname(self.get_ext_fullpath(ext.path)))
-        print(f'extdir   : {extdir}')
+        print(f'extdir: {extdir}')
 
         # create build directory
-        print(f'self.build_temp {self.build_temp}')
+        print(f'build_temp: {self.build_temp}')
         os.makedirs(self.build_temp, exist_ok=True)
 
         debug = int(os.environ.get("DEBUG", 0)) if self.debug is None else self.debug
         build_type = "Debug" if debug else "Release"
-        print(f'build_type {build_type}')
+        print(f'build_type: {build_type}')
 
         so_output_path = join_path(extdir, "dxz", "_C", "kernel")
-        print(f'so_output_path {so_output_path}')
+        print(f'so_output_path: {so_output_path}')
         cuda_architectures = "80;89;90"
         cmake_args = [
             "-G",
@@ -148,8 +148,8 @@ class CMakeBuild(build_ext):
         print(f'LIBTORCH_ROOT {LIBTORCH_ROOT}')
         env["LIBTORCH_ROOT"] = LIBTORCH_ROOT
 
-        print("CMake Args: ", cmake_args)
-        print("Env: ", env)
+        print("cmake args: ", cmake_args)
+        print("env: ", env)
 
         cmake_dir = get_cmake_dir()
         print(f'cmake_dir {cmake_dir}')
@@ -162,10 +162,17 @@ class CMakeBuild(build_ext):
         max_jobs = os.getenv("MAX_JOBS", str(os.cpu_count()))
         build_args += ["-j" + max_jobs]
         # add build target to speed up the build process
-        build_args += ["--target", "flash_attn", "flash_infer", "kv_cache_kernels"]
+        build_args += [
+            "--target", 
+            "flash_attn", 
+            # "flash_infer", # for now we use pip to install flashinfer
+            "kv_cache_kernels", 
+            "norm", 
+            "position_embedding", 
+            "activation"
+            ]
         subprocess.check_call(["cmake", "--build", "."] + build_args, cwd=cmake_dir)
-
-        print('end build ============================================================')
+        print('============================= build finished ===============================')
             
 
 
