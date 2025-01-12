@@ -14,7 +14,7 @@ from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc,
 from dxz.engine.request import Request
 from dxz.model.downloader import download_hf_model
 from dxz.model.llava import LlavaForConditionalGeneration
-from dxz.model.parameters import AttentionParameters, ModelParameters, VisionModelParameters
+from dxz.model.parameters import AttentionParameters, ModelParameters, VisionModelParameters, AttentionParametersBuilder
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
@@ -179,13 +179,9 @@ class Engine:
         if len(contexts) == 0:
             return {}
 
-        # 1. prepare input
-        num_sequences     : int
-        num_sequences = len(contexts)
-
-        pixel_values      : list[Tensor] = []
-        image_featues     : list[Tensor] = []
-        has_image_fill      : bool = False
+        pixel_values: list[Tensor] = []
+        image_features: list[Tensor] = []
+        has_image_fill: bool = False
         has_image_embed_fill: bool = False
         for seq, inst in contexts:
             if isinstance(inst, ImageFill):
@@ -193,142 +189,61 @@ class Engine:
                 inst.pixel_values = None
                 has_image_fill = True
             if isinstance(inst, ImageEmbedFill):
-                image_featues.append(inst.image_features)
+                image_features.append(inst.image_features)
                 inst.image_features = None
                 has_image_embed_fill = True
         if has_image_fill and has_image_embed_fill:
             raise Exception('not support pixel value and image embed batch')
-
-        token_ids         : list[int] = []
-        position_ids      : list[int] = []
-        q_seq_lens        : list[int] = []
-        q_cu_seq_lens     : list[int]
-        q_max_seq_len     : int
-        selected_token_ids: list[int] = []
-        all_sequences_decode: bool
-        for sequence, instruction in contexts:
-            token_ids += instruction.token_ids
-            position_ids += instruction.position_ids
-            q_seq_lens.append(len(instruction.token_ids))
-            if instruction.sample:
-                selected_token_ids.append(len(token_ids) - 1)
-        q_max_seq_len = max(q_seq_lens)
-        q_cu_seq_lens = list(accumulate(q_seq_lens, initial=0))
-        all_sequences_decode = len(token_ids) == num_sequences
-
-        layers_kv_seq_lens           : list[list[int]] = []
-        layers_paged_kv_last_page_len: list[list[int]] = []
-        layers_kv_cu_seq_lens        : list[list[int]] = []
-        layers_block_tables          : list[list[int]] = []
-        layers_blocks_lens           : list[list[int]] = []
-        layers_cu_blocks_lens        : list[list[int]] = []
-        layers_new_cache_slots       : list[list[int]] = []
-        if self.config.memory_config.memory_management_policy == 'vanilla':
-            # vanilla policy: all layers have same kv cache management, so we only gather first level attention info
-            n_kv_cache_group = 1
-        elif self.config.memory_config.memory_management_policy == 'shared_layers':
-            # shared_layers policy: all layers have different kv cache management and all layer virtual kv cache shared one kv cache
-            n_kv_cache_group = 32
-
-        for layer_id in range(n_kv_cache_group):
-            layer_kv_seq_lens             : list[int] = []
-            layer_paged_kv_last_page_len  : list[int] = []
-            layer_block_tables            : list[int] = []
-            layer_blocks_lens             : list[int] = []
-            layer_new_cache_slots         : list[int] = []
-            for seq, inst in contexts:
-                virtual_kv_cache = seq.virtual_kv_caches[inst.kv_cache_ids[layer_id]]
-                virtual_kv_cache.set(inst.cache_ids[layer_id])
-                slot_ids = virtual_kv_cache.v2p(inst.cache_ids[layer_id])
-                layer_new_cache_slots += slot_ids
-                layer_kv_seq_lens.append(virtual_kv_cache.n_kv_cache_tokens)
-                layer_block_tables += virtual_kv_cache.block_table
-                layer_blocks_lens.append(len(virtual_kv_cache.block_table))
-                layer_paged_kv_last_page_len.append(
-                    (virtual_kv_cache.n_kv_cache_tokens + self.config.memory_config.block_size - 1) %
-                    self.config.memory_config.block_size + 1
-                )
-            layers_kv_seq_lens.append(layer_kv_seq_lens)
-            layers_block_tables.append(layer_block_tables)
-            layers_blocks_lens.append(layer_blocks_lens)
-            layers_new_cache_slots.append(layer_new_cache_slots)
-            layers_kv_cu_seq_lens.append(list(accumulate(layer_kv_seq_lens, initial=0)))
-            layers_cu_blocks_lens.append(list(accumulate(layer_blocks_lens, initial=0)))
-            layers_paged_kv_last_page_len.append(layer_paged_kv_last_page_len)
-
-
-        # 2. prepare tensor data
-        ten_input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
-        ten_position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
-        ten_q_cu_seq_lens = torch.tensor(q_cu_seq_lens, dtype=torch.int, device=self.config.device)
-        ten_layers_new_cache_slots = torch.tensor(layers_new_cache_slots, dtype=torch.int, device=self.config.device)
-        ten_layers_block_tables = torch.tensor(layers_block_tables, dtype=torch.int, device=self.config.device)
-        ten_layers_cu_blocks_lens = torch.tensor(layers_cu_blocks_lens, dtype=torch.int, device=self.config.device)
-        if self.config.memory_config.memory_management_policy == 'vanilla':
-            ten_layers_paged_kv_last_page_len = torch.tensor(layers_paged_kv_last_page_len, dtype=torch.int, device=self.config.device)
-            flash_infer_handler = None
-            if all_sequences_decode:
-                self.batch_decode_with_paged_kvcache_wrapper.plan(
-                    indptr = ten_layers_cu_blocks_lens[0], 
-                    indices = ten_layers_block_tables[0],
-                    last_page_len = ten_layers_paged_kv_last_page_len[0],
-                    num_qo_heads = self.model_config.text_config.num_attention_heads,
-                    num_kv_heads = self.model_config.text_config.num_key_value_heads,
-                    head_dim = self.model_config.text_config.head_dim, 
-                    page_size = self.config.memory_config.block_size,
-                )
-                flash_infer_handler = self.batch_decode_with_paged_kvcache_wrapper
-            else:
-                self.batch_prefill_with_paged_kvcache_wrapper.plan(
-                    qo_indptr = ten_q_cu_seq_lens, 
-                    paged_kv_indptr = ten_layers_cu_blocks_lens[0], 
-                    paged_kv_indices = ten_layers_block_tables[0], 
-                    paged_kv_last_page_len = ten_layers_paged_kv_last_page_len[0],
-                    num_qo_heads = self.model_config.text_config.num_attention_heads,
-                    num_kv_heads = self.model_config.text_config.num_key_value_heads,
-                    head_dim = self.model_config.text_config.head_dim, 
-                    page_size = self.config.memory_config.block_size,
-                    causal=True
-                )
-                flash_infer_handler = self.batch_prefill_with_paged_kvcache_wrapper
-            model_params = ModelParameters(
-                attention_params = [AttentionParameters(
-                    kv_cache=self.mmu.kv_caches[layer_id],
-                    new_cache_slots = ten_layers_new_cache_slots[0],
-                    flash_infer_handler=flash_infer_handler,
-                )for layer_id in range(self.model_config.text_config.num_hidden_layers)], 
-                all_sequences_decode = all_sequences_decode, 
-                selected_token_ids = selected_token_ids, 
-            )
-        elif self.config.memory_config.memory_management_policy == 'shared_layers':
-            ten_layers_kv_cu_seq_lens = torch.tensor(layers_kv_cu_seq_lens, dtype=torch.int, device=self.config.device)
-            model_params = ModelParameters(
-                attention_params = [AttentionParameters(
-                    kv_cache = self.mmu.kv_caches[0], 
-                    q_cu_seq_lens = ten_q_cu_seq_lens,
-                    kv_cu_seq_lens = ten_layers_kv_cu_seq_lens[layer_id], 
-                    new_cache_slots = ten_layers_new_cache_slots[layer_id],
-                    block_tables = ten_layers_block_tables[layer_id], 
-                    cu_blocks_lens = ten_layers_cu_blocks_lens[layer_id], 
-                    num_sequences = num_sequences, 
-                    q_max_seq_len = q_max_seq_len, 
-                    kv_max_seq_len = max(layers_kv_seq_lens[layer_id]), 
-                )for layer_id in range(self.model_config.text_config.num_hidden_layers)], 
-                all_sequences_decode = all_sequences_decode, 
-                selected_token_ids = selected_token_ids, 
-            )
-
         if len(pixel_values):
             pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:
             pixel_values = None
-        if len(image_featues):
-            image_featues = torch.cat(image_featues, dim=0).to(dtype=self.config.dtype, device=self.config.device)
+        if len(image_features):
+            image_features = torch.cat(image_features, dim=0).to(dtype=self.config.dtype, device=self.config.device)
         else:
-            image_featues = None
+            image_features = None
 
-        # 3. forward and sample
-        sample_token_ids = self.model_runner(ten_input_ids, pixel_values, image_featues, ten_position_ids, model_params)
+        token_ids         : list[int] = []
+        position_ids      : list[int] = []
+        selected_token_ids: list[int] = []
+        for seq, inst in contexts:
+            token_ids += inst.token_ids
+            position_ids += inst.position_ids
+            if inst.sample:
+                selected_token_ids.append(len(token_ids) - 1)
+        
+        attention_params_builder = AttentionParametersBuilder(
+            num_qo_heads = self.model_config.text_config.num_attention_heads,
+            num_kv_heads = self.model_config.text_config.num_key_value_heads,
+            head_dim = self.model_config.text_config.head_dim, 
+            block_size = self.config.memory_config.block_size, 
+            device = self.config.device, 
+            flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper, 
+            flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper, 
+        )
+        for seq, inst in contexts:
+            virtual_kv_cache = seq.virtual_kv_caches[inst.kv_cache_ids[0]]
+            virtual_kv_cache.set(inst.cache_ids[0])
+            slot_ids = virtual_kv_cache.v2p(inst.cache_ids[0])
+            attention_params_builder.add_request(
+                q_seq_len = len(inst.token_ids), 
+                kv_seq_len = virtual_kv_cache.n_kv_cache_tokens, 
+                new_cache_slots = slot_ids, 
+                block_table = virtual_kv_cache.block_table
+            )
+        for layer_id in range(self.model_config.text_config.num_hidden_layers):
+            attention_params_builder.add_kv_cache(self.mmu.kv_caches[layer_id])
+        layers_attention_params = attention_params_builder.build_attention_parameters()
+
+        model_params = ModelParameters(
+            attention_params = layers_attention_params, 
+            all_sequences_decode = layers_attention_params[0].all_sequences_decode, 
+            selected_token_ids = selected_token_ids
+        )
+        ten_input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
+        ten_position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
+
+        sample_token_ids = self.model_runner(ten_input_ids, pixel_values, image_features, ten_position_ids, model_params)
         sample_token_ids = sample_token_ids.tolist()
         output_tokens = {} # rid -> token_id
         if len(selected_token_ids) > 0:
