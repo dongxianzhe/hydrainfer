@@ -2,13 +2,12 @@ import os
 import safetensors.torch
 import torch
 from torch import nn, Tensor
-from transformers import LlavaConfig, LlamaConfig, CLIPVisionConfig
-from dxz.model.parameters import ModelParameters
-from dxz.model.llama import LlamaDecoderLayer, LlamaRMSNorm, LlamaForCausalLM
-from typing import Optional, Union
-from dxz.model.clip import CLIPEncoderLayer, CLIPVisionEmbeddings, CLIPVisionModel
-
-
+from transformers import LlavaConfig
+from typing import Optional
+from dxz.model.llama import LlamaForCausalLM
+from dxz.model.clip import CLIPVisionModel
+from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig
 
 class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: LlavaConfig):
@@ -28,34 +27,9 @@ class LlavaForConditionalGeneration(nn.Module):
     def __init__(self, config: LlavaConfig):
         super().__init__()
         self.config = config
-        # assert config.vision_feature_select_strategy == 'default'
         self.vision_tower = CLIPVisionModel(config.vision_config)
         self.multi_modal_projector = LlavaMultiModalProjector(config)
         self.language_model = LlamaForCausalLM(config.text_config)
-    
-    def forward(self, input_ids: Tensor, pixel_values: Optional[Tensor], image_features: Optional[Tensor], position_ids: Tensor, model_params: ModelParameters) -> Tensor:
-        # input_ids    (n_tokens + m_tokens) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
-        # pixel_values (n_images, n_channels, height, width)
-        # position_ids (n_tokens + m_tokens)
-        # image_features (m_tokens, hidden_size)
-
-        # 1. compute input embeds
-        input_embeds = self.input_embed(input_ids) # (n_tokens, n_embeds)
-
-        if pixel_values is not None:
-            image_overwrite_mask = input_ids == self.config.image_token_index
-            # 2. compute image embeds
-            image_features = self.image_embed(pixel_values, model_params)
-
-            # 3. merge embeds
-            embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
-
-        if image_features is not None:
-            image_overwrite_mask = input_ids == self.config.image_token_index
-            embeds = self.merge_embed(input_embeds, image_features, image_overwrite_mask)
-        # 4. compute sample_token_ids
-        return self.language_model(input_embeds, position_ids, model_params)
-
     
     @classmethod
     def from_safetensor(cls, model_weights_path: str, dtype: torch.dtype, device: torch.device):
@@ -85,28 +59,54 @@ class LlavaForConditionalGeneration(nn.Module):
 
         return model
 
-    def input_embed(self, input_ids: Tensor) -> Tensor:
-        input_embeds = self.language_model.model.embed_tokens(input_ids)
-        return input_embeds
+class LlavaVisionModel(VisionModel):
+    def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
+        super().__init__()
+        model_ref = LlavaForConditionalGeneration.from_safetensor(model_path, dtype, device)
+        config_ref = model_ref.config
+        self.vision_feature_layer = config_ref.vision_feature_layer
 
-    def image_embed(self, pixel_values: Tensor, model_params: ModelParameters) -> Tensor:
-        hidden_states, output = self.vision_tower(pixel_values, self.config.vision_feature_layer, model_params.vision_params)
-        selected_image_feature = hidden_states[:, 1:] # (n_images, 576, 1024)
-        if model_params.embed_token_pruning_params and model_params.embed_token_pruning_params.get('policy', "") == 'focal':
-            from dxz.layer import token_prunning
-            selected_image_feature = token_prunning.focal_prunning(
-                selected_image_feature,
-                model_params.output.scores [:, :, 1:, 1:], # (batch_size, n_images, 576, 576)
-                n_output_tokens=model_params.embed_token_pruning_params['n_output_tokens'],
-                strategy='rank',
-            )
-            
+        self.vision_tower = model_ref.vision_tower
+        self.multi_modal_projector = model_ref.multi_modal_projector
+        self.config = VisionModelConfig(
+            image_token_id = config_ref.image_token_index, 
+            num_image_tokens = config_ref.image_seq_length, 
+        )
+    
+    def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
+        # pixel_values (n_images, n_channels, height, width)
+        hidden_states, output = self.vision_tower(pixel_values, self.vision_feature_layer, model_params)
+        selected_image_feature = hidden_states[:, 1:]
         image_features = self.multi_modal_projector(selected_image_feature)
-        return image_features
+        output.image_features = image_features
+        return output
 
-    def merge_embed(self, input_embeds: Tensor, image_features: Tensor, image_overwrite_mask: Tensor) -> Tensor:
-        # input_embeds   (n_tokens + m_tokens, hidden_size) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
-        # image_features (n_images, 576, hidden_size) n_image * 576 should equal to m_tokens
-        # image_over_write_idx = (n_tokens + m_tokens, )
-        input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
-        return input_embeds
+class LlavaLanguageModel(LanguageModel):
+    def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
+        super().__init__()
+        model_ref = LlavaForConditionalGeneration.from_safetensor(model_path, dtype, device)
+        config_ref = model_ref.config
+        self.image_token_id = config_ref.image_token_index
+
+        self.language_model = model_ref.language_model
+        self.config = LanguageModelConfig(
+            n_layers = config_ref.text_config.num_hidden_layers, 
+            max_position_embeddings = config_ref.text_config.max_position_embeddings, 
+            n_qo_heads = config_ref.text_config.num_attention_heads, 
+            n_kv_heads = config_ref.text_config.num_key_value_heads, 
+            head_dim = config_ref.text_config.head_dim, 
+        )
+    
+    def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
+        # input_ids      (n_tokens + m_tokens) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
+        # image_features (m_tokens, hidden_size)
+        # position_ids (n_tokens + m_tokens)
+        input_embeds = self.language_model.model.embed_tokens(input_ids)
+        if image_features is not None:
+            image_overwrite_mask = input_ids == self.image_token_id
+            input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
+        sample_token_ids = self.language_model(input_embeds, position_ids, model_params)
+
+        return LanguageModelOutput(
+            sample_token_ids = sample_token_ids,
+        )

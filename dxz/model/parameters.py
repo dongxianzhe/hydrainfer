@@ -187,15 +187,19 @@ class AttentionParametersBuilder:
 class VisionModelParameters:
     return_last_layer_attention: bool = False
 
+@dataclass
 class VisionModelOutput:
+    image_features: Tensor = None
     scores: Tensor = None
 
 @dataclass
-class ModelParameters:
-    attention_params: Optional[list[AttentionParameters]] = None
-    all_sequences_decode: bool = False
-    selected_token_ids: list[int] = None
-    embed_token_pruning_params: Optional[dict] = None
-    prefill_token_pruning_params: Optional[dict] = None
-    decode_kvcache_eviction_parmas: Optional[dict] = None
-    vision_params: VisionModelParameters = VisionModelParameters()
+class LanguageModelParameters:
+    attention_params: list[AttentionParameters]
+    all_sequences_decode: bool
+    selected_token_ids: list[int]
+
+
+@dataclass
+class LanguageModelOutput:
+    sample_token_ids: Tensor = None
+    

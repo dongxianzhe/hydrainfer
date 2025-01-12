@@ -4,6 +4,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 import time
 import random
+from typing import Optional
 from itertools import accumulate
 from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
@@ -13,8 +14,8 @@ from torch import Tensor
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 from dxz.engine.request import Request
 from dxz.model.downloader import download_hf_model
-from dxz.model.llava import LlavaForConditionalGeneration
-from dxz.model.parameters import AttentionParameters, ModelParameters, VisionModelParameters, AttentionParametersBuilder
+from dxz.model.model_factory import ModelFactory
+from dxz.model.parameters import AttentionParameters, LanguageModelParameters, VisionModelParameters, AttentionParametersBuilder
 from dxz.sequence.sequence import Sequence
 from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
@@ -24,6 +25,7 @@ import argparse
 @dataclass
 class EngineConfig:
     model_name  : str          = "llava-hf/llava-1.5-7b-hf" 
+    model_path  : Optional[str]= None
     dtype       : torch.dtype  = torch.half 
     device      : torch.device = torch.device('cuda:0') 
     memory_config    : MemoryConfig    = field(default_factory=MemoryConfig)
@@ -50,6 +52,7 @@ class EngineConfig:
         parser = CompilerConfig.add_cli_args(parser)
         parser = SchedulerConfig.add_cli_args(parser)
         parser.add_argument('--model-name', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
+        parser.add_argument('--model_path', type=str, nargs="?", default=None, help="path to the model, if set none will download model from huggingface to default cache directory of transformers library with the model-name arg.")
         parser.add_argument('--multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
         parser.add_argument('--batch-image-embed-forward', action='store_true', help='Enable batch image embedding forwarding.')
         parser.add_argument('--multi-streams-forward', action='store_true', help='Enable multi-stream forwarding.')
@@ -62,17 +65,16 @@ class Engine:
     def __init__(self, config: EngineConfig):
         self.config = config
         # 1. model
-        model_path = download_hf_model(repo_id=config.model_name)
-        self.processor = AutoProcessor.from_pretrained(model_path)
-        self.tokenizer = self.processor.tokenizer
-        self.model = LlavaForConditionalGeneration.from_safetensor(model_path, self.config.dtype, self.config.device)
-        self.model_config = self.model.config
-        self.model_runner = self.model
+        model_factory = ModelFactory(config.model_name, config.model_path, config.dtype, config.device)
+        self.vision_model, self.vision_model_config = model_factory.getVisionModel() 
+        self.language_model, self.language_model_config = model_factory.getLanguageModel() 
+        self.processor = model_factory.getProcessor() 
+        self.tokenizer = model_factory.getTokenizer() 
         # 2. memory
         self.memory_context = MemoryContext(
-            n_layers=self.model_config.text_config.num_hidden_layers,
-            head_size = self.model_config.text_config.head_dim, 
-            num_kv_heads=self.model_config.text_config.num_key_value_heads, 
+            n_layers=self.language_model_config.n_layers,
+            head_size = self.language_model_config.head_dim, 
+            num_kv_heads=self.language_model_config.n_kv_heads, 
             dtype = self.config.dtype, 
             device = self.config.device, 
         )
@@ -84,9 +86,9 @@ class Engine:
         self.compiler_context = CompilerContext(
             tokenizer = self.tokenizer, 
             processor = self.processor, 
-            image_token_id = self.model_config.image_token_index, 
-            num_image_tokens = self.model_config.image_seq_length, 
-            n_layers = self.model_config.text_config.num_hidden_layers,
+            image_token_id = self.vision_model_config.image_token_id, 
+            num_image_tokens = self.vision_model_config.num_image_tokens, 
+            n_layers = self.language_model_config.n_layers,
         )
         self.compiler = Compiler(
             config = self.config.compiler_config, 
@@ -117,7 +119,7 @@ class Engine:
     def warm_up(self):
         n_tokens = 596
         n_blocks = (n_tokens + self.config.memory_config.block_size - 1) // self.config.memory_config.block_size
-        params = ModelParameters(
+        params = LanguageModelParameters(
             attention_params=[AttentionParameters(
                 kv_cache = self.mmu.kv_caches[0], 
                 q_cu_seq_lens = torch.tensor([0, n_tokens], dtype=torch.int, device=self.config.device), 
@@ -130,16 +132,16 @@ class Engine:
                 all_sequences_decode = False, 
                 q_max_seq_len = n_tokens, 
                 kv_max_seq_len = n_tokens, 
-            ) for _ in range(self.model_config.text_config.num_hidden_layers)],
+            ) for _ in range(self.language_model_config.n_layers)],
             all_sequences_decode=False,  
+            selected_token_ids=torch.arange(n_tokens, dtype=torch.int, device=self.config.device)
         )
         input_ids = torch.zeros(n_tokens, dtype=torch.int, device=self.config.device)
         position_ids = torch.arange(n_tokens, dtype=torch.int, device=self.config.device)
         pixel_values = None
         image_features = None
         for i in range(3):
-            self.model(input_ids, pixel_values, image_features, position_ids, params)
-
+            self.language_model.forward(input_ids, image_features, position_ids, params)
 
     def add_request(self, request: Request):
         if self.config.multi_thread_request_process:
@@ -168,7 +170,7 @@ class Engine:
             virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
             max_tokens = request.max_tokens, 
             eos_token_id = None, 
-            max_seq_len = self.model_config.text_config.max_position_embeddings, 
+            max_seq_len = self.language_model_config.max_position_embeddings, 
             rid = request.request_id, 
         )
         sequence.metric.arrival_time = arrival_time
@@ -213,9 +215,9 @@ class Engine:
                 selected_token_ids.append(len(token_ids) - 1)
         
         attention_params_builder = AttentionParametersBuilder(
-            num_qo_heads = self.model_config.text_config.num_attention_heads,
-            num_kv_heads = self.model_config.text_config.num_key_value_heads,
-            head_dim = self.model_config.text_config.head_dim, 
+            num_qo_heads = self.language_model_config.n_qo_heads,
+            num_kv_heads = self.language_model_config.n_kv_heads,
+            head_dim = self.language_model_config.head_dim, 
             block_size = self.config.memory_config.block_size, 
             device = self.config.device, 
             flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper, 
@@ -231,11 +233,11 @@ class Engine:
                 new_cache_slots = slot_ids, 
                 block_table = virtual_kv_cache.block_table
             )
-        for layer_id in range(self.model_config.text_config.num_hidden_layers):
+        for layer_id in range(self.language_model_config.n_layers):
             attention_params_builder.add_kv_cache(self.mmu.kv_caches[layer_id])
         layers_attention_params = attention_params_builder.build_attention_parameters()
 
-        model_params = ModelParameters(
+        model_params = LanguageModelParameters(
             attention_params = layers_attention_params, 
             all_sequences_decode = layers_attention_params[0].all_sequences_decode, 
             selected_token_ids = selected_token_ids
@@ -243,7 +245,9 @@ class Engine:
         ten_input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.config.device)
         ten_position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.config.device)
 
-        sample_token_ids = self.model_runner(ten_input_ids, pixel_values, image_features, ten_position_ids, model_params)
+        if pixel_values is not None:
+            image_features = self.vision_model.forward(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
+        sample_token_ids = self.language_model.forward(ten_input_ids, image_features, ten_position_ids, model_params).sample_token_ids
         sample_token_ids = sample_token_ids.tolist()
         output_tokens = {} # rid -> token_id
         if len(selected_token_ids) > 0:
@@ -293,13 +297,8 @@ class Engine:
             n_images.append(pixel_values.shape[0])
         pixel_values = torch.cat(batch_pixel_values, dim=0) 
 
-        model_params = ModelParameters(
-            embed_token_pruning_params=instruction.token_pruning_params, 
-            vision_params=VisionModelParameters(
-                return_last_layer_attention=True if instruction.token_pruning_params.get('policy', None) else None
-            )
-        )
-        image_features = self.model.image_embed(pixel_values, model_params) # (batch_size, n_tokens, vision_hidden_size)
+        vision_params = VisionModelParameters(return_last_layer_attention=False)
+        image_features = self.vision_model.forward(pixel_values, vision_params).image_features
 
         left = 0
         for i, (sequence, instruction) in enumerate(contexts):
@@ -315,13 +314,8 @@ class Engine:
     def execute_image_embed(self, context: tuple[Sequence, Instruction]):
         sequence, instruction = context
         pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
-        model_params = ModelParameters(
-            embed_token_pruning_params=instruction.token_pruning_params, 
-            vision_params=VisionModelParameters(
-                return_last_layer_attention=True if instruction.token_pruning_params else None
-            )
-        )
-        image_features = self.model.image_embed(pixel_values, model_params)
+        vision_params = VisionModelParameters(return_last_layer_attention=False)
+        image_features = self.vision_model.forward(pixel_values, vision_params).image_features
         instruction.image_featues_dst.image_features = image_features
 
     @torch.inference_mode()

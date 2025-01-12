@@ -4,7 +4,7 @@ from torch import nn, Tensor
 from transformers import LlamaConfig
 import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
-from dxz.model.parameters import ModelParameters, AttentionParameters
+from dxz.model.parameters import LanguageModelParameters, AttentionParameters
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
 from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
 from dxz._C.kernel.norm import rms_norm
@@ -77,7 +77,7 @@ class LlamaDecoderLayer(nn.Module):
         self.input_layernorm = LlamaRMSNorm(config)
         self.post_attention_layernorm = LlamaRMSNorm(config)
     
-    def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id])
@@ -99,7 +99,7 @@ class LlamaModel(nn.Module):
         self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
         self.norm = LlamaRMSNorm(config)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         if input_ids.size == torch.int:
             # input_ids is token_ids
             hidden_states = self.embed_tokens(input_ids)
@@ -118,7 +118,7 @@ class LlamaForCausalLM(nn.Module):
         self.model = LlamaModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: ModelParameters) -> Tensor:
+    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         # input_ids is token_ids or input embeds
         hidden_state = self.model(input_ids, position_ids, model_params)
         logits = self.lm_head(hidden_state)
