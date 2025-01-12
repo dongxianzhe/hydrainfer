@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from dxz.engine.request import Request
-from dxz.engine.engine import Engine, EngineConfig
+from dxz.engine.engine import EngineConfig
 from dxz.sequence.sequence import Sequence
+from dxz.cluster.epdnode import EPDNode
 from tqdm import tqdm
 import time
 
@@ -15,19 +16,19 @@ class GenerateOutput:
 
 class MLLM:
     def __init__(self, config: EngineConfig):
-        self.engine = Engine(config)
-        self.tokenizer = self.engine.tokenizer
+        self.node = EPDNode(config)
+        self.tokenizer = self.node.tokenizer
 
     def generate(self, requests: list[Request]) -> list[GenerateOutput]:
         for request in requests:
-            self.engine.add_request(request)
+            self.node.add_request(request)
 
         outputs = []
         finished: list[Sequence] = []
         bar = tqdm(range(len(requests)))
         while len(finished) < len(requests):
-            self.engine.step()
-            f = self.engine.scheduler.pop_finished() 
+            self.node.step()
+            f = self.node.engine.scheduler.pop_finished() 
             finished += f
             bar.update(len(f))
 

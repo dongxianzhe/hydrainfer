@@ -1,13 +1,9 @@
-import io
-import base64
-import threading
 from concurrent.futures import ThreadPoolExecutor
 import time
 import random
 from typing import Optional
 from itertools import accumulate
 from transformers import AutoTokenizer, AutoProcessor
-from PIL import Image
 from dataclasses import dataclass, field, fields
 import torch
 from torch import Tensor
@@ -82,37 +78,21 @@ class Engine:
             config = self.config.memory_config, 
             context = self.memory_context, 
             )
-        # 3. compiler
-        self.compiler_context = CompilerContext(
-            tokenizer = self.tokenizer, 
-            processor = self.processor, 
-            image_token_id = self.vision_model_config.image_token_id, 
-            num_image_tokens = self.vision_model_config.num_image_tokens, 
-            n_layers = self.language_model_config.n_layers,
-        )
-        self.compiler = Compiler(
-            config = self.config.compiler_config, 
-            context = self.compiler_context, 
-        )
-        # 4. sequence
-        self.sid_allocator = 0
+        # 3. sequence
         self.scheduler = SequenceScheduler(self.config.scheduler_config)
 
-        # 5. flashinfer optimization
+        # 4. flashinfer optimization
         import flashinfer
         self.workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.config.device)
         self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
         self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
 
-        # 6. multi threads request process optimization
-        self.add_request_lock = threading.Lock()
-        self.executor = ThreadPoolExecutor(max_workers=32)
 
-        # 7. multi stream and threads forward optimization
+        # 5. multi stream and threads forward optimization
         self.streams: list[torch.cuda.Stream] = [torch.cuda.Stream(), torch.cuda.Stream()]
         self.forward_executor = ThreadPoolExecutor(max_workers=2)
 
-        # 8. model warm up optimization
+        # 6. model warm up optimization
         if config.warm_up:
             self.warm_up()
 
@@ -142,40 +122,6 @@ class Engine:
         image_features = None
         for i in range(3):
             self.language_model.forward(input_ids, image_features, position_ids, params)
-
-    def add_request(self, request: Request):
-        if self.config.multi_thread_request_process:
-            self.executor.map(self._add_request_async, [request])
-        else:
-            self._add_request(request)
-
-    def _add_request_async(self, request: Request):
-        with self.add_request_lock:
-            self._add_request(request)
-    
-    def _add_request(self, request: Request):
-        if request.image is None and request.image_base64 is not None:
-            request.image = Image.open(io.BytesIO(base64.b64decode(request.image_base64)))
-        arrival_time = time.perf_counter()
-
-        static_info = self.compiler.compile(
-            prompt = request.prompt, 
-            images = request.image, 
-            compile_params = CompileParameters(max_tokens = request.max_tokens)
-            )
-        sequence = Sequence(
-            static_info=static_info, 
-            sid = self.sid_allocator, 
-            instructions = static_info.instructions, 
-            virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
-            max_tokens = request.max_tokens, 
-            eos_token_id = None, 
-            max_seq_len = self.language_model_config.max_position_embeddings, 
-            rid = request.request_id, 
-        )
-        sequence.metric.arrival_time = arrival_time
-        self.sid_allocator += 1
-        self.scheduler.schedule_new([sequence])
     
     def execute_batch_fill(self, contexts: list[tuple[Sequence, Instruction]]) -> dict[int, int]:
         if len(contexts) == 0:
