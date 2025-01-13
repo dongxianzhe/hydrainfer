@@ -15,7 +15,6 @@ class RequestControlBlock:
         self.max_tokens = max_tokens
         self.eos_token_id = eos_token_id
         self.max_seq_len = max_seq_len
-        self.append_instruction_count = 0
         self.metric = RequestMetric()
         self.rid = rid
 
