@@ -1,18 +1,10 @@
 from dxz.engine.isa import Instruction, TextFill
 from dxz.memory.virtual_kv_cache import VirtualKVCache
-from dxz.memory.compiler import CompilerOutput
-from dataclasses import dataclass, field
+from dxz.request.request_processor import RequestProcessOutput
+from dxz.request.metric import RequestMetric
 
-
-@dataclass
-class SequenceMetric:
-    arrival_time: float = 0. 
-    first_schedule_time: float = 0.
-    tokens_time: list[float] = field(default_factory=list)
-    finished_time: float = 0.
-
-class Sequence:
-    def __init__(self, static_info: CompilerOutput, sid: int, instructions: list[Instruction], virtual_kv_caches: list[VirtualKVCache], max_tokens: int, eos_token_id: int, max_seq_len: int, rid: int):
+class RequestControlBlock:
+    def __init__(self, static_info: RequestProcessOutput, sid: int, instructions: list[Instruction], virtual_kv_caches: list[VirtualKVCache], max_tokens: int, eos_token_id: int, max_seq_len: int, rid: int):
         self.static_info = static_info
         self.sid: int = sid
         self.pc: int = 0
@@ -24,7 +16,7 @@ class Sequence:
         self.eos_token_id = eos_token_id
         self.max_seq_len = max_seq_len
         self.append_instruction_count = 0
-        self.metric = SequenceMetric()
+        self.metric = RequestMetric()
         self.rid = rid
 
     def next_instruction(self) -> Instruction:
@@ -49,8 +41,8 @@ class Sequence:
         return finished
 
     def print(self):
-        print(f'---------------------------- sequence info --------------------------------')
+        print(f'---------------------------- request control block --------------------------------')
         print(f'sid {self.sid}')
         for instruction in self.instructions:
             print(f"{instruction}")
-        print('----------------------------------------------------------------------------')
+        print(f'-----------------------------------------------------------------------------------')

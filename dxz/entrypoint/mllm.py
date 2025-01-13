@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from dxz.engine.request import Request
 from dxz.engine.engine import EngineConfig
-from dxz.sequence.sequence import Sequence
+from dxz.request.rcb import RequestControlBlock
 from dxz.cluster.epdnode import EPDNode
 from tqdm import tqdm
 import time
@@ -24,7 +24,7 @@ class MLLM:
             self.node.add_request(request)
 
         outputs = []
-        finished: list[Sequence] = []
+        finished: list[RequestControlBlock] = []
         bar = tqdm(range(len(requests)))
         while len(finished) < len(requests):
             self.node.step()
@@ -35,13 +35,13 @@ class MLLM:
         finished_time = time.perf_counter()
         finished = sorted(finished, key=lambda seq: seq.sid)
 
-        for sequence in finished:
+        for rcb in finished:
             outputs.append(GenerateOutput(
-                input_len = sequence.static_info.n_prompt_tokens, 
-                text = self.tokenizer.decode(sequence.output_token_ids, skip_special_tokens=True), 
-                arrival_time = sequence.metric.arrival_time, 
+                input_len = rcb.static_info.n_prompt_tokens, 
+                text = self.tokenizer.decode(rcb.output_token_ids, skip_special_tokens=True), 
+                arrival_time = rcb.metric.arrival_time, 
                 finished_time = finished_time, 
-                token_times = sequence.metric.tokens_time, 
+                token_times = rcb.metric.tokens_time, 
             ))
 
         return outputs

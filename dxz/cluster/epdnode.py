@@ -6,8 +6,8 @@ from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 
 from dxz.engine.request import Request
-from dxz.sequence.sequence import Sequence
-from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
+from dxz.request.rcb import RequestControlBlock
+from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, RequestProcessOutput, RequestProcessParameters
 from dxz.engine.engine import EngineConfig, Engine
 
 class EPDNode:
@@ -18,16 +18,16 @@ class EPDNode:
 
         self.sid_allocator = 0
 
-        self.compiler_context = CompilerContext(
+        self.request_processor_context = RequestProcessorContext(
             tokenizer = self.engine.tokenizer, 
             processor = self.engine.processor, 
             image_token_id = self.engine.vision_model_config.image_token_id, 
             num_image_tokens = self.engine.vision_model_config.num_image_tokens, 
             n_layers = self.engine.language_model_config.n_layers,
         )
-        self.compiler = Compiler(
-            config = self.config.compiler_config, 
-            context = self.compiler_context, 
+        self.request_processor = RequestProcessor(
+            config = self.config.request_processor_config, 
+            context = self.request_processor_context, 
         )
 
         self.add_request_lock = threading.Lock()
@@ -48,12 +48,12 @@ class EPDNode:
             request.image = Image.open(io.BytesIO(base64.b64decode(request.image_base64)))
         arrival_time = time.perf_counter()
 
-        static_info = self.compiler.compile(
+        static_info = self.request_processor.process(
             prompt = request.prompt, 
             images = request.image, 
-            compile_params = CompileParameters(max_tokens = request.max_tokens)
+            params = RequestProcessParameters(max_tokens = request.max_tokens)
             )
-        sequence = Sequence(
+        rcb = RequestControlBlock(
             static_info=static_info, 
             sid = self.sid_allocator, 
             instructions = static_info.instructions, 
@@ -63,9 +63,9 @@ class EPDNode:
             max_seq_len = self.engine.language_model_config.max_position_embeddings, 
             rid = request.request_id, 
         )
-        sequence.metric.arrival_time = arrival_time
+        rcb.metric.arrival_time = arrival_time
         self.sid_allocator += 1
-        self.engine.scheduler.schedule_new([sequence])
+        self.engine.scheduler.schedule_new([rcb])
 
     def step(self):
         self.engine.step()

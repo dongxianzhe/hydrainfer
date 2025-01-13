@@ -12,22 +12,22 @@ from dxz.engine.request import Request
 from dxz.model.downloader import download_hf_model
 from dxz.model.model_factory import ModelFactory
 from dxz.model.parameters import AttentionParameters, LanguageModelParameters, VisionModelParameters, AttentionParametersBuilder
-from dxz.sequence.sequence import Sequence
-from dxz.memory.compiler import CompilerConfig, Compiler, CompilerContext, CompileParameters
+from dxz.request.rcb import RequestControlBlock
+from dxz.request.request_processor import RequestProcessorConfig, RequestProcessor, RequestProcessorContext, RequestProcessParameters
 from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
-from dxz.engine.scheduler import SchedulerConfig, SequenceScheduler
+from dxz.engine.scheduler import SchedulerConfig, RequestScheduler
 import argparse
 
 @dataclass
 class EngineConfig:
-    model_name  : str          = "llava-hf/llava-1.5-7b-hf" 
-    model_path  : Optional[str]= None
-    dtype       : torch.dtype  = torch.half 
-    device      : torch.device = torch.device('cuda:0') 
-    memory_config    : MemoryConfig    = field(default_factory=MemoryConfig)
-    compiler_config  : CompilerConfig  = field(default_factory=CompilerConfig)
-    scheduler_config : SchedulerConfig = field(default_factory=SchedulerConfig)
-    multi_thread_request_process : bool = True
+    model_name: str          = "llava-hf/llava-1.5-7b-hf" 
+    model_path: Optional[str]= None
+    dtype: torch.dtype  = torch.half 
+    device: torch.device = torch.device('cuda:0') 
+    memory_config: MemoryConfig = field(default_factory=MemoryConfig)
+    request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
+    scheduler_config: SchedulerConfig = field(default_factory=SchedulerConfig)
+    multi_thread_request_process: bool = True
     batch_image_embed_forward: bool = True
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
@@ -35,17 +35,17 @@ class EngineConfig:
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'MemoryConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['model_name', 'dtype', 'device', 'memory_config', 'compiler_config', 'scheduler_config']]
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['dtype', 'device', 'memory_config', 'request_processor_config', 'scheduler_config']]
         memory_config = MemoryConfig.from_cli_args(args)
-        compiler_config = CompilerConfig.from_cli_args(args)
+        request_processor_config = RequestProcessorConfig.from_cli_args(args)
         scheduler_config = SchedulerConfig.from_cli_args(args)
-        config = cls(memory_config=memory_config, compiler_config=compiler_config, scheduler_config=scheduler_config, **{attr: getattr(args, attr) for attr in attrs})
+        config = cls(memory_config=memory_config, request_processor_config=request_processor_config, scheduler_config=scheduler_config, **{attr: getattr(args, attr) for attr in attrs})
         return config
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         parser = MemoryConfig.add_cli_args(parser)
-        parser = CompilerConfig.add_cli_args(parser)
+        parser = RequestProcessorConfig.add_cli_args(parser)
         parser = SchedulerConfig.add_cli_args(parser)
         parser.add_argument('--model-name', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
         parser.add_argument('--model_path', type=str, nargs="?", default=None, help="path to the model, if set none will download model from huggingface to default cache directory of transformers library with the model-name arg.")
@@ -78,8 +78,8 @@ class Engine:
             config = self.config.memory_config, 
             context = self.memory_context, 
             )
-        # 3. sequence
-        self.scheduler = SequenceScheduler(self.config.scheduler_config)
+        # 3. scheduler
+        self.scheduler = RequestScheduler(self.config.scheduler_config)
 
         # 4. flashinfer optimization
         import flashinfer
@@ -123,7 +123,7 @@ class Engine:
         for i in range(3):
             self.language_model.forward(input_ids, image_features, position_ids, params)
     
-    def execute_batch_fill(self, contexts: list[tuple[Sequence, Instruction]]) -> dict[int, int]:
+    def execute_batch_fill(self, contexts: list[tuple[RequestControlBlock, Instruction]]) -> dict[int, int]:
         if len(contexts) == 0:
             return {}
 
@@ -199,26 +199,26 @@ class Engine:
         if len(selected_token_ids) > 0:
             t = time.perf_counter()
             i = 0
-            for sequence, instruction in contexts:
+            for rcb, instruction in contexts:
                 if (isinstance(instruction, Fill)) and instruction.sample:
                     next_token_id = sample_token_ids[i]
                     instruction.sample_dst.token_ids = [next_token_id]
-                    sequence.output_token_ids.append(next_token_id)
-                    sequence.metric.tokens_time.append(t)
+                    rcb.output_token_ids.append(next_token_id)
+                    rcb.metric.tokens_time.append(t)
                     i += 1
-                    output_tokens[sequence.rid] = next_token_id
+                    output_tokens[rcb.rid] = next_token_id
         return output_tokens
 
-    def execute_mov(self, context: tuple[Sequence, Instruction]):
+    def execute_mov(self, context: tuple[RequestControlBlock, Instruction]):
         raise Exception('not implemented')
-        sequence, instruction = context
+        rcb, instruction = context
         src_slot_ids: list[int] = []
         for src_cache_ids, src_kv_cache_id in zip(instruction.src_cache_ids, instruction.src_kv_cache_ids):
-            block_table = sequence.virtual_kv_caches[src_kv_cache_id].block_tables
+            block_table = rcb.virtual_kv_caches[src_kv_cache_id].block_tables
             src_slot_ids += self.mmu.v2p(src_cache_ids, block_table)
         dst_slot_ids: list[int] = []
         for dst_cache_ids, dst_kv_cache_id in zip(instruction.dst_cache_ids, instruction.dst_kv_cache_ids):
-            block_table = sequence.virtual_kv_caches[dst_kv_cache_id].block_tables
+            block_table = rcb.virtual_kv_caches[dst_kv_cache_id].block_tables
             dst_slot_ids += self.mmu.v2p(dst_cache_ids, block_table)
         assert len(src_slot_ids) == len(dst_slot_ids), f'{len(src_slot_ids)} {len(dst_slot_ids)}'
         src_slot_ids = torch.tensor(src_slot_ids, dtype=torch.int, device=self.config.device)
@@ -226,18 +226,18 @@ class Engine:
         self.mmu.move_physical_kv_caches(src_slot_ids, dst_slot_ids)
 
 
-    def execute_realloc(self, context: tuple[Sequence, Instruction]):
-        sequence, instruction = context
+    def execute_realloc(self, context: tuple[RequestControlBlock, Instruction]):
+        rcb, instruction = context
         for n_token, vid in zip(instruction.n_tokens, instruction.kv_cache_ids):
-            sequence.virtual_kv_caches[vid].realloc(n_token)
+            rcb.virtual_kv_caches[vid].realloc(n_token)
 
-    def execute_batch_image_embed(self, contexts: list[tuple[Sequence, Instruction]]):
+    def execute_batch_image_embed(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
         if len(contexts) == 0:
             return
 
         n_images: list[int] = []
         batch_pixel_values: list[Tensor] = []
-        for sequence, instruction in contexts:
+        for rcb, instruction in contexts:
             pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device) # (n_images, n_channels, width, height)
             batch_pixel_values.append(pixel_values)
             n_images.append(pixel_values.shape[0])
@@ -247,18 +247,18 @@ class Engine:
         image_features = self.vision_model.forward(pixel_values, vision_params).image_features
 
         left = 0
-        for i, (sequence, instruction) in enumerate(contexts):
+        for i, (rcb, instruction) in enumerate(contexts):
             right = left + n_images[i]
             instruction.image_featues_dst.image_features = image_features[left: right, :, :]
             left += n_images[i]
 
-    def execute_batch_image_embed_streams_decorator(self, contexts: list[tuple[Sequence, Instruction]], stream: torch.cuda.Stream):
+    def execute_batch_image_embed_streams_decorator(self, contexts: list[tuple[RequestControlBlock, Instruction]], stream: torch.cuda.Stream):
         with torch.cuda.stream(stream):
             self.execute_batch_image_embed(contexts)
             stream.synchronize()
 
-    def execute_image_embed(self, context: tuple[Sequence, Instruction]):
-        sequence, instruction = context
+    def execute_image_embed(self, context: tuple[RequestControlBlock, Instruction]):
+        rcb, instruction = context
         pixel_values = instruction.pixel_values.to(self.config.dtype).to(self.config.device)
         vision_params = VisionModelParameters(return_last_layer_attention=False)
         image_features = self.vision_model.forward(pixel_values, vision_params).image_features
@@ -266,7 +266,7 @@ class Engine:
 
     @torch.inference_mode()
     def step(self) -> dict[int, int]:
-        # 1. schedule sequence
+        # 1. schedule requests
         contexts = self.scheduler.step()
         if len(contexts) == 0:
             return {}
@@ -275,7 +275,7 @@ class Engine:
         fill_contexts = []
         image_embed_contexts = []
         for context in contexts:
-            sequence, instruction = context
+            rcb, instruction = context
             if isinstance(instruction, Fill):
                 fill_contexts.append(context)
                 continue
@@ -312,13 +312,13 @@ class Engine:
                 for context in image_embed_contexts:
                     self.execute_image_embed(context)
 
-        # 3. scheduler sequence
+        # 3. scheduler requests
         t = time.perf_counter()
-        for sequence, _ in contexts:
-            if sequence.is_finished():
-                sequence.metric.finished_time = t
-                self.scheduler.schedule_finished([sequence])
+        for rcb, _ in contexts:
+            if rcb.is_finished():
+                rcb.metric.finished_time = t
+                self.scheduler.schedule_finished([rcb])
             else:
-                self.scheduler.schedule_unfinished([sequence])
+                self.scheduler.schedule_unfinished([rcb])
         
         return output_tokens

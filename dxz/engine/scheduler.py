@@ -1,6 +1,6 @@
 from queue import Queue
 from typing import Literal, Optional
-from dxz.sequence.sequence import Sequence
+from dxz.request.rcb import RequestControlBlock
 from dataclasses import dataclass, fields
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 import time
@@ -10,7 +10,7 @@ import argparse
 class SchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     priority: Literal['prefill', 'decode'] = 'prefill'
-    max_running_sequences: int = 15
+    max_running_requests: int = 15
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
     batch_embed_fill: bool = False
@@ -26,7 +26,7 @@ class SchedulerConfig:
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         parser.add_argument('--batch_policy', type=str, choices=['nobatch', 'requestlevel', 'continuousbatch'], default='continuousbatch', help='Batch policy for scheduling.')
         parser.add_argument('--priority', type=str, choices=['prefill', 'decode'], default='prefill', help='Prefill prioritize or decode prioritize')
-        parser.add_argument('--max-running-sequences', type=int, default=15, help='Maximum number of sequences running concurrently. other sequences will waiting in queue.')
+        parser.add_argument('--max-running-requests', type=int, default=15, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
         parser.add_argument('--max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
         parser.add_argument('--max-batch-embed-images', type=int, default=3, help='Maximum number of images to embed in each batch.')
         parser.add_argument('--batch-embed-fill', action='store_true', help='Enable batch embedding fill.')
@@ -34,71 +34,71 @@ class SchedulerConfig:
         return parser
 
 
-class SequenceScheduler:
+class RequestScheduler:
     def __init__(self, config: SchedulerConfig):
         self.config = config
         self.waiting = Queue()
-        self.running: list[Sequence] = []
-        self.finished: list[Sequence] = []
+        self.running: list[RequestControlBlock] = []
+        self.finished: list[RequestControlBlock] = []
         self.step_cnt = 0
     
-    def schedule_new(self, sequences: list[Sequence]):
-        for sequence in sequences:
-            self.waiting.put(sequence)
+    def schedule_new(self, rcbs: list[RequestControlBlock]):
+        for rcb in rcbs:
+            self.waiting.put(rcb)
     
-    def schedule_running(self, sequences: list[Sequence]):
-        self.running += sequences
+    def schedule_running(self, rcbs: list[RequestControlBlock]):
+        self.running += rcbs
 
-    def schedule_unfinished(self, sequences: list[Sequence]):
-        self.running += sequences
+    def schedule_unfinished(self, rcbs: list[RequestControlBlock]):
+        self.running += rcbs
     
-    def schedule_finished(self, sequences: list[Sequence]):
-        self.finished += sequences
+    def schedule_finished(self, rcbs: list[RequestControlBlock]):
+        self.finished += rcbs
 
-    def pop_finished(self) -> list[Sequence]:
+    def pop_finished(self) -> list[RequestControlBlock]:
         finished = self.finished
         self.finished = []
         return finished
 
-    def step(self) -> list[tuple[Sequence, Instruction]]:
+    def step(self) -> list[tuple[RequestControlBlock, Instruction]]:
         self.step_cnt += 1
         schedule_time = time.perf_counter()
-        # 1. get enough sequences to participate in the batch
+        # 1. get enough requests to participate in the batch
         if self.config.batch_policy == 'nobatch':
             if len(self.running) == 0:
                 if not self.waiting.empty():
-                    sequence = self.waiting.get()
-                    self.running.append(sequence)
+                    rcb = self.waiting.get()
+                    self.running.append(rcb)
         elif self.config.batch_policy == 'requestlevel':
             if len(self.running) == 0:
-                while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
-                    sequence = self.waiting.get()
-                    self.running.append(sequence)
+                while len(self.running) < self.config.max_running_requests and not self.waiting.empty():
+                    rcb = self.waiting.get()
+                    self.running.append(rcb)
         elif self.config.batch_policy == 'continuousbatch':
-            while len(self.running) < self.config.max_running_sequences and not self.waiting.empty():
-                sequence = self.waiting.get()
-                self.running.append(sequence)
+            while len(self.running) < self.config.max_running_requests and not self.waiting.empty():
+                rcb = self.waiting.get()
+                self.running.append(rcb)
         if len(self.running) == 0:
             return []
 
         batch_fill_tokens = 0
         batch_embed_images = 0
-        prefill_seqs: list[Sequence] = []
-        decode_seqs : list[Sequence] = []
-        embed_seqs  : list[Sequence] = []
-        next_step: list[Sequence] = []
-        this_step: list[Sequence] = []
-        for sequence in self.running:
-            inst = sequence.curr_instruction()
+        prefill_seqs: list[RequestControlBlock] = []
+        decode_seqs : list[RequestControlBlock] = []
+        embed_seqs  : list[RequestControlBlock] = []
+        next_step: list[RequestControlBlock] = []
+        this_step: list[RequestControlBlock] = []
+        for rcb in self.running:
+            inst = rcb.curr_instruction()
             if isinstance(inst, Fill):
                 if len(inst.token_ids) == 1:
-                    decode_seqs.append(sequence)
+                    decode_seqs.append(rcb)
                 else:
-                    prefill_seqs.append(sequence)
+                    prefill_seqs.append(rcb)
             elif isinstance(inst, ImageEmbed):
-                embed_seqs.append(sequence)
+                embed_seqs.append(rcb)
             else:
-                this_step.append(sequence)
+                this_step.append(rcb)
 
 
         if len(prefill_seqs) > 0 and not self.config.batch_embed_fill:

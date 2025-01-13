@@ -226,7 +226,7 @@ def test_engine():
     import torch
     from dxz.engine.engine import EngineConfig, Engine, SchedulerConfig
     from dxz.memory.virtual_kv_cache import MemoryConfig
-    from dxz.memory.compiler import CompilerConfig
+    from dxz.memory.request_processor import RequestProcessorConfig
     paper = MMETestPaper()
     config = EngineConfig(
         model_name = "llava-hf/llava-1.5-7b-hf", 
@@ -238,9 +238,9 @@ def test_engine():
         ), 
         scheduler_config=SchedulerConfig(
             batch_policy = 'continuousbatch', 
-            max_running_sequences = 10, 
+            max_running_requests = 10, 
         ), 
-        compiler_config=CompilerConfig(
+        request_processor_config=RequestProcessorConfig(
             max_tokens = 64, 
             kv_cache_eviction_policy = None, 
             window_size = 28, 
