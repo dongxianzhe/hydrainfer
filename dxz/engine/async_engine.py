@@ -1,56 +1,74 @@
 from PIL import Image
 from typing import Optional
-from dxz.engine.engine import Engine
+from dxz.engine.engine import EngineConfig
+from dxz.cluster.epdnode import EPDNode
 from dxz.entrypoint.async_stream import AsyncStream
 from dxz.entrypoint.api_protocol import ChatCompletionMessage
-from dxz.engine.request import Request
+from dxz.request.request import Request, SamplingParameters
+from dxz.request.rcb import OutputTokenProcessor
+from transformers import AutoTokenizer
 import base64
 import asyncio
 import io
+
+class OnlineStreamOutputTokenProcessor(OutputTokenProcessor):
+    def __init__(self, tokenizer: AutoTokenizer):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.output_stream = AsyncStream()
+
+    def append_token_id(self, token_id: int, is_last_token: bool=False):
+        output_text = self.tokenizer.decode(token_id)
+        self.output_stream.put(output_text)
+        if is_last_token:
+            self.output_stream.put(StopAsyncIteration())
+
+
+class OnlineNonStreamOutputTokenProcessor(OutputTokenProcessor):
+    def __init__(self, tokenizer: AutoTokenizer):
+        super().__init__()
+        self.tokenizer = tokenizer
+        self.output_tokens: list[int] = []
+        self.output_stream = AsyncStream()
+        
+    def append_token_id(self, token_id: int, is_last_token: bool=False):
+        self.output_tokens.append(token_id)
+        if is_last_token:
+            output_text = self.tokenizer.decode(self.output_tokens)
+            self.output_stream.put(output_text)
+            self.output_stream.put(StopAsyncIteration())
+
+
 class AsyncEngine:
-    def __init__(self, config: Engine):
-        self.engine = Engine(config=config)
-        self.tokenizer = self.engine.tokenizer
-        self.is_stream_output:dict[int, bool]        = {} # sequence.id -> wheather stream output
-        self.output_streams  :dict[int, AsyncStream] = {} # sequence.id -> output generator
-        self.request_id = 0
+    def __init__(self, config: EngineConfig):
+        self.node = EPDNode(config=config)
+        self.tokenizer = self.node.tokenizer
+        self.request_id_allocator = 0
 
     def message_generate(self, messages: list[ChatCompletionMessage], max_tokens: int, stream: bool):
         assert len(messages) == 1, 'only support single round conversation'
-        id = self.request_id
-        self.request_id += 1
-        self.engine.add_request(Request(
+        request_id = self.request_id_allocator
+        self.request_id_allocator += 1
+
+        if stream:
+            processor = OnlineStreamOutputTokenProcessor(tokenizer=self.tokenizer)
+        else:
+            processor = OnlineNonStreamOutputTokenProcessor(tokenizer=self.tokenizer)
+
+        self.node.add_request(Request(
             prompt = messages[0].content, 
             image = None, 
             image_base64 = messages[0].image, 
-            max_tokens = max_tokens, 
-            request_id = id, 
-            ))
+            request_id = request_id, 
+            sampling_params=SamplingParameters(
+                max_tokens=max_tokens
+            )),
+            processor
+        )
 
-        output_stream = AsyncStream()
-        self.is_stream_output[id] = stream
-        self.output_streams  [id] = output_stream
-        return output_stream
+        return processor.output_stream
     
     async def loop(self):
         while True:
-            output_tokens = self.engine.step()
-            # if len(output_tokens) > 0:
-            #     print(f'output_tokenss: {output_tokens}')
-            for rid, token_id in output_tokens.items():
-                if self.is_stream_output[rid]:
-                    output_text = self.tokenizer.decode(token_id)
-                    output_stream = self.output_streams[rid]
-                    output_stream.put(output_text)
-
-            finished = self.engine.scheduler.pop_finished()
-            for seq in finished:
-                if not self.is_stream_output[rid]:
-                    output_text = self.tokenizer.decode(seq.output_token_ids)
-                    output_stream = self.output_streams[seq.rid]
-                    output_text.put(output_text)
-                output_stream = self.output_streams[seq.rid]
-                output_stream.put(StopAsyncIteration())
-                del self.is_stream_output[seq.rid]
-                del self.output_streams[seq.rid]
+            self.node.step()
             await asyncio.sleep(0.001)
