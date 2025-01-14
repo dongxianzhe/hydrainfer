@@ -65,7 +65,7 @@ def dxz_benchmark(dataset: SimulatedDataset, args: argparse.Namespace):
 
     for output in outputs:
         metric_builder.append(
-            input_len = output.input_len, 
+            input_len = 1, 
             success = True, 
             output_len = len(output.token_times), 
             arrival_time = output.arrival_time, 
@@ -157,7 +157,7 @@ if __name__ == '__main__':
     try:
         from dxz.engine.engine import EngineConfig
         parser = EngineConfig.add_cli_args(parser)
-    except:
+    except Exception as e:
         pass
 
     args = parser.parse_args()

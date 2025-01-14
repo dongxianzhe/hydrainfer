@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields
 from transformers import AutoTokenizer, AutoProcessor
 from dxz.request.rcb import RequestControlBlock
-from dxz.engine.isa import Instruction, ImageFill, ImageEmbedFill, Fill
+from dxz.engine.isa import Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction
 from dxz.model.parameters import AttentionParametersBuilder, LanguageModelParameters, VisionModelParameters
 from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel
 from dxz.memory.virtual_kv_cache import MemoryManagementUnit
@@ -144,7 +144,7 @@ class BatchFillExecutor(Executor):
             image_features = self.vision_model.forward(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
         sample_token_ids = self.language_model.forward(ten_input_ids, image_features, ten_position_ids, model_params).sample_token_ids
         sample_token_ids = sample_token_ids.tolist()
-        output_tokens = {} # rid -> token_id
+
         if len(selected_token_ids) > 0:
             t = time.perf_counter()
             i = 0
@@ -152,12 +152,13 @@ class BatchFillExecutor(Executor):
                 if (isinstance(instruction, Fill)) and instruction.sample:
                     next_token_id = sample_token_ids[i]
                     instruction.sample_dst.token_ids = [next_token_id]
-                    rcb.output_token_ids.append(next_token_id)
+                    is_last_token =  isinstance(instruction.sample_dst, EmptyInstruction)
                     rcb.metric.tokens_time.append(t)
+                    rcb.output_token_processor.append_token_id(next_token_id, is_last_token)
                     i += 1
-                    output_tokens[rcb.rid] = next_token_id
-        return output_tokens
 
+        for rcb, _ in contexts:
+            rcb.pc += 1
 
 class ImageEmbedExecutor(Executor):
     def __init__(self, context: ExecutorContext):
@@ -171,6 +172,10 @@ class ImageEmbedExecutor(Executor):
             vision_params = VisionModelParameters(return_last_layer_attention=False)
             image_features = self.vision_model.forward(pixel_values, vision_params).image_features
             instruction.image_featues_dst.image_features = image_features
+
+        for rcb, _ in contexts:
+            rcb.pc += 1
+
         return
 
 
@@ -198,6 +203,9 @@ class BatchImageEmbedExecutor(Executor):
             right = left + n_images[i]
             instruction.image_featues_dst.image_features = image_features[left: right, :, :]
             left += n_images[i]
+
+        for rcb, _ in contexts:
+            rcb.pc += 1
 
 
 class MultiStreamsDecorator(Executor):
@@ -253,3 +261,7 @@ class InstructionExecutor:
 
     def execute_image_embed(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
         return self.image_embed_executor.execute(contexts)
+
+    def execute_empty(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+        for rcb, _ in contexts:
+            rcb.pc += 1

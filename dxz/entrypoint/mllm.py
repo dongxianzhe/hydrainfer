@@ -1,18 +1,54 @@
-from dataclasses import dataclass
-from dxz.engine.request import Request
+from transformers import AutoTokenizer
+from dataclasses import dataclass, field
 from dxz.engine.engine import EngineConfig
-from dxz.request.rcb import RequestControlBlock
+from dxz.request.rcb import RequestControlBlock, OutputTokenProcessor
+from dxz.request.request import Request
 from dxz.cluster.epdnode import EPDNode
 from tqdm import tqdm
 import time
 
+class Counter:
+    def __init__(self):
+        self.cnt = 0
+    
+    def count(self):
+        self.cnt += 1
+
+    def value(self) -> int:
+        return self.cnt
+
 @dataclass
 class GenerateOutput:
-    input_len: int
-    text : str
-    arrival_time: float
-    finished_time: float
-    token_times: list[float]
+    text : str = ""
+    output_token_ids: list[int] = field(default_factory=list)
+    arrival_time: float = -1
+    finished_time: float = -1
+    token_times: list[float] = field(default_factory=list)
+    ttft: float = -1
+    tpot: list[float] = field(default_factory=list)
+class OfflineOutputTokenProcessor(OutputTokenProcessor):
+    def __init__(self, output: GenerateOutput, tokenizer: AutoTokenizer, counter: Counter, bar: tqdm):
+        super().__init__()
+        self.output = output
+        self.tokenizer = tokenizer
+        self.counter = counter
+        self.bar = bar
+
+    def append_token_id(self, token_id: int, is_last_token: bool=False):
+        self.output.output_token_ids.append(token_id)
+        self.output.token_times.append(time.perf_counter())
+
+        is_first_token: bool = len(self.output.output_token_ids) == 1
+        if is_first_token:
+            self.output.ttft = self.output.token_times[-1]
+        else:
+            self.output.tpot = self.output.token_times[-1] - self.output.token_times[-2]
+
+        if is_last_token:
+            self.output.finished_time = time.perf_counter()
+            self.output.text = self.tokenizer.decode(self.output.output_token_ids, skip_special_tokens=True)
+            self.counter.count()
+            self.bar.update(1)
 
 class MLLM:
     def __init__(self, config: EngineConfig):
@@ -20,28 +56,15 @@ class MLLM:
         self.tokenizer = self.node.tokenizer
 
     def generate(self, requests: list[Request]) -> list[GenerateOutput]:
-        for request in requests:
-            self.node.add_request(request)
-
-        outputs = []
-        finished: list[RequestControlBlock] = []
+        counter = Counter()
         bar = tqdm(range(len(requests)))
-        while len(finished) < len(requests):
+        arrival_time = time.perf_counter()
+        outputs: list[GenerateOutput] = [GenerateOutput(arrival_time=arrival_time) for _ in range(len(requests))]
+        for output, request in zip(outputs, requests):
+            processor = OfflineOutputTokenProcessor(output, self.tokenizer, counter, bar)
+            self.node.add_request(request, processor)
+        
+        while counter.value() < len(requests):
             self.node.step()
-            f = self.node.engine.scheduler.pop_finished() 
-            finished += f
-            bar.update(len(f))
-
-        finished_time = time.perf_counter()
-        finished = sorted(finished, key=lambda seq: seq.sid)
-
-        for rcb in finished:
-            outputs.append(GenerateOutput(
-                input_len = rcb.static_info.n_prompt_tokens, 
-                text = self.tokenizer.decode(rcb.output_token_ids, skip_special_tokens=True), 
-                arrival_time = rcb.metric.arrival_time, 
-                finished_time = finished_time, 
-                token_times = rcb.metric.tokens_time, 
-            ))
 
         return outputs

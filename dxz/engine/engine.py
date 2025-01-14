@@ -1,20 +1,12 @@
-from concurrent.futures import ThreadPoolExecutor
 import time
-import random
 from typing import Optional
-from itertools import accumulate
-from transformers import AutoTokenizer, AutoProcessor
 from dataclasses import dataclass, field, fields
 import torch
-from torch import Tensor
-from dxz.engine.executor import Executor, ExecutorConfig
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
-from dxz.engine.request import Request
-from dxz.model.downloader import download_hf_model
-from dxz.model.parameters import AttentionParameters, LanguageModelParameters, VisionModelParameters, AttentionParametersBuilder
+from dxz.model.parameters import AttentionParameters, LanguageModelParameters
+from dxz.request.request_processor import RequestProcessorConfig
 from dxz.request.rcb import RequestControlBlock
-from dxz.request.request_processor import RequestProcessorConfig, RequestProcessor, RequestProcessorContext, RequestProcessParameters
-from dxz.memory.virtual_kv_cache import VirtualKVCache, MemoryManagementUnit, MemoryConfig, MemoryContext
+from dxz.memory.virtual_kv_cache import MemoryManagementUnit, MemoryConfig, MemoryContext
 from dxz.engine.scheduler import SchedulerConfig, RequestScheduler
 from dxz.model.model_factory import ModelFactory
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
@@ -68,16 +60,16 @@ class Engine:
 
         # 2. memory
         self.memory_context = MemoryContext(
-            n_layers=self.language_model_config.n_layers,
+            n_layers = self.language_model_config.n_layers,
             head_size = self.language_model_config.head_dim, 
-            num_kv_heads=self.language_model_config.n_kv_heads, 
+            num_kv_heads = self.language_model_config.n_kv_heads, 
             dtype = self.config.dtype, 
             device = self.config.device, 
         )
         self.mmu = MemoryManagementUnit(
             config = self.config.memory_config, 
             context = self.memory_context, 
-            )
+        )
 
         # 3. executor
         executor_context = ExecutorContext(
@@ -94,38 +86,11 @@ class Engine:
         )
         self.executor = InstructionExecutor(config.executor_config, executor_context)
 
-        # 3. scheduler
+        # 4. scheduler
         self.scheduler = RequestScheduler(self.config.scheduler_config)
 
-        # 4. model warm up optimization
-        if config.warm_up:
-            self.warm_up()
-
-    def warm_up(self):
-        n_tokens = 596
-        n_blocks = (n_tokens + self.config.memory_config.block_size - 1) // self.config.memory_config.block_size
-        params = LanguageModelParameters(
-            attention_params=[AttentionParameters(
-                kv_cache = self.mmu.kv_caches[0], 
-                q_cu_seq_lens = torch.tensor([0, n_tokens], dtype=torch.int, device=self.config.device), 
-                kv_cu_seq_lens = torch.tensor([0, n_tokens], dtype=torch.int, device=self.config.device), 
-                paged_kv_last_page_len = None, 
-                new_cache_slots = torch.arange(n_tokens, dtype=torch.int, device=self.config.device),
-                block_tables = torch.arange(n_blocks, dtype=torch.int, device=self.config.device), 
-                cu_blocks_lens = torch.tensor([0, n_blocks], dtype=torch.int, device=self.config.device), 
-                num_sequences = 1, 
-                all_sequences_decode = False, 
-                q_max_seq_len = n_tokens, 
-                kv_max_seq_len = n_tokens, 
-            ) for _ in range(self.language_model_config.n_layers)],
-            all_sequences_decode=False,  
-            selected_token_ids=torch.arange(n_tokens, dtype=torch.int, device=self.config.device)
-        )
-        input_ids = torch.zeros(n_tokens, dtype=torch.int, device=self.config.device)
-        position_ids = torch.arange(n_tokens, dtype=torch.int, device=self.config.device)
-        image_features = None
-        for i in range(3):
-            self.language_model.forward(input_ids, image_features, position_ids, params)
+    def schedule(self, rcbs: list[RequestControlBlock]):
+        self.scheduler.schedule_new(rcbs)
     
     @torch.inference_mode()
     def step(self) -> dict[int, int]:
@@ -137,18 +102,16 @@ class Engine:
         # 2. execute instructions
         fill_contexts = []
         image_embed_contexts = []
+        empty_contexts = []
         for context in contexts:
             rcb, instruction = context
+            if len(rcb.virtual_kv_caches) == 0:
+                rcb.virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(rcb.n_virtual_kv_caches)
             if isinstance(instruction, Fill):
                 fill_contexts.append(context)
                 continue
-            if isinstance(instruction, Mov):
-                raise Exception('not implemented')
-                continue
-            if isinstance(instruction, ReAlloc):
-                self.execute_realloc(context)
-                continue
             if isinstance(instruction, EmptyInstruction):
+                empty_contexts.append(context)
                 continue
             if isinstance(instruction, ImageEmbed):
                 image_embed_contexts.append(context)
@@ -156,17 +119,15 @@ class Engine:
             raise Exception(f'unsupported instrction {type(instruction)}')
 
         future = self.executor.execute_image_embed(image_embed_contexts)
-        output_tokens = self.executor.execute_fill(fill_contexts)
+        self.executor.execute_fill(fill_contexts)
         if future is not None:
             future.result()
+        self.executor.execute_empty(empty_contexts)
 
         # 3. scheduler requests
         t = time.perf_counter()
         for rcb, _ in contexts:
             if rcb.is_finished():
                 rcb.metric.finished_time = t
-                self.scheduler.schedule_finished([rcb])
             else:
-                self.scheduler.schedule_unfinished([rcb])
-        
-        return output_tokens
+                self.scheduler.schedule_running([rcb])

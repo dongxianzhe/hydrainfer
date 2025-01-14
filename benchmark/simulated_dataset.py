@@ -1,7 +1,12 @@
 from PIL import Image
 from typing import Optional
 from PIL import Image
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+@dataclass
+class SamplingParameters:
+    max_tokens: int = 50
 
 @dataclass
 class Request:
@@ -11,6 +16,7 @@ class Request:
     max_tokens: int = 50
     question: str = ""
     request_id: int = 0
+    sampling_params: SamplingParameters = field(default_factory=SamplingParameters)
 
 import base64
 
@@ -69,6 +75,7 @@ class SimulatedDataset:
                 max_tokens = output_text_len,
                 question = question, 
                 request_id = i,
+                sampling_params=SamplingParameters(max_tokens=output_text_len)
             ))
     
     def __iter__(self):

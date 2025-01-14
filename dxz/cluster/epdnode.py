@@ -5,9 +5,9 @@ import threading
 from PIL import Image
 from concurrent.futures import ThreadPoolExecutor
 
-from dxz.engine.request import Request
-from dxz.request.rcb import RequestControlBlock
-from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, RequestProcessOutput, RequestProcessParameters
+from dxz.request.request import Request
+from dxz.request.rcb import RequestControlBlock, OutputTokenProcessor
+from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, RequestProcessOutput
 from dxz.engine.engine import EngineConfig, Engine
 
 class EPDNode:
@@ -15,8 +15,6 @@ class EPDNode:
         self.engine = Engine(config)
         self.config = config
         self.tokenizer = self.engine.tokenizer
-
-        self.sid_allocator = 0
 
         self.request_processor_context = RequestProcessorContext(
             tokenizer = self.engine.tokenizer, 
@@ -33,39 +31,26 @@ class EPDNode:
         self.add_request_lock = threading.Lock()
         self.executor = ThreadPoolExecutor(max_workers=32)
 
-    def add_request(self, request: Request):
+    def add_request(self, request: Request, output_processor: OutputTokenProcessor):
         if self.config.multi_thread_request_process:
-            self.executor.map(self._add_request_async, [request])
+            self.executor.map(self._add_request_async, [(request, output_processor)])
         else:
-            self._add_request(request)
+            self._add_request(request, output_processor)
 
-    def _add_request_async(self, request: Request):
+    def _add_request_async(self, request: Request, output_processor: OutputTokenProcessor):
         with self.add_request_lock:
-            self._add_request(request)
+            self._add_request(request, output_processor)
     
-    def _add_request(self, request: Request):
+    def _add_request(self, request: Request, output_processor: OutputTokenProcessor):
         if request.image is None and request.image_base64 is not None:
             request.image = Image.open(io.BytesIO(base64.b64decode(request.image_base64)))
         arrival_time = time.perf_counter()
 
-        static_info = self.request_processor.process(
-            prompt = request.prompt, 
-            images = request.image, 
-            params = RequestProcessParameters(max_tokens = request.max_tokens)
-            )
-        rcb = RequestControlBlock(
-            static_info=static_info, 
-            sid = self.sid_allocator, 
-            instructions = static_info.instructions, 
-            virtual_kv_caches = self.engine.mmu.allocate_virtual_kv_caches(static_info.n_virtual_kv_caches), 
-            max_tokens = request.max_tokens, 
-            eos_token_id = None, 
-            max_seq_len = self.engine.language_model_config.max_position_embeddings, 
-            rid = request.request_id, 
-        )
+        rcb = self.request_processor.process(request=request)
+
         rcb.metric.arrival_time = arrival_time
-        self.sid_allocator += 1
-        self.engine.scheduler.schedule_new([rcb])
+        rcb.output_token_processor = output_processor
+        self.engine.schedule([rcb])
 
     def step(self):
         self.engine.step()

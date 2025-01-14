@@ -5,6 +5,8 @@ from transformers import AutoTokenizer, AutoProcessor
 from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill
 from PIL import Image
 from typing import Literal, Optional
+from dxz.request.request import Request
+from dxz.request.rcb import RequestControlBlock
 import argparse
 
 @dataclass
@@ -44,9 +46,6 @@ class RequestProcessorContext:
     num_image_tokens: int
     n_layers: int
 
-@dataclass
-class RequestProcessParameters:
-    max_tokens: Optional[int] = None
 
 @dataclass
 class RequestProcessOutput:
@@ -64,7 +63,7 @@ class RequestProcessor:
         self.image_token_id = self.context.image_token_id
         self.num_image_tokens = self.context.num_image_tokens
 
-    def tokenize(self, prompt: str, images: list[Image.Image], params: RequestProcessParameters) -> tuple[list[int], list[Tensor]]:
+    def tokenize(self, prompt: str, images: list[Image.Image]) -> tuple[list[int], list[Tensor]]:
         token_ids = self.tokenizer.encode(prompt)
         num_image_tokens = self.config.n_embed_output_tokens if self.config.token_pruning_policy else self.num_image_tokens
         inserted_token_ids = []
@@ -79,7 +78,7 @@ class RequestProcessor:
         )['pixel_values'] # (n_images, n_channels, width, height)
         return inserted_token_ids, images
 
-    def code_generate(self, token_ids: list[int], pixel_values: Tensor, params: RequestProcessParameters) -> tuple[list[Instruction], int]:
+    def code_generate(self, token_ids: list[int], pixel_values: Tensor, request: Request) -> tuple[list[Instruction], int]:
         instructions: list[Instruction] = []
         n_virtual_kv_caches: int = self.context.n_layers
 
@@ -119,7 +118,7 @@ class RequestProcessor:
             last_prefill_instruction = fill_inst
 
         # 3. decode (kv_cache eviction)
-        max_tokens = params.max_tokens if params.max_tokens is not None else self.config.default_max_tokens
+        max_tokens = request.sampling_params.max_tokens
         curr_fill_inst = last_prefill_instruction
         for _ in range(max_tokens - 1):
             cache_ids: list[int] = []
@@ -150,13 +149,14 @@ class RequestProcessor:
 
         return instructions, n_virtual_kv_caches
 
-    def process(self, prompt: str, images: list[Image.Image], params: RequestProcessParameters) -> RequestProcessOutput:
-        token_ids, pixel_values = self.tokenize(prompt, images, params)
-        instructions, n_virtual_kv_caches = self.code_generate(token_ids, pixel_values, params)
-        return RequestProcessOutput(
+    def process(self, request: Request) -> RequestControlBlock:
+        token_ids, pixel_values = self.tokenize(request.prompt, request.image)
+        instructions, n_virtual_kv_caches = self.code_generate(token_ids, pixel_values, request)
+        return RequestControlBlock(
             instructions = instructions, 
             n_virtual_kv_caches = n_virtual_kv_caches, 
-            n_prompt_tokens = len(token_ids), 
+            sampling_params = request.sampling_params, 
+            output_token_processor = None
         )
 
 # class VanillaCodeGenerator:
