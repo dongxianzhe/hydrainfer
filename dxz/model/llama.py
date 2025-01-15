@@ -1,10 +1,14 @@
 import os
 import torch
 from torch import nn, Tensor
-from transformers import LlamaConfig
+from transformers import LlamaConfig, AutoProcessor, AutoTokenizer
+from typing import Optional
 import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
+from dxz.model.downloader import download_hf_model
 from dxz.model.parameters import LanguageModelParameters, AttentionParameters
+from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
 from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
 from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
 from dxz._C.kernel.norm import rms_norm
@@ -100,7 +104,7 @@ class LlamaModel(nn.Module):
         self.norm = LlamaRMSNorm(config)
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
-        if input_ids.size == torch.int:
+        if input_ids.dtype == torch.int:
             # input_ids is token_ids
             hidden_states = self.embed_tokens(input_ids)
         else:
@@ -154,3 +158,49 @@ class LlamaForCausalLM(nn.Module):
         assert len(loaded_set) == len(state_dict)
 
         return model
+
+
+class LlamaVisionModel(VisionModel):
+    pass
+
+
+class LlamaLanguageModel(LanguageModel):
+    def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
+        super().__init__()
+        self.model = LlamaForCausalLM.from_safetensor(model_path, dtype, device)
+        self.config = self.model.config
+
+    def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
+        sample_token_ids = self.model(input_ids, position_ids, model_params)
+        return LanguageModelOutput(sample_token_ids=sample_token_ids)
+    
+
+class LlamaModelFactory(ModelFactory):
+    def __init__(self, model_name: str, model_path: Optional[str] = None, dtype: torch.dtype=torch.half, device: torch.device=torch.device('cuda:0')):
+        self.model_name = model_name
+        if model_path is None:
+            self.model_path = download_hf_model(repo_id=model_name)
+        else:
+            self.model_path = model_path
+        self.dtype = dtype
+        self.device = device
+
+    def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
+        return LlamaVisionModel(), VisionModelConfig(image_token_id = 0, num_image_tokens = 0)
+
+    def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
+        model = LlamaLanguageModel(self.model_path, self.dtype, self.device)
+        config = model.config
+        return model, LanguageModelConfig(
+            n_layers = config.num_hidden_layers, 
+            max_position_embeddings = config.max_position_embeddings, 
+            n_qo_heads = config.num_attention_heads, 
+            n_kv_heads = config.num_key_value_heads, 
+            head_dim = config.head_dim
+        )
+
+    def getProcessor(self) -> AutoProcessor:
+        return None
+
+    def getTokenizer(self) -> AutoTokenizer:
+        return AutoTokenizer.from_pretrained(self.model_path)

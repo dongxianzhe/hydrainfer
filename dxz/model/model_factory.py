@@ -3,7 +3,6 @@ from torch import Tensor
 from typing import Optional
 from transformers import AutoProcessor
 from transformers import AutoTokenizer
-from dxz.model.downloader import download_hf_model
 from dataclasses import dataclass
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 
@@ -22,38 +21,40 @@ class LanguageModelConfig:
 
 
 class VisionModel:
-    def forward(pixel_values, model_params: VisionModelParameters) -> VisionModelOutput:
+    def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
         raise Exception('interface not implemented')
+
 
 class LanguageModel:
     def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         raise Exception('interface not implemented')
 
+
 class ModelFactory:
-    def __init__(self, model_name: str, model_path: Optional[str] = None, dtype: torch.dtype=torch.half, device: torch.device=torch.device('cuda:0')):
-        self.model_name = model_name
-        if model_path is None:
-            self.model_path = download_hf_model(repo_id=model_name)
-        self.dtype = dtype
-        self.device = device
-
-        if model_name == "llava-hf/llava-1.5-7b-hf":
-            from dxz.model.llava import LlavaLanguageModel, LlavaVisionModel
-            self.vision_model_class = LlavaVisionModel
-            self.language_model_class = LlavaLanguageModel
-        else:
-            raise Exception(f'unsupported model {model_name}')
-
     def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
-        model = self.vision_model_class(self.model_path, self.dtype, self.device)
-        return model, model.config
+        raise Exception(f'interface not implemented')
 
     def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
-        model = self.language_model_class(self.model_path, self.dtype, self.device)
-        return model, model.config
+        raise Exception(f'interface not implemented')
 
     def getProcessor(self) -> AutoProcessor:
-        return AutoProcessor.from_pretrained(self.model_path)
+        raise Exception(f'interface not implemented')
 
     def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.model_path)
+        raise Exception(f'interface not implemented')
+
+
+def getModelFactory(model_name: str, model_path: Optional[str] = None, dtype: torch.dtype=torch.half, device: torch.device=torch.device('cuda:0')) -> ModelFactory:
+    if model_name == "llava-hf/llava-1.5-7b-hf":
+        from dxz.model.llava import LlavaModelFactory
+        return LlavaModelFactory(model_name, model_path, dtype, device)
+    if model_name == "gpt2":
+        from dxz.model.gpt2 import GPT2ModelFactory
+        return GPT2ModelFactory(model_name, model_path, dtype, device)
+    if model_name == 'meta-llama/Llama-2-7b-hf':
+        from dxz.model.llama import LlamaModelFactory
+        return LlamaModelFactory(model_name, model_path, dtype, device)
+    if model_name == "fake":
+        from dxz.model.fake import FakeModelFactory
+        return FakeModelFactory(model_name, model_path, dtype, device)
+    raise Exception(f'invalid model {model_name}')

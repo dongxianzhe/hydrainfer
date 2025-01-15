@@ -2,12 +2,13 @@ import os
 import safetensors.torch
 import torch
 from torch import nn, Tensor
-from transformers import LlavaConfig
+from transformers import LlavaConfig, AutoProcessor, AutoTokenizer
 from typing import Optional
 from dxz.model.llama import LlamaForCausalLM
 from dxz.model.clip import CLIPVisionModel
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
+from dxz.model.downloader import download_hf_model
 
 class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: LlavaConfig):
@@ -35,6 +36,7 @@ class LlavaForConditionalGeneration(nn.Module):
     def from_safetensor(cls, model_weights_path: str, dtype: torch.dtype, device: torch.device):
         # 1. create model
         config = LlavaConfig.from_pretrained(model_weights_path)
+        # creat model directly on the GPU with right module weight type to avoid slow data copy and cuda out of memory
         torch.set_default_dtype(dtype)
         with torch.device(device):
             model = cls(config)
@@ -42,7 +44,7 @@ class LlavaForConditionalGeneration(nn.Module):
 
         # 2. load weights
         state_dict = model.state_dict()
-        loaded_set = set()
+        loaded_set = set() # used to verify all weight are loaded
         for entry in os.scandir(model_weights_path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
                 print(f'load safetensor from {entry.path}')
@@ -50,8 +52,7 @@ class LlavaForConditionalGeneration(nn.Module):
                     state_dict[name].data.copy_(weight)
                     loaded_set.add(name)
         
-        model.load_state_dict(state_dict)
-        model.to(dtype)
+        model.to(dtype) # to ensure that all tensor data type are correct such as non persistent rope inv freq, becuase it is created with float dtype specifically and will not be affected by set_default_dtype
         model.eval()
 
         # 3. verify
@@ -110,3 +111,27 @@ class LlavaLanguageModel(LanguageModel):
         return LanguageModelOutput(
             sample_token_ids = sample_token_ids,
         )
+
+class LlavaModelFactory(ModelFactory):
+    def __init__(self, model_name: str, model_path: Optional[str] = None, dtype: torch.dtype=torch.half, device: torch.device=torch.device('cuda:0')):
+        self.model_name = model_name
+        if model_path is None:
+            self.model_path = download_hf_model(repo_id=model_name)
+        else:
+            self.model_path = model_path
+        self.dtype = dtype
+        self.device = device
+
+    def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
+        model = LlavaVisionModel(self.model_path, self.dtype, self.device)
+        return model, model.config
+
+    def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
+        model = LlavaLanguageModel(self.model_path, self.dtype, self.device)
+        return model, model.config
+
+    def getProcessor(self) -> AutoProcessor:
+        return AutoProcessor.from_pretrained(self.model_path)
+
+    def getTokenizer(self) -> AutoTokenizer:
+        return AutoTokenizer.from_pretrained(self.model_path)

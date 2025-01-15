@@ -8,7 +8,7 @@ from dxz.request.request_processor import RequestProcessorConfig
 from dxz.request.rcb import RequestControlBlock
 from dxz.memory.virtual_kv_cache import MemoryManagementUnit, MemoryConfig, MemoryContext
 from dxz.engine.scheduler import SchedulerConfig, RequestScheduler
-from dxz.model.model_factory import ModelFactory
+from dxz.model.model_factory import ModelFactory, getModelFactory
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
 import argparse
 
@@ -52,7 +52,7 @@ class Engine:
     def __init__(self, config: EngineConfig):
         self.config = config
         # 1. model
-        model_factory = ModelFactory(config.model_name, config.model_path, config.dtype, config.device)
+        model_factory: ModelFactory = getModelFactory(config.model_name, config.model_path, config.dtype, config.device)
         self.vision_model, self.vision_model_config = model_factory.getVisionModel() 
         self.language_model, self.language_model_config = model_factory.getLanguageModel() 
         self.processor = model_factory.getProcessor() 
