@@ -1,4 +1,5 @@
 import random
+import argparse
 from torch import Tensor
 from dataclasses import dataclass, fields
 from transformers import AutoTokenizer, AutoProcessor
@@ -7,7 +8,7 @@ from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
 from dxz.request.rcb import RequestControlBlock
-import argparse
+
 
 @dataclass
 class RequestProcessorConfig:
@@ -38,6 +39,7 @@ class RequestProcessorConfig:
         parser.add_argument('--n-embed-output-tokens', type=int, default=64, help='Number of output tokens for embedding.')
         return parser
 
+
 @dataclass
 class RequestProcessorContext:
     tokenizer: AutoTokenizer
@@ -47,14 +49,61 @@ class RequestProcessorContext:
     n_layers: int
 
 
-@dataclass
-class RequestProcessOutput:
-    instructions: list[Instruction]
-    n_virtual_kv_caches: int
-    n_prompt_tokens: int
-
-
 class RequestProcessor:
+    def process(self, request: Request) -> RequestControlBlock:
+        raise Exception('interface not implemented')
+
+
+class LanguageRequestProcessor(RequestProcessor):
+    def __init__(self, config: RequestProcessorConfig, context: RequestProcessorContext):
+        self.config = config
+        self.context = context
+        self.tokenizer = context.tokenizer
+
+    def process(self, request: Request) -> RequestControlBlock:
+        token_ids = self.tokenizer.encode(request.prompt)
+
+        n_virtual_kv_caches: int = self.context.n_layers
+        instructions: list[Instruction] = []
+        layer_virtual_kv_cache_ids = list(range(self.context.n_layers))
+        last_prefill_inst = TextFill(
+            token_ids = token_ids,
+            position_ids = list(range(0, len(token_ids))), 
+            cache_ids = [list(range(0, len(token_ids))) for _ in range(self.context.n_layers)],
+            kv_cache_ids = layer_virtual_kv_cache_ids, 
+            sample = True, 
+            sample_dst= None,
+        )
+        instructions.append(last_prefill_inst)
+
+        curr_fill_inst = last_prefill_inst
+        for _ in range(request.sampling_params.max_tokens - 1):
+            cache_ids = []
+            for layer_id in range(self.context.n_layers):
+                cache_ids.append([curr_fill_inst.cache_ids[layer_id][-1] + 1])
+            decode_inst = TextFill(
+                token_ids = None,
+                position_ids = [curr_fill_inst.position_ids[-1] + 1], 
+                cache_ids = cache_ids, 
+                kv_cache_ids = layer_virtual_kv_cache_ids,
+                sample = True, 
+                sample_dst= None,
+            )
+            curr_fill_inst.sample_dst = decode_inst
+            instructions.append(decode_inst)
+            curr_fill_inst = decode_inst
+        tail_instruction = EmptyInstruction()
+        curr_fill_inst.sample_dst = tail_instruction
+        instructions.append(tail_instruction)
+
+        return RequestControlBlock(
+            instructions = instructions, 
+            n_virtual_kv_caches = n_virtual_kv_caches, 
+            sampling_params = request.sampling_params, 
+            output_token_processor = None
+        )
+
+class VisionRequestProcessor(RequestProcessor):
     def __init__(self, config: RequestProcessorConfig, context: RequestProcessorContext):
         self.config = config
         self.context = context

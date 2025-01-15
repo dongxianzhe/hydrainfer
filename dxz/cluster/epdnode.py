@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from dxz.request.request import Request
 from dxz.request.rcb import RequestControlBlock, OutputTokenProcessor
-from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, RequestProcessOutput
+from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, LanguageRequestProcessor, VisionRequestProcessor
 from dxz.engine.engine import EngineConfig, Engine
 
 class EPDNode:
@@ -23,7 +23,11 @@ class EPDNode:
             num_image_tokens = self.engine.vision_model_config.num_image_tokens, 
             n_layers = self.engine.language_model_config.n_layers,
         )
-        self.request_processor = RequestProcessor(
+        self.language_request_processor = LanguageRequestProcessor(
+            config = self.config.request_processor_config, 
+            context = self.request_processor_context, 
+        )
+        self.vision_request_processor = VisionRequestProcessor(
             config = self.config.request_processor_config, 
             context = self.request_processor_context, 
         )
@@ -46,7 +50,10 @@ class EPDNode:
             request.image = Image.open(io.BytesIO(base64.b64decode(request.image_base64)))
         arrival_time = time.perf_counter()
 
-        rcb = self.request_processor.process(request=request)
+        if request.image is None and request.image_base64 is None:
+            rcb = self.language_request_processor.process(request=request)
+        else:
+            rcb = self.vision_request_processor.process(request=request)
 
         rcb.metric.arrival_time = arrival_time
         rcb.output_token_processor = output_processor
