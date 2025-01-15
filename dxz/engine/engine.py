@@ -22,7 +22,7 @@ class EngineConfig:
     request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
     scheduler_config: SchedulerConfig = field(default_factory=SchedulerConfig)
     executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
-    multi_thread_request_process: bool = True
+    multi_thread_request_process: bool = False
     warm_up: bool = True
 
     @classmethod
