@@ -13,7 +13,7 @@ git submodule update
 pip install -e .
 ```
 
-If you want it to run faster, you may try to install the following library
+If you want it to run faster, you may try to install the following library, or you may skip them."
 ```
 pip install flashinfer==0.1.6+cu124torch2.4 -i https://flashinfer.ai/whl/cu124/torch2.4
 pip install flash-attn==2.7.0.post2
