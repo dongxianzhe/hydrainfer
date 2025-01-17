@@ -2,22 +2,17 @@ import math
 import torch
 from torch import nn, Tensor
 from dxz.model.parameters import AttentionParameters
-from dxz.memory.kv_cache import KVCache
 from dxz.utils.statistic import attention_score_heatmap, histogram
 from dxz.utils import attention_utils
 from dxz.utils.attention_utils import sparsity
-
-try:
-    import flash_attn
-except ImportError:
-    print('flash attention import failed')
-    flash_attn = None
+from dataclasses import dataclass
 
 try:
     from dxz._C.kernel.flash_attn import mha_varlen_fwd
 except ImportError:
     print('self compiled flash attention mha_varlen_fwd import failed')
     mha_varlen_fwd = None
+
 
 """
 we use chain of responsibility to design attention module considering the following requirements:
@@ -30,40 +25,64 @@ so we design attention handlers for each kernel, and link them to a linked list 
 """
 
 
-class FlashCausalGroupedQueryPageAttention(nn.Module):
-    def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
+@dataclass
+class CausalGroupedQueryPageAttentionConfig:
+    n_qo_heads: int
+    n_kv_heads: int
+    head_dim: int
+
+
+@dataclass
+class CausalGroupedQueryPageAttentionOutput:
+    o: Tensor
+
+
+class FlashInferCausalGroupedQueryPageAttentionHandler(nn.Module):
+    def __init__(self, config: CausalGroupedQueryPageAttentionConfig):
         super().__init__()
-        assert n_qo_heads % n_kv_heads == 0, f"n_qo_heads {n_qo_heads} is not divisible by n_kv_heads {n_kv_heads}"
-        self.n_qo_heads     = n_qo_heads
-        self.n_kv_heads     = n_kv_heads
-        self.head_dim       = head_dim
+        assert config.n_qo_heads % config.n_kv_heads == 0, f"n_qo_heads {config.n_qo_heads} is not divisible by n_kv_heads {config.n_kv_heads}"
+        self.n_qo_heads     = config.n_qo_heads
+        self.n_kv_heads     = config.n_kv_heads
+        self.head_dim       = config.head_dim
 
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, attention_params: AttentionParameters):
+        self.next_handler: nn.Module = None
+
+    def forward(self, query: Tensor, attention_params: AttentionParameters) -> CausalGroupedQueryPageAttentionOutput:
         # query (n_tokens, n_qo_heads * head_dim)
-        # key/value (n_tokens, n_kv_heads * head_dim)
-        # return (n_tokens, n_heads, head_dim)
+        # o (n_tokens, n_heads, head_dim)
+        if attention_params.flash_infer_handler is None:
+            return self.next_handler(query, attention_params)
 
-        # 1. reshape queyy key value shape
-        n_tokens = query.shape[0]
-        query = query.view(n_tokens, self.n_qo_heads, self.head_dim)
-        key = key.view(n_tokens, self.n_kv_heads, self.head_dim)
-        value = value.view(n_tokens, self.n_kv_heads, self.head_dim)
-
-        # 2. append new kv cache
         kv_cache = attention_params.kv_cache
         key_cache, value_cache = kv_cache.get_kv_cache()
-        kv_cache.set_kv_cache(
-            attention_params.new_cache_slots, # slot_ids: Tensor,  # [n_tokens]
-            key, # keys: Tensor,      # [n_tokens, n_kv_heads, head_dim]
-            value, # values: Tensor,    # [n_tokens, n_kv_heads, head_dim]
-        )
+        output = attention_params.flash_infer_handler.run(query, (key_cache, value_cache))
+        output = output.view(-1, self.n_qo_heads * self.head_dim)
 
-        # 3. compute for each sequence with flash infer
+        return CausalGroupedQueryPageAttentionOutput(o = output)
+
+
+class FlashAttentionCausalGroupedQueryPageAttentionHandler(nn.Module):
+    def __init__(self, config: CausalGroupedQueryPageAttentionConfig):
+        super().__init__()
+        assert config.n_qo_heads % config.n_kv_heads == 0, f"n_qo_heads {config.n_qo_heads} is not divisible by n_kv_heads {config.n_kv_heads}"
+        self.n_qo_heads     = config.n_qo_heads
+        self.n_kv_heads     = config.n_kv_heads
+        self.head_dim       = config.head_dim
+
+        self.next_handler: nn.Module = None
+
+    def forward(self, query: Tensor, attention_params: AttentionParameters) -> CausalGroupedQueryPageAttentionOutput:
+        # query (n_tokens, n_qo_heads * head_dim)
+        # o (n_tokens, n_heads, head_dim)
+        if mha_varlen_fwd is None:
+            return self.next_handler(query, attention_params)
+
+        kv_cache = attention_params.kv_cache
+        key_cache, value_cache = kv_cache.get_kv_cache()
         if attention_params.flash_infer_handler:
             output = attention_params.flash_infer_handler.run(query, (key_cache, value_cache))
             return output.view(-1, self.n_qo_heads * self.head_dim)
 
-        # 3. compute for each sequence with flash attn
         output=torch.empty_like(query)
         mha_varlen_fwd(
             output,
@@ -83,32 +102,27 @@ class FlashCausalGroupedQueryPageAttention(nn.Module):
             0,
             0
         )
-        return output.view(-1, self.n_qo_heads * self.head_dim)
+        output = output.view(-1, self.n_qo_heads * self.head_dim)
+
+        return CausalGroupedQueryPageAttentionOutput(o = output)
+
 
 class TorchCausalGroupedQueryPageAttention(nn.Module):
-    def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
+    def __init__(self, config: CausalGroupedQueryPageAttentionConfig):
         super().__init__()
-        assert n_qo_heads % n_kv_heads == 0, f"n_qo_heads {n_qo_heads} is not divisible by n_kv_heads {n_kv_heads}"
-        self.n_qo_heads     = n_qo_heads
-        self.n_kv_heads     = n_kv_heads
-        self.head_dim       = head_dim
+        assert config.n_qo_heads % config.n_kv_heads == 0, f"n_qo_heads {config.n_qo_heads} is not divisible by n_kv_heads {config.n_kv_heads}"
+        self.n_qo_heads     = config.n_qo_heads
+        self.n_kv_heads     = config.n_kv_heads
+        self.head_dim       = config.head_dim
 
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, attention_params: AttentionParameters):
+        self.next_handler: nn.Module = None
+
+    def forward(self, query: Tensor, attention_params: AttentionParameters) -> CausalGroupedQueryPageAttentionOutput:
         # query (n_tokens, n_qo_heads * head_dim)
-        # key/value (n_tokens, n_kv_heads * head_dim)
-        # return (n_tokens, n_heads, head_dim)
-        # 1. reshape queyy key value shape
-        n_tokens = query.shape[0]
-        query = query.view(n_tokens, self.n_qo_heads, self.head_dim)
-        key = key.view(n_tokens, self.n_kv_heads, self.head_dim)
-        value = value.view(n_tokens, self.n_kv_heads, self.head_dim)
-
-        # 2. append new kv cache
+        # o (n_tokens, n_heads, head_dim)
         kv_cache = attention_params.kv_cache
         key_cache, value_cache = kv_cache.get_kv_cache()
-        kv_cache.set_kv_cache(attention_params.new_cache_slots, key,value)
 
-        # 3. compute for each sequence with pytorch
         outputs = []
         for i in range(attention_params.num_sequences):
             block_table = attention_params.block_tables[attention_params.cu_blocks_lens[i]: attention_params.cu_blocks_lens[i + 1]]
@@ -168,4 +182,38 @@ class TorchCausalGroupedQueryPageAttention(nn.Module):
 
         output = torch.cat(outputs, dim=0)
         output = output.view(-1, self.n_qo_heads * self.head_dim)
-        return output.to(query.dtype)
+        output = output.to(query.dtype)
+
+        return CausalGroupedQueryPageAttentionOutput(o = output)
+
+
+class CausalGroupedQueryPageAttention(nn.Module):
+    def __init__(self, config: CausalGroupedQueryPageAttentionConfig):
+        super().__init__()
+        assert config.n_qo_heads % config.n_kv_heads == 0, f"n_qo_heads {config.n_qo_heads} is not divisible by n_kv_heads {config.n_kv_heads}"
+        self.n_qo_heads     = config.n_qo_heads
+        self.n_kv_heads     = config.n_kv_heads
+        self.head_dim       = config.head_dim
+
+        self.handlers = [
+            FlashInferCausalGroupedQueryPageAttentionHandler(config), 
+            FlashAttentionCausalGroupedQueryPageAttentionHandler(config), 
+            TorchCausalGroupedQueryPageAttention(config), 
+        ]
+        for i in range(len(self.handlers) - 1):
+            self.handlers[i].next_handler = self.handlers[i + 1]
+        self.handler = self.handlers[0]
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, attention_params: AttentionParameters) -> CausalGroupedQueryPageAttentionOutput:
+        # 1. reshape queyy key value shape
+        n_tokens = query.shape[0]
+        query = query.view(n_tokens, self.n_qo_heads, self.head_dim)
+        key = key.view(n_tokens, self.n_kv_heads, self.head_dim)
+        value = value.view(n_tokens, self.n_kv_heads, self.head_dim)
+
+        # 2. append new kv cache
+        kv_cache = attention_params.kv_cache
+        kv_cache.set_kv_cache(attention_params.new_cache_slots, key,value)
+
+        # 3. compute attention
+        return self.handler(query, attention_params)

@@ -162,9 +162,9 @@ class MultiHeadAttention(nn.Module):
     def __init__(self, config: MultiHeadAttentionConfig):
         super().__init__()
         self.handlers = [
-            TorchMultiHeadAttentionHandler(config), 
             FlashAttentionMutliHeadAttentionHandler2(config), 
             FlashAttentionMultiHeadAttentionHandler(config), 
+            TorchMultiHeadAttentionHandler(config), 
         ] 
         for i in range(len(self.handlers) - 1):
             self.handlers[i].next_handler = self.handlers[i + 1]
