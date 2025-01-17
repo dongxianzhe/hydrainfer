@@ -1,6 +1,12 @@
 import torch
 from torch import nn, Tensor
-from dxz._C.kernel import position_embedding
+
+try:
+    from dxz._C.kernel.position_embedding import apply_rotary_pos_emb
+except ImportError:
+    print('import position embedding kernel failed')
+    apply_rotary_pos_emb = None
+
 
 def compute_default_inv_freq(rotary_dim: int, theta: float) -> Tensor:
     # return [a, b] (rotary_dim / 2, )
@@ -8,9 +14,10 @@ def compute_default_inv_freq(rotary_dim: int, theta: float) -> Tensor:
     slice = torch.arange(0, rotary_dim, 2, dtype=torch.float)
     return 1. / torch.pow(theta, slice / rotary_dim)
 
-class RotaryEmbeddingRef(nn.Module):
+class TorchRotaryEmbeddingHandler(nn.Module):
     def __init__(self, rotary_dim: int, max_position_embeddings: int, inv_freq: Tensor, interleaved: bool):
         super().__init__()
+        self.next_handler: nn.Module = None
         # rotary_dim <= head_dim, rotary rotary_dim elements
         # interleaved = True means adjacent two elements rotary as a pair
         self.rotary_dim              = rotary_dim
@@ -88,9 +95,10 @@ class RotaryEmbeddingRef(nn.Module):
         x1, x2 = x.chunk(chunks=2, dim=-1) # [0, 1] [2, 3]
         return torch.cat([-x2, x1], dim=-1) # [-2, -3, 0, 1]
 
-class RotaryEmbedding(nn.Module):
+class FusedKernelRotaryEmbeddingHandler(nn.Module):
     def __init__(self, rotary_dim: int, max_position_embeddings: int, inv_freq: Tensor, interleaved: bool):
         super().__init__()
+        self.next_handler: nn.Module = None
         # rotary_dim <= head_dim, rotary rotary_dim elements
         # interleaved = True means adjacent two elements rotary as a pair
         self.rotary_dim              = rotary_dim
@@ -106,8 +114,10 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer(name='cos_sin_cache', tensor=cos_sin, persistent=False)
     
     def forward(self, query: Tensor, key: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
+        if apply_rotary_pos_emb is None:
+            return self.next_handler(query, key, position_ids)
         # modify query and key inplace 
-        position_embedding.apply_rotary_pos_emb(
+        apply_rotary_pos_emb(
             query, 
             key, 
             position_ids, 
@@ -115,3 +125,18 @@ class RotaryEmbedding(nn.Module):
             self.rotary_dim, 
             self.interleaved)
         return query, key
+
+
+class RotaryEmbedding(nn.Module):
+    def __init__(self, rotary_dim: int, max_position_embeddings: int, inv_freq: Tensor, interleaved: bool):
+        super().__init__()
+        self.handlers = [
+            FusedKernelRotaryEmbeddingHandler(rotary_dim, max_position_embeddings, inv_freq, interleaved), 
+            TorchRotaryEmbeddingHandler(rotary_dim, max_position_embeddings, inv_freq, interleaved), 
+        ]
+        for i in range(len(self.handlers) - 1):
+            self.handlers[i].next_handler = self.handlers[i + 1]
+        self.handler = self.handlers[0]
+
+    def forward(self, query: Tensor, key: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
+        return self.handler(query, key, position_ids)
