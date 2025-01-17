@@ -4,7 +4,7 @@ from torch import nn, Tensor
 from transformers import LlamaConfig, AutoProcessor, AutoTokenizer
 from typing import Optional
 import safetensors.torch
-from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
+from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from dxz.model.downloader import download_hf_model
 from dxz.model.parameters import LanguageModelParameters, AttentionParameters
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
