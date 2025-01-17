@@ -2,10 +2,10 @@ import torch
 from torch import nn, Tensor
 
 try:
-    from dxz._C.kernel import position_embedding
+    from dxz._C.kernel.position_embedding import apply_rotary_pos_emb
 except ImportError:
     print('import position embedding kernel failed')
-    position_embedding = None
+    apply_rotary_pos_emb = None
 
 
 def compute_default_inv_freq(rotary_dim: int, theta: float) -> Tensor:
@@ -114,10 +114,10 @@ class FusedKernelRotaryEmbeddingHandler(nn.Module):
         self.register_buffer(name='cos_sin_cache', tensor=cos_sin, persistent=False)
     
     def forward(self, query: Tensor, key: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
-        if position_embedding is None:
+        if apply_rotary_pos_emb is None:
             return self.next_handler(query, key, position_ids)
         # modify query and key inplace 
-        position_embedding.apply_rotary_pos_emb(
+        apply_rotary_pos_emb(
             query, 
             key, 
             position_ids, 

@@ -15,7 +15,6 @@ def rmsnorm(h: Tensor, w: Tensor, eps: float) -> Tensor:
 
     dtype = h.dtype
     rms = torch.sqrt(torch.mean(h.to(torch.float) ** 2, dim=-1, keepdim=True) + eps)
-    print(rms.shape)
     normalized_x = h / rms
     o = normalized_x * w
     o = o.to(dtype)
