@@ -203,10 +203,9 @@ if __name__ == '__main__':
             "Topic :: Scientific/Engineering",
             "Topic :: Scientific/Engineering :: Artificial Intelligence",
         ], # classifiers will be displayed in PyPi website
-        packages = find_packages(), 
-        # packages = find_packages() + ['dxz._C.kernel.flash_attn', 'dxz._C.kernel.flash_infer', 'dxz._C.kernel.kv_cache_kernels'], # find all directory with __init__.py
-        # ext_modules=[CMakeExtension('_C', "csrc")],
-        # cmdclass={"build_ext": CMakeBuild}, 
+        packages = find_packages() + ['dxz._C.kernel.flash_attn', 'dxz._C.kernel.flash_infer', 'dxz._C.kernel.kv_cache_kernels'], # find all directory with __init__.py
+        ext_modules=[CMakeExtension('_C', "csrc")],
+        cmdclass={"build_ext": CMakeBuild}, 
         zip_safe=False,  # package is not safe with zip format
         python_requires=">=3.10", # requires python version >= 3.10
         install_requires=read_requirements(),  # pip install will automatically install requirements.txt

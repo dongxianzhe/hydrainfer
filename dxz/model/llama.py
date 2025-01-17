@@ -4,14 +4,14 @@ from torch import nn, Tensor
 from transformers import LlamaConfig, AutoProcessor, AutoTokenizer
 from typing import Optional
 import safetensors.torch
-from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
+from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
 from dxz.model.downloader import download_hf_model
 from dxz.model.parameters import LanguageModelParameters, AttentionParameters
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
-from dxz.layer.norm import rmsnorm
-from dxz.layer.activation import silu
+from dxz._C.kernel.norm import rms_norm
+from dxz._C.kernel.activation import silu
 
 class LlamaSdpaAttention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -66,7 +66,8 @@ class LlamaRMSNorm(nn.Module):
         self.variance_epsilon = config.rms_norm_eps
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        output = rmsnorm(hidden_states, self.weight, self.variance_epsilon)
+        output = torch.empty_like(hidden_states)
+        rms_norm(output, hidden_states, self.weight, self.variance_epsilon)
         return output
 
 class LlamaDecoderLayer(nn.Module):

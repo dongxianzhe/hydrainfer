@@ -38,7 +38,7 @@ class KVCache:
         assert slot_ids.shape[0] == values.shape[0], f"{slot_ids.shape} {values.shape}"
         assert slot_ids.device == keys.device, f"{slot_ids.device} {keys.device}"
         assert slot_ids.device == values.device, f"{slot_ids.device} {values.device}"
-        if self.device.type == 'cuda' and set_kv_cache_kernel:
+        if self.device.type == 'cuda':
             set_kv_cache_kernel(
                 slot_ids,
                 keys,
