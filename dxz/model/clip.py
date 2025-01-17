@@ -1,9 +1,9 @@
 import torch
 from torch import nn, Tensor
 from transformers import CLIPVisionConfig
-import math
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput
 from dxz.layer.activation import QuickGELUActivation
+from dxz.layer.multihead_attention import MultiHeadAttentionConfig, MultiHeadAttentionParameters, MultiHeadAttention
 
 class CLIPSdpaAttention(nn.Module):
     def __init__(self, config: CLIPVisionConfig):
@@ -14,25 +14,18 @@ class CLIPSdpaAttention(nn.Module):
         self.out_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
         self.n_heads = config.num_attention_heads
         self.head_dim = config.hidden_size // config.num_attention_heads 
-        from dxz.layer.attention import TorchMultiHeadAttention
-        self.torch_attention = TorchMultiHeadAttention(self.n_heads, self.head_dim)
-        from dxz.layer.attention import FlashMultiHeadAttention
-        self.flash_attention = FlashMultiHeadAttention(self.n_heads, self.head_dim)
+        self.attention = MultiHeadAttention(MultiHeadAttentionConfig(self.n_heads, self.head_dim))
     
-    def forward(self, hidden_states: Tensor, return_scores: bool = False) -> Tensor:
+    def forward(self, hidden_states: Tensor, return_scores: bool = False) -> tuple[Tensor, Tensor]:
         batch_size, n_tokens, embed_dim = hidden_states.size()
         query = self.q_proj(hidden_states)
         key   = self.k_proj(hidden_states)
         value = self.v_proj(hidden_states)
-        if return_scores:
-            o, scores = self.torch_attention(query, key, value, return_scores)
-            o = self.out_proj(o)
-            return o, scores
-        else:
-            o = self.flash_attention(query, key, value)
-            o = self.out_proj(o)
-            return o
-
+        attention_output = self.attention(query, key, value, MultiHeadAttentionParameters(return_scores=return_scores))
+        o = attention_output.o
+        scores = attention_output.attention_scores
+        o = self.out_proj(o)
+        return o, scores
 
 
 class CLIPMLP(nn.Module):
@@ -48,6 +41,7 @@ class CLIPMLP(nn.Module):
         hidden_states = self.fc2(hidden_states)
         return hidden_states
 
+
 class CLIPEncoderLayer(nn.Module):
     def __init__(self, config: CLIPVisionConfig, layer_id: int):
         super().__init__()
@@ -60,11 +54,8 @@ class CLIPEncoderLayer(nn.Module):
     def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: VisionModelParameters, output: VisionModelOutput) -> Tensor:
         residual = hidden_states
         hidden_states = self.layer_norm1(hidden_states)
-        if self.layer_id == vision_feature_layer and model_params.return_last_layer_attention:
-            hidden_states, scores = self.self_attn(hidden_states, True)
-            output.scores = scores 
-        else:
-            hidden_states = self.self_attn(hidden_states, False)
+        hidden_states, scores = self.self_attn(hidden_states, self.layer_id == vision_feature_layer and model_params.return_last_layer_attention)
+        output.scores = scores 
         hidden_states = residual + hidden_states
         residual = hidden_states
         hidden_states = self.layer_norm2(hidden_states)
