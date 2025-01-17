@@ -78,7 +78,6 @@ class TorchRotaryEmbeddingHandler(nn.Module):
             key_rotary = (key_rotary * cos) + (self.rotate_half(key_rotary) * sin)
         query = torch.cat([query_rotary, query_pass], dim=-1)
         key = torch.cat([key_rotary, key_pass], dim=-1)
-        print('torch')
         return query.to(dtype), key.to(dtype)
         
     def rotate_every_two(self, x: Tensor) -> Tensor:
