@@ -15,7 +15,7 @@ from dxz.memory.virtual_kv_cache import MemoryManagementUnit
 
 @dataclass
 class ExecutorConfig:
-    use_flash_infer: bool = True
+    use_flash_infer: bool = False
     batch_image_embed_forward: bool = True
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
