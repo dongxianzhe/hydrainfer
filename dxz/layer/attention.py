@@ -1,13 +1,13 @@
+import math
 import torch
 from torch import nn, Tensor
 from dxz.model.parameters import AttentionParameters
 from dxz.memory.kv_cache import KVCache
-import math
 from dxz.utils.statistic import attention_score_heatmap, histogram
 from dxz.utils import attention_utils
 from dxz.utils.attention_utils import sparsity
 
-try :
+try:
     import flash_attn
 except ImportError:
     print('flash attention import failed')
@@ -16,100 +16,19 @@ except ImportError:
 try:
     from dxz._C.kernel.flash_attn import mha_varlen_fwd
 except ImportError:
-    print('flash attention mha_varlen_fwd import failed')
+    print('self compiled flash attention mha_varlen_fwd import failed')
     mha_varlen_fwd = None
 
-class TorchMultiHeadAttention(nn.Module):
-    def __init__(self, n_heads: int, head_dim: int):
-        super().__init__()
-        self.n_heads = n_heads
-        self.head_dim = head_dim
-    
-    def forward(self, query: Tensor, key: Tensor, value: Tensor, return_scores=False) -> Tensor:
-        # query/key/value (batch_size, seq_len, hidden_size)
-        # return (batch_size, seq_len, hidden_size)
-        batch_size, seq_len, hidden_size = query.shape
-        dtype = query.dtype
+"""
+we use chain of responsibility to design attention module considering the following requirements:
+1. some kernel may be unavailable because of compilation failure, library installation failure.
+2. some optimization need attention score to evict kvcache or prune token but fused kernel can't get intermediate attention score.
+3. some kernel can't work on all dtype, hardware version.
+4. we may want to dynamically select best kernel according to batch information and schedule policy
+5. we may want to statically configure a specific attention kernel
+so we design attention handlers for each kernel, and link them to a linked list data structure, each handler will check weather it can cope with the situation if it can, it will compute and return the result, if it can't, it will call the next handler to cope with it. at last the request must be handled becuase we have an pytorch implemented handler, however it is very slow.
+"""
 
-        query = query.view(-1, seq_len, self.n_heads, self.head_dim).transpose(1, 2).contiguous().to(torch.float)
-        key   =   key.view(-1, seq_len, self.n_heads, self.head_dim).transpose(1, 2).contiguous().to(torch.float)
-        value = value.view(-1, seq_len, self.n_heads, self.head_dim).transpose(1, 2).contiguous().to(torch.float)
-        query = query.view(-1, seq_len, self.head_dim)
-        key   =   key.view(-1, seq_len, self.head_dim)
-        value = value.view(-1, seq_len, self.head_dim)
-        query *= 1. / math.sqrt(self.head_dim)
-        score = torch.bmm(query, key.transpose(1, 2)) # (batch_size * n_heads, seq_len, seq_len)
-        ret_score = score.view(batch_size, self.n_heads, seq_len, seq_len)
-        score = torch.softmax(score, dim=-1) # (batch_size * n_heads, seq_len, seq_len)
-        o = torch.bmm(score, value) # (batch_size * n_heads, seq_len, head_dim)
-        o = o.view(batch_size, self.n_heads, seq_len, self.head_dim).transpose(1, 2).contiguous() # (batch_size, seq_len, n_heads, head_dim)
-        o = o.view(batch_size, seq_len, hidden_size).to(dtype) # (batch_size, seq_len, hidden_size)
-
-        if return_scores:
-            return o, ret_score
-        else:
-            return o
-
-class FlashMultiHeadAttention(nn.Module):
-    def __init__(self, n_heads: int, head_dim: int):
-        super().__init__()
-        self.n_heads = n_heads
-        self.head_dim = head_dim
-    
-    def forward(self, query: Tensor, key: Tensor, value: Tensor) -> Tensor:
-        # query/key/value (batch_size, seq_len, hidden_size)
-        # return (batch_size, seq_len, hidden_size)
-        batch_size, seq_len, hidden_size = query.shape
-        device = query.device
-        dtype = query.dtype
-
-        # 1. try to use flash attention
-        if flash_attn:
-            query = query.view(batch_size, seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-            key   =   key.view(batch_size, seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-            value = value.view(batch_size, seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-            o = flash_attn.flash_attn_func(
-                q = query,
-                k = key,
-                v = value,
-                dropout_p=0.0,
-                softmax_scale=None,
-                causal=False,
-                window_size=(-1, -1),  # -1 means infinite context window
-                softcap=0.0, # 0.0 means deactivated
-                alibi_slopes=None,
-                deterministic=False,
-                return_attn_probs=False,
-            )
-            o = o.view(batch_size, seq_len, hidden_size)
-            return o
-        # 2. try to use my flash attention
-        query = query.view(batch_size * seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-        key   =   key.view(batch_size * seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-        value = value.view(batch_size * seq_len, self.n_heads, self.head_dim) # (batch_size * seq_len, n_heads, head_dim)
-        o = torch.empty(size=(batch_size * seq_len, self.n_heads, self.head_dim), dtype=dtype, device=device)
-        cu_seqlens_q = torch.arange(0, (batch_size + 1) * seq_len, seq_len, dtype=torch.int, device=device)
-        cu_seqlens_k = torch.arange(0, (batch_size + 1) * seq_len, seq_len, dtype=torch.int, device=device)
-        mha_varlen_fwd(
-            o, 
-            query, 
-            key, 
-            value, 
-            cu_seqlens_q, 
-            cu_seqlens_k,
-            None, 
-            None, 
-            None, 
-            seq_len, 
-            seq_len, 
-            1. / math.sqrt(self.head_dim),
-            0, 
-            -1,
-            -1, 
-            0, 
-        )
-
-        return o.view(batch_size, seq_len, hidden_size)
 
 class FlashCausalGroupedQueryPageAttention(nn.Module):
     def __init__(self, n_qo_heads: int, n_kv_heads: int, head_dim: int):
