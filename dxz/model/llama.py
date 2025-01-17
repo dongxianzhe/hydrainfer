@@ -10,8 +10,8 @@ from dxz.model.parameters import LanguageModelParameters, AttentionParameters
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
-from dxz._C.kernel.norm import rms_norm
-from dxz._C.kernel.activation import silu
+from dxz.layer.norm import rmsnorm
+from dxz.layer.activation import silu
 
 class LlamaSdpaAttention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -66,8 +66,7 @@ class LlamaRMSNorm(nn.Module):
         self.variance_epsilon = config.rms_norm_eps
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        output = torch.empty_like(hidden_states)
-        rms_norm(output, hidden_states, self.weight, self.variance_epsilon)
+        output = rmsnorm(hidden_states, self.weight, self.variance_epsilon)
         return output
 
 class LlamaDecoderLayer(nn.Module):
