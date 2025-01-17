@@ -7,7 +7,7 @@ from transformers import AutoProcessor, AutoTokenizer
 from dxz.model.parameters import LanguageModelParameters, LanguageModelOutput, AttentionParameters
 from dxz.model.downloader import download_hf_model
 from dxz.layer.activation import NewGELUActivation
-from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
+from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 
 
 class GPT2Attention(nn.Module):
@@ -16,17 +16,17 @@ class GPT2Attention(nn.Module):
         self.config = config
         self.c_attn = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=True)
         self.c_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=True)
-        self.atten = FlashCausalGroupedQueryPageAttention(
+        self.atten = CausalGroupedQueryPageAttention(CausalGroupedQueryPageAttentionConfig(
             n_qo_heads=config.n_head,
             n_kv_heads=config.n_head,
             head_dim=config.hidden_size // config.n_head
-        )
+        ))
     
     def forward(self, hidden_states: Tensor, params: AttentionParameters) -> Tensor:
         qkv = self.c_attn(hidden_states)
         q, k, v = qkv.chunk(chunks=3, dim=-1)
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
-        attn_output = self.atten(q, k, v, params)
+        attn_output = self.atten(q, k, v, params).o
         attn_output = self.c_proj(attn_output)
         return attn_output
 

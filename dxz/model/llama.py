@@ -9,8 +9,7 @@ from dxz.model.downloader import download_hf_model
 from dxz.model.parameters import LanguageModelParameters, AttentionParameters
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
-from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
-from dxz.layer.attention import FlashCausalGroupedQueryPageAttention
+from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from dxz._C.kernel.norm import rms_norm
 from dxz._C.kernel.activation import silu
 
@@ -32,11 +31,11 @@ class LlamaSdpaAttention(nn.Module):
                 ),
             interleaved=False
             )
-        self.attention = FlashCausalGroupedQueryPageAttention(
+        self.attention = CausalGroupedQueryPageAttention(CausalGroupedQueryPageAttentionConfig(
             n_qo_heads=config.num_attention_heads,
             n_kv_heads=config.num_key_value_heads,
             head_dim=config.head_dim
-        )
+        ))
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
         query = self.q_proj(hidden_states)
@@ -46,7 +45,7 @@ class LlamaSdpaAttention(nn.Module):
         key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim)
         value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim)
         query, key = self.rotary_emb(query, key, position_ids)
-        hidden_states = self.attention(query, key, value, attention_param)
+        hidden_states = self.attention(query, key, value, attention_param).o
         return self.o_proj(hidden_states)
 
 class LlamaMLP(nn.Module):
