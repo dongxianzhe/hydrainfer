@@ -1,14 +1,15 @@
 import base64
 from openai import OpenAI, AsyncOpenAI
 from typing import AsyncGenerator, Optional
-from transformers import AutoProcessor
+from transformers import AutoProcessor, AutoTokenizer
 import time
 import random
 import numpy as np
 import argparse
 import asyncio
 from tqdm import tqdm
-from simulated_dataset import SimulatedDataset
+from dataset.share_gpt_dataset import ShareGPTDataEntry, ShareGPTDataset
+from dataset.simulated_dataset import SimulatedDataset, SimulatedDataEntry
 from benchmark_metric import BenchmarkMetricsBuilder
 from dataclasses import dataclass, field
 
@@ -27,7 +28,6 @@ class RequestOutput:
     output_text: str = ""
     start_time: float = 0.
     token_times: list[float] = field(default_factory=list)
-
 
 
 openai_api_key = "EMPTY"
@@ -103,16 +103,14 @@ async def dxz_request_func(input: RequestInput, pbar: Optional[tqdm] = None) -> 
 
     return output
 
-async def benchmark(dataset, args: argparse.Namespace):
+async def benchmark(dataset, output_text_lens: list[int], args: argparse.Namespace):
     pbar = tqdm(total=len(dataset))
-    start = time.perf_counter()
-
     async def get_request(
         dataset,
         request_rate: float,
     ) -> AsyncGenerator[tuple[str, int, int], None]:
-        for request in iter(dataset):
-            yield request
+        for i, request in enumerate(dataset):
+            yield i, request
             if request_rate == float('inf'):
                 continue
             interval = np.random.exponential(1.0 / request_rate)
@@ -120,8 +118,8 @@ async def benchmark(dataset, args: argparse.Namespace):
 
     metric_builder = BenchmarkMetricsBuilder()
     tasks = []
-    async for request in get_request(dataset, args.request_rate):
-        request_func_input = RequestInput(prompt=request.prompt, image_base64=request.image_base64, max_tokens=request.max_tokens)
+    async for (i, request) in get_request(dataset, args.request_rate):
+        request_func_input = RequestInput(prompt=request.prompt, image_base64=request.image_base64, max_tokens=output_text_lens[i])
         if args.backend == 'vllm':
             tasks.append(asyncio.create_task(vllm_request_func(request_func_input, pbar=pbar)))
         elif args.backend == 'dxz':
@@ -153,18 +151,39 @@ def main(args: argparse.Namespace):
     random.seed(args.seed)
     np.random.seed(args.seed)
     # 2. sample dataset
-    output_text_lens = [random.randint(args.min_tokens, args.max_tokens) for _ in range(args.num_prompts)]
-    print(output_text_lens)
-    dataset = SimulatedDataset(
-        processor=AutoProcessor.from_pretrained(model_name), 
-        image_path=image_path, 
-        has_images=[True for _ in range(args.num_prompts)], 
-        prompt_text_lens = [17 for i in range(args.num_prompts)], 
-        output_text_lens = output_text_lens
-        )
+    if args.dataset == 'sharegpt':
+        dataset = ShareGPTDataset(dataset_path='./dataset/ShareGPT_V3_unfiltered_cleaned_split.json')[:args.num_prompts]
+        if args.output_input:
+            for entry in dataset:
+                print(entry.prompt)
+    elif args.dataset == 'sim':
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+        image_path = f'./dataset/cherry_blossom.jpg'
+        if args.has_images == 'one':
+            has_images=[True for _ in range(args.num_prompts)]
+        elif args.has_images == 'zero':
+            has_images=[False for _ in range(args.num_prompts)]
+        elif args.has_images == 'random':
+            has_images=[random.choice([False, True]) for _ in range(args.num_prompts)]
+        else:
+            raise Exception(f'invalid has images args {has_images}')
+        print(f'has_images {has_images}')
+        prompt_text_lens = [random.randint(args.prompt_min_tokens, args.prompt_max_tokens) for _ in range(args.num_prompts)]
+        print(f'prompt_text_lens: {prompt_text_lens}')
+        dataset = SimulatedDataset(tokenizer, image_path, has_images, prompt_text_lens)
+        if args.output_input:
+            for entry in dataset:
+                print(entry.prompt)
+    else:
+        raise Exception(f'invalid dataset {args.dataset}')
+
+    output_text_lens = [random.randint(args.decode_min_tokens, args.decode_max_tokens) for _ in range(args.num_prompts)]
+    print(f'output_text_lens: {output_text_lens}')
+
     # 3. async request
     asyncio.run(benchmark(
         dataset, 
+        output_text_lens, 
         args=args, 
     ))
 
@@ -173,10 +192,52 @@ if __name__ == '__main__':
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument(
+        "--dataset", 
+        type=str,
+        choices=["sharegpt", "sim"],
+        default="sim",
+    )
+    parser.add_argument(
         "--backend", 
         type=str,
         choices=["vllm", "dxz"],
         default="vllm",
+    )
+    parser.add_argument(
+        "--prompt-min-tokens",
+        type=int,
+        default=8,
+        help="min number of prefill prompt tokens not include image",
+    )
+    parser.add_argument(
+        "--prompt-max-tokens",
+        type=int,
+        default=8,
+        help="max number of prefill prompt tokens not include image",
+    )
+    parser.add_argument(
+        "--decode-min-tokens",
+        type=int,
+        default=3,
+        help="min number of tokens generated.",
+    )
+    parser.add_argument(
+        "--decode-max-tokens",
+        type=int,
+        default=10,
+        help="max number of tokens genreated.",
+    )
+    parser.add_argument(
+        "--has-images", 
+        type=str,
+        choices=["one", "zero", "random"],
+        default="one",
+    )
+    parser.add_argument(
+        "--tokenizer-path", 
+        type=str,
+        help="used to get tokenizer used in simulated dataset",
+        default="llava-hf/llava-1.5-7b-hf", 
     )
     parser.add_argument(
         "--num-prompts",
@@ -194,24 +255,18 @@ if __name__ == '__main__':
         "the request arrival times.",
     )
     parser.add_argument(
+        '--output-input',
+        action='store_true',
+        default=False,
+        help='output prompt text'
+    )
+    parser.add_argument(
         '--output-text',
         action='store_true',
         default=False,
         help='output generated text'
     )
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
-        "--min-tokens",
-        type=int,
-        default=3,
-        help="min number of tokens generated.",
-    )
-    parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=10,
-        help="max number of tokens genreated.",
-    )
     args = parser.parse_args()
 
     main(args)
