@@ -1,38 +1,37 @@
 import random
-import torch
-import numpy as np
-import time
 from PIL import Image
 import argparse
-import time
-import os
-from benchmark_metric import BenchmarkMetrics, BenchmarkMetricsBuilder
-from simulated_dataset import SimulatedDataset
-from transformers import AutoProcessor
+from benchmark_metric import BenchmarkMetricsBuilder
+from transformers import AutoProcessor, AutoTokenizer
+from dataset.share_gpt_dataset import ShareGPTDataEntry, ShareGPTDataset
+from dataset.simulated_dataset import SimulatedDataset, SimulatedDataEntry
 
-model_name = "llava-hf/llava-1.5-7b-hf"
-image_path = f'./dataset/cherry_blossom.jpg'
-image = Image.open(image_path)
-question = "What is the content of this image?"
-prompt = f"USER: <image>\n{question}\nASSISTANT:"
 
-def vllm_benchmark(dataset: SimulatedDataset): 
+def vllm_benchmark(dataset: SimulatedDataset, output_text_lens: list[int]): 
     from vllm import LLM, SamplingParams
-    llm = LLM(model=model_name, max_model_len=4096, enforce_eager=True)
+    llm = LLM(model=args.vllm_model_name, max_model_len=4096, enforce_eager=True)
 
     sampling_params = []
 
     metric_builder = BenchmarkMetricsBuilder()
     inputs = []
-    for request in dataset:
-        inputs.append({
-            "prompt": request.prompt, 
-            "multi_modal_data": {
-                "image" : request.image, 
-            }, 
-            "max_tokens": request
-        })
-        sampling_params.append(SamplingParams(temperature=0, max_tokens=request.max_tokens, ignore_eos=True))
+    if args.dataset == 'sim':
+        for i, entry in enumerate(dataset):
+            inputs.append({
+                "prompt": entry.prompt, 
+                "multi_modal_data": {
+                    "image" : entry.image, 
+                }, 
+            })
+            sampling_params.append(SamplingParams(temperature=0, max_tokens=output_text_lens[i], ignore_eos=True))
+    elif args.dataset == 'sharegpt':
+        for i, entry in enumerate(dataset):
+            inputs.append({
+                "prompt": entry.prompt, 
+            })
+            sampling_params.append(SamplingParams(temperature=0, max_tokens=output_text_lens[i], ignore_eos=True))
+    else:
+        raise Exception(f'unsupported dataset {args.dataset} for vllm backend')
         
     outputs = llm.generate(inputs, sampling_params=sampling_params)
 
@@ -52,17 +51,41 @@ def vllm_benchmark(dataset: SimulatedDataset):
         for output in outputs:
             print(output.outputs[0].text)
 
-def dxz_benchmark(dataset: SimulatedDataset, args: argparse.Namespace):
+
+def dxz_benchmark(dataset, output_text_lens: list[int], args: argparse.Namespace):
     from dxz.engine.engine import EngineConfig
     from dxz.entrypoint.mllm import MLLM
+    from dxz.request.request import Request, SamplingParameters
+
+    requests: list[Request] = []
+    if args.dataset == 'sim':
+        requests = [Request(
+            request_id = i, 
+            prompt = entry.prompt, 
+            image = entry.image, 
+            image_base64 = None, 
+            sampling_params = SamplingParameters(
+                max_tokens = output_text_lens[i], 
+            ), 
+        ) for i, entry in enumerate(dataset)]
+    elif args.dataset == 'sharegpt':
+        requests = [Request(
+            request_id = i, 
+            prompt = entry.prompt, 
+            image = None, 
+            image_base64 = None, 
+            sampling_params = SamplingParameters(
+                max_tokens = output_text_lens[i], 
+            ), 
+        )for i, entry in enumerate(dataset)]
+    else:
+        raise Exception(f'unsupported dataset {args.dataset} for dxz backend')
+
     config = EngineConfig.from_cli_args(args)
     print(config)
-
     mllm = MLLM(config)
-
     metric_builder = BenchmarkMetricsBuilder()
-    outputs = mllm.generate(dataset)
-
+    outputs = mllm.generate(requests)
     for output in outputs:
         metric_builder.append(
             input_len = 1, 
@@ -72,7 +95,6 @@ def dxz_benchmark(dataset: SimulatedDataset, args: argparse.Namespace):
             finished_time = output.finished_time, 
             token_times = output.token_times, 
             )
-
     metrics = metric_builder.get_metrics()
     metrics.print()
 
@@ -80,42 +102,52 @@ def dxz_benchmark(dataset: SimulatedDataset, args: argparse.Namespace):
         for output in outputs:
             print(output.text)
 
+
 def main(args: argparse.Namespace):
     random.seed(args.seed)
-
-    if args.only_prefill:
-        dataset = SimulatedDataset(
-            processor=AutoProcessor.from_pretrained(model_name), 
-            image_path=image_path, 
-            has_images=[True for _ in range(args.num_prompts)], 
-            prompt_text_lens = [17 for i in range(args.num_prompts)], 
-            output_text_lens = [1 for i in range(args.num_prompts)]
-            )
+    # 1. load dataset
+    if args.dataset == 'sharegpt':
+        dataset = ShareGPTDataset(dataset_path='./dataset/ShareGPT_V3_unfiltered_cleaned_split.json')[:args.num_prompts]
+        if args.output_input:
+            for entry in dataset:
+                print(entry.prompt)
+    elif args.dataset == 'sim':
+        tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path)
+        image_path = f'./dataset/cherry_blossom.jpg'
+        if args.has_images == 'one':
+            has_images=[True for _ in range(args.num_prompts)]
+        elif args.has_images == 'zero':
+            has_images=[False for _ in range(args.num_prompts)]
+        elif args.has_images == 'random':
+            has_images=[random.choice([False, True]) for _ in range(args.num_prompts)]
+        else:
+            raise Exception(f'invalid has images args {has_images}')
+        print(f'has_images {has_images}')
+        prompt_text_lens = [random.randint(args.prompt_min_tokens, args.prompt_max_tokens) for _ in range(args.num_prompts)]
+        print(f'prompt_text_lens: {prompt_text_lens}')
+        dataset = SimulatedDataset(tokenizer, image_path, has_images, prompt_text_lens)
+        if args.output_input:
+            for entry in dataset:
+                print(entry.prompt)
     else:
-        output_text_lens = [random.randint(args.min_tokens, args.max_tokens) for _ in range(args.num_prompts)]
-        print(output_text_lens)
-        dataset = SimulatedDataset(
-            processor=AutoProcessor.from_pretrained(model_name), 
-            image_path=image_path, 
-            has_images=[True for _ in range(args.num_prompts)], 
-            prompt_text_lens = [17 for i in range(args.num_prompts)], 
-            output_text_lens = output_text_lens
-            )
+        raise Exception(f'invalid dataset {args.dataset}')
 
+    output_text_lens = [random.randint(args.decode_min_tokens, args.decode_max_tokens) for _ in range(args.num_prompts)]
+    print(f'output_text_lens: {output_text_lens}')
     # 2. generate
     if args.backend == 'vllm':
-        vllm_benchmark(dataset)
+        vllm_benchmark(dataset, output_text_lens)
     elif args.backend == 'dxz':
-        dxz_benchmark(dataset, args)
+        dxz_benchmark(dataset, output_text_lens, args)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Benchmark the offline serving.")
     parser.add_argument(
-        "--backend", 
+        "--dataset", 
         type=str,
-        choices=["vllm", "dxz"],
-        default="vllm",
+        choices=["sharegpt", "sim"],
+        default="sim",
     )
     parser.add_argument(
         "--num-prompts",
@@ -124,17 +156,16 @@ if __name__ == '__main__':
         help="Number of prompts to process.",
     )
     parser.add_argument(
+        '--output-input',
+        action='store_true',
+        default=False,
+        help='output prompt text'
+    )
+    parser.add_argument(
         '--output-text',
         action='store_true',
         default=False,
         help='output generated text'
-    )
-
-    parser.add_argument(
-        '--only-prefill',
-        action='store_true',
-        default=False,
-        help='only test prefill performance'
     )
     parser.add_argument(
         "--seed",
@@ -143,22 +174,59 @@ if __name__ == '__main__':
         help="seed",
     )
     parser.add_argument(
-        "--min-tokens",
+        "--prompt-min-tokens",
+        type=int,
+        default=8,
+        help="min number of prefill prompt tokens not include image",
+    )
+    parser.add_argument(
+        "--prompt-max-tokens",
+        type=int,
+        default=8,
+        help="max number of prefill prompt tokens not include image",
+    )
+    parser.add_argument(
+        "--decode-min-tokens",
         type=int,
         default=3,
         help="min number of tokens generated.",
     )
     parser.add_argument(
-        "--max-tokens",
+        "--decode-max-tokens",
         type=int,
         default=10,
         help="max number of tokens genreated.",
+    )
+    parser.add_argument(
+        "--has-images", 
+        type=str,
+        choices=["one", "zero", "random"],
+        default="one",
+    )
+    parser.add_argument(
+        "--tokenizer-path", 
+        type=str,
+        help="used to get tokenizer used in simulated dataset",
+        default="llava-hf/llava-1.5-7b-hf", 
+    )
+    parser.add_argument(
+        "--backend", 
+        type=str,
+        choices=["vllm", "dxz"],
+        default="vllm",
+    )
+    parser.add_argument(
+        "--vllm-model-name", 
+        type=str,
+        help="vllm backend model name",
+        default="llava-hf/llava-1.5-7b-hf", 
     )
     try:
         from dxz.engine.engine import EngineConfig
         parser = EngineConfig.add_cli_args(parser)
     except Exception as e:
+        print(e)
         pass
-
+        
     args = parser.parse_args()
     main(args)

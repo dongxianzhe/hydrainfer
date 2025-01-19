@@ -41,14 +41,13 @@ class SimulatedDataset:
         for has_image, prompt_text_len in zip(has_images, prompt_text_lens):
             if has_image:
                 prompt = "<image>" + tokenizer.decode(question[:prompt_text_len])
-
             else:
                 prompt = tokenizer.decode(question[:prompt_text_len])
             
             self.dataset.append(SimulatedDataEntry(
                 prompt = prompt, 
-                image = image, 
-                image_base64 = image_base64, 
+                image = image if has_image else None, 
+                image_base64 = image_base64 if has_image else None, 
             ))
     
     def __getitem__(self, index: int) -> SimulatedDataEntry:

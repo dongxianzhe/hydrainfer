@@ -13,7 +13,7 @@ class ShareGPTDataset:
         dataset = ShareGPTDataset(dataset_path='ShareGPT_V3_unfiltered_cleaned_split.json')
         n_samples: random sample n_samples data entry from dataset
     """
-    def __init__(self, dataset_path: str, n_samples: int=-1):
+    def __init__(self, dataset_path: str, max_words: int=1024, n_samples: int=-1):
         with open(dataset_path) as f:
             self.dataset = json.load(f)
         # filter out the conversations with less than 2 turns.
@@ -23,6 +23,9 @@ class ShareGPTDataset:
             prompt=data["conversations"][0]["value"], 
             output_text=data["conversations"][1]["value"]
         ) for data in self.dataset]
+
+        if max_words > 0:
+            self.dataset = [data for data in self.dataset if len(data.prompt.split()) <= max_words]
 
         if n_samples > 0:
             assert n_samples <= len(self.dataset), f"n_samples {n_samples} is greater than total {len(self.dataset)}"
