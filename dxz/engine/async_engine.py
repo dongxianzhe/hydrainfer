@@ -1,11 +1,13 @@
+import argparse
 from PIL import Image
 from typing import Optional
 from dxz.engine.engine import EngineConfig
-from dxz.cluster.epdnode import EPDNode
+from dxz.cluster.epdnode import EPDNode, EPDNodeConfig
 from dxz.entrypoint.async_stream import AsyncStream
 from dxz.entrypoint.api_protocol import ChatCompletionMessage
 from dxz.request.request import Request, SamplingParameters
 from dxz.request.rcb import OutputTokenProcessor
+from dataclasses import dataclass, field, fields
 from transformers import AutoTokenizer
 import base64
 import asyncio
@@ -39,9 +41,26 @@ class OnlineNonStreamOutputTokenProcessor(OutputTokenProcessor):
             self.output_stream.put(StopAsyncIteration())
 
 
+@dataclass
+class AsyncEngineConfig:
+    epdnode_config: EPDNodeConfig = field(default_factory=EPDNodeConfig)
+
+    @classmethod
+    def from_cli_args(cls, args: argparse.Namespace) -> 'AsyncEngineConfig':
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['epdnode_config']]
+        epdnode_config = EPDNodeConfig.from_cli_args(args)
+        config = cls(epdnode_config = epdnode_config, **{attr: getattr(args, attr) for attr in attrs})
+        return config
+
+    @staticmethod
+    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        parser = EPDNodeConfig.add_cli_args(parser)
+        return parser
+    
+
 class AsyncEngine:
-    def __init__(self, config: EngineConfig):
-        self.node = EPDNode(config=config)
+    def __init__(self, config: AsyncEngineConfig):
+        self.node = EPDNode(config=config.epdnode_config)
         self.tokenizer = self.node.tokenizer
         self.request_id_allocator = 0
 

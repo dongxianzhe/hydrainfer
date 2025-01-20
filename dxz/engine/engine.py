@@ -19,32 +19,25 @@ class EngineConfig:
     dtype: torch.dtype  = torch.half 
     device: torch.device = torch.device('cuda:0') 
     memory_config: MemoryConfig = field(default_factory=MemoryConfig)
-    request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
     scheduler_config: SchedulerConfig = field(default_factory=SchedulerConfig)
     executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
-    multi_thread_request_process: bool = False
-    warm_up: bool = True
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'EngineConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['dtype', 'device', 'memory_config', 'request_processor_config', 'scheduler_config', 'executor_config']]
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['dtype', 'device', 'memory_config', 'scheduler_config', 'executor_config']]
         memory_config = MemoryConfig.from_cli_args(args)
-        request_processor_config = RequestProcessorConfig.from_cli_args(args)
         scheduler_config = SchedulerConfig.from_cli_args(args)
         executor_config = ExecutorConfig.from_cli_args(args)
-        config = cls(memory_config=memory_config, request_processor_config=request_processor_config, scheduler_config=scheduler_config, executor_config=executor_config, **{attr: getattr(args, attr) for attr in attrs})
+        config = cls(memory_config=memory_config, scheduler_config=scheduler_config, executor_config=executor_config, **{attr: getattr(args, attr) for attr in attrs})
         return config
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         parser = MemoryConfig.add_cli_args(parser)
-        parser = RequestProcessorConfig.add_cli_args(parser)
         parser = SchedulerConfig.add_cli_args(parser)
         parser = ExecutorConfig.add_cli_args(parser)
         parser.add_argument('--model-name', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
         parser.add_argument('--model_path', type=str, nargs="?", default=None, help="path to the model, if set none will download model from huggingface to default cache directory of transformers library with the model-name arg.")
-        parser.add_argument('--multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
-        parser.add_argument('--warm-up', action='store_true', help='Enable warm-up phase.')
         return parser
 
 

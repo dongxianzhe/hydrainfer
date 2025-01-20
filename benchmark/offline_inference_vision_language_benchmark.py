@@ -53,8 +53,7 @@ def vllm_benchmark(dataset: SimulatedDataset, output_text_lens: list[int]):
 
 
 def dxz_benchmark(dataset, output_text_lens: list[int], args: argparse.Namespace):
-    from dxz.engine.engine import EngineConfig
-    from dxz.entrypoint.mllm import MLLM
+    from dxz.entrypoint.mllm import MLLM, MLLMConfig
     from dxz.request.request import Request, SamplingParameters
 
     requests: list[Request] = []
@@ -81,7 +80,7 @@ def dxz_benchmark(dataset, output_text_lens: list[int], args: argparse.Namespace
     else:
         raise Exception(f'unsupported dataset {args.dataset} for dxz backend')
 
-    config = EngineConfig.from_cli_args(args)
+    config = MLLMConfig.from_cli_args(args)
     print(config)
     mllm = MLLM(config)
     metric_builder = BenchmarkMetricsBuilder()
@@ -222,8 +221,8 @@ if __name__ == '__main__':
         default="llava-hf/llava-1.5-7b-hf", 
     )
     try:
-        from dxz.engine.engine import EngineConfig
-        parser = EngineConfig.add_cli_args(parser)
+        from dxz.entrypoint.mllm import MLLMConfig
+        parser = MLLMConfig.add_cli_args(parser)
     except Exception as e:
         print(e)
         pass
