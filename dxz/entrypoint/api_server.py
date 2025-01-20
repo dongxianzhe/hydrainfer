@@ -11,12 +11,12 @@ import asyncio
 from typing import AsyncGenerator
 from dxz.entrypoint.api_protocol import CompletionRequest, CompletionResponse, CompletionResponseChoice, CompletionResponseStreamChoice, CompletionStreamResponse, ChatCompletionRequest, ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse, DeltaMessage
 from dxz.engine.engine import EngineConfig
-from dxz.engine.async_engine import AsyncEngine
+from dxz.engine.async_engine import AsyncEngine, AsyncEngineConfig
 
 parser = argparse.ArgumentParser()
-parser = EngineConfig.add_cli_args(parser)
+parser = AsyncEngineConfig.add_cli_args(parser)
 args = parser.parse_args()
-config = EngineConfig.from_cli_args(args)
+config = AsyncEngineConfig.from_cli_args(args)
 async_engine = AsyncEngine(config)
 
 @asynccontextmanager
