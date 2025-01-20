@@ -8,7 +8,7 @@ except ImportError:
     rms_norm_kernel = None
 
 def rmsnorm(h: Tensor, w: Tensor, eps: float) -> Tensor:
-    if rms_norm_kernel is not None:
+    if rms_norm_kernel is not None and h.device != torch.device('cpu'):
         o = torch.empty_like(h)
         rms_norm_kernel(o, h, w, eps)
         return o

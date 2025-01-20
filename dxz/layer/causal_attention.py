@@ -50,6 +50,9 @@ class FlashInferCausalGroupedQueryPageAttentionHandler(nn.Module):
     def forward(self, query: Tensor, attention_params: AttentionParameters) -> CausalGroupedQueryPageAttentionOutput:
         # query (n_tokens, n_qo_heads * head_dim)
         # o (n_tokens, n_heads, head_dim)
+        if query.device == torch.device('cpu'):
+            return self.next_handler(query, attention_params)
+
         if attention_params.flash_infer_handler is None:
             return self.next_handler(query, attention_params)
 
@@ -74,6 +77,8 @@ class FlashAttentionCausalGroupedQueryPageAttentionHandler(nn.Module):
     def forward(self, query: Tensor, attention_params: AttentionParameters) -> CausalGroupedQueryPageAttentionOutput:
         # query (n_tokens, n_qo_heads * head_dim)
         # o (n_tokens, n_heads, head_dim)
+        if query.device == torch.device('cpu'):
+            return self.next_handler(query, attention_params)
         if mha_varlen_fwd is None:
             return self.next_handler(query, attention_params)
 

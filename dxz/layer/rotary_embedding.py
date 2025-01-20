@@ -114,6 +114,8 @@ class FusedKernelRotaryEmbeddingHandler(nn.Module):
         self.register_buffer(name='cos_sin_cache', tensor=cos_sin, persistent=False)
     
     def forward(self, query: Tensor, key: Tensor, position_ids: Tensor) -> tuple[Tensor, Tensor]:
+        if query.device == torch.device('cpu'):
+            return self.next_handler(query, key, position_ids)
         if apply_rotary_pos_emb is None:
             return self.next_handler(query, key, position_ids)
         # modify query and key inplace 

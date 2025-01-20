@@ -19,6 +19,8 @@ class QuickGELUActivation(nn.Module):
         return input * torch.sigmoid(1.702 * input)
 
 def silu(h: Tensor):
+    if h.device == torch.device('cpu'):
+        return torch.nn.functional.silu(h)
     if silu_kernel is not None:
         return silu_kernel(h)
     return torch.nn.functional.silu(h)
