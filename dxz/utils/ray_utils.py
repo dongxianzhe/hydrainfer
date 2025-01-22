@@ -48,10 +48,10 @@ def start_worker_node(head_node_ip: str, ray_cluster_port: int, max_restarts: in
                 sys.exit(1)
         
 
-def launch_ray_cluster(is_head_node: bool, head_node_ip: str, ray_cluster_port: int) -> None:
+def launch_ray_cluster(is_head_node: bool, head_node_ip: str, ray_cluster_port: int, namespace: str) -> None:
     stop_ray_process()
     if is_head_node:
         start_head_node(ray_cluster_port)        
     else:
         start_worker_node(head_node_ip, ray_cluster_port)
-    ray.init(address=f"{head_node_ip}:{ray_cluster_port}", ignore_reinit_error=True, namespace='cluster')
+    ray.init(address=f"{head_node_ip}:{ray_cluster_port}", ignore_reinit_error=True, namespace=namespace)
