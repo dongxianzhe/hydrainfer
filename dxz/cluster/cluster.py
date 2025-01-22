@@ -1,35 +1,14 @@
-import asyncio
-import torch
 import ray
+import torch
+import asyncio
+from dataclasses import dataclass, field, fields
 from dxz.utils.ray_utils import launch_ray_cluster, get_ip_address
-from dxz.cluster.rayepdnode import RayEPDNode, RayEPDNodeConfig, RayEPDNodeContext
 from dxz.engine.engine import EngineConfig
 from dxz.utils.zmq_utils import init_zmq_recv, init_zmq_send
 from dxz.request.request import Request
-from dataclasses import dataclass, field, fields
-
-
-class NodeRegistry:
-    def __init__(self):
-        pass
-    def heartbeat_loop():
-        pass
-    def register_node():
-        pass
-    def unregister_node():
-        pass
-    def get_nodes():
-        pass
-
-
-@dataclass
-class GlobalManagerConfig:
-    pass
-
-
-class GlobalManager:
-    def __init__(self):
-        pass
+from dxz.cluster.rayepdnode import RayEPDNode, RayEPDNodeConfig, RayEPDNodeContext
+from dxz.cluster.node_registry import NodeRegistry
+from dxz.cluster.scheduler import RequestScheduler, RequestScheudlerConfig
 
 
 @dataclass
@@ -42,12 +21,17 @@ class ClusterConfig:
 class Cluster:
     def __init__(self, config: ClusterConfig):
         self.config = config
-        # 1. node actors creation
-        self.nodes = []
+        # 1. node registry
+        self.e_registry = NodeRegistry()
+        # 2. scheduler
+        self.e_scheduler = RequestScheduler(config=RequestScheudlerConfig())
+        # 3. scale up nodes
+        self.e_registry.register_scheduler(self.e_scheduler)
+
         for i in range(self.config.num_nodes):
             node = ray.remote(
                 num_cpus=0,
-                num_gpus=0,
+                num_gpus=0.1,
                 max_restarts=1,
                 name=f'epdnode{i}',
                 namespace='dxz',
@@ -56,19 +40,11 @@ class Cluster:
                 config=self.config.rayepdnode_config, 
                 context=RayEPDNodeContext(zmq_url=config.zmq_url)
             )
-            self.nodes.append(node)
-
-        for node in self.nodes:
             node.step_loop.remote()
-        # 2. node registry
-
-        # 3. global manager
-        self.next_node_id: int = 0
+            self.e_registry.register_node(node)
 
     def add_request(self, request: Request):
-        print(f'send to node {self.next_node_id}')
-        self.nodes[self.next_node_id].add_request.remote(request)
-        self.next_node_id = (self.next_node_id + 1) % self.config.num_nodes
+        self.e_scheduler.add_request(request)
 
 
 launch_ray_cluster(is_head_node=True, head_node_ip=get_ip_address(), ray_cluster_port=8765, namespace='dxz')
@@ -85,11 +61,10 @@ zmq_url = f"tcp://{get_ip_address()}:40832"
 zmq_recv = init_zmq_recv(zmq_url=zmq_url)
 cluster = Cluster(config=ClusterConfig(
     zmq_url = zmq_url, 
-    num_nodes = 2, 
+    num_nodes = 5, 
     rayepdnode_config = RayEPDNodeConfig(
         engine_config = EngineConfig(
             model_name='gpt2',  
-            device=torch.device('cpu'), 
         )
     ), 
 ))
