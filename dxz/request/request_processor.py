@@ -3,7 +3,7 @@ import argparse
 from torch import Tensor
 from dataclasses import dataclass, fields
 from transformers import AutoTokenizer, AutoProcessor
-from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill
+from dxz.engine.isa import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
@@ -64,7 +64,7 @@ class LanguageRequestProcessor(RequestProcessor):
         token_ids = self.tokenizer.encode(request.prompt)
 
         n_virtual_kv_caches: int = self.context.n_layers
-        instructions: list[Instruction] = []
+        builder = InstructionListBuilder()
         layer_virtual_kv_cache_ids = list(range(self.context.n_layers))
         last_prefill_inst = TextFill(
             token_ids = token_ids,
@@ -74,7 +74,7 @@ class LanguageRequestProcessor(RequestProcessor):
             sample = True, 
             sample_dst= None,
         )
-        instructions.append(last_prefill_inst)
+        builder.append(last_prefill_inst)
 
         curr_fill_inst = last_prefill_inst
         for _ in range(request.sampling_params.max_tokens - 1):
@@ -90,11 +90,12 @@ class LanguageRequestProcessor(RequestProcessor):
                 sample_dst= None,
             )
             curr_fill_inst.sample_dst = decode_inst
-            instructions.append(decode_inst)
+            builder.append(decode_inst)
             curr_fill_inst = decode_inst
         tail_instruction = EmptyInstruction()
         curr_fill_inst.sample_dst = tail_instruction
-        instructions.append(tail_instruction)
+        builder.append(tail_instruction)
+        instructions = builder.build_instruction_list()
 
         return RequestControlBlock(
             instructions = instructions, 
@@ -128,9 +129,8 @@ class VisionRequestProcessor(RequestProcessor):
         return inserted_token_ids, images
 
     def code_generate(self, token_ids: list[int], pixel_values: Tensor, request: Request) -> tuple[list[Instruction], int]:
-        instructions: list[Instruction] = []
+        builder = InstructionListBuilder()
         n_virtual_kv_caches: int = self.context.n_layers
-
         layer_virtual_kv_cache_ids = list(range(self.context.n_layers))
         if self.config.disaggregate_embed_prefill:
             # 1. embed (token pruning)
@@ -139,7 +139,7 @@ class VisionRequestProcessor(RequestProcessor):
                 image_featues_dst = None, 
                 token_pruning_params = {'policy': self.config.token_pruning_policy, 'n_output_tokens': self.config.n_embed_output_tokens}, 
             )
-            instructions.append(embed_instruction)
+            builder.append(embed_instruction)
             # 2. prefill
             last_prefill_instruction = ImageEmbedFill(
                 image_featues = None,
@@ -150,7 +150,7 @@ class VisionRequestProcessor(RequestProcessor):
                 sample = True, 
                 sample_dst = None, 
             )
-            instructions.append(last_prefill_instruction)
+            builder.append(last_prefill_instruction)
             embed_instruction.image_featues_dst = last_prefill_instruction
         else:
             assert self.config.token_pruning_policy == None, 'token pruning is not supported without disaggregate_embed_prefill'
@@ -163,7 +163,7 @@ class VisionRequestProcessor(RequestProcessor):
                 sample = True, 
                 sample_dst= None,
             )
-            instructions.append(fill_inst)
+            builder.append(fill_inst)
             last_prefill_instruction = fill_inst
 
         # 3. decode (kv_cache eviction)
@@ -190,11 +190,12 @@ class VisionRequestProcessor(RequestProcessor):
                 sample_dst= None,
             )
             curr_fill_inst.sample_dst = instruction
-            instructions.append(instruction)
+            builder.append(instruction)
             curr_fill_inst = instruction
         tail_instruction = EmptyInstruction()
         curr_fill_inst.sample_dst = tail_instruction
-        instructions.append(tail_instruction)
+        builder.append(tail_instruction)
+        instructions = builder.build_instruction_list()
 
         return instructions, n_virtual_kv_caches
 

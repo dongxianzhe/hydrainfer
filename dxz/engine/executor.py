@@ -158,7 +158,7 @@ class BatchFillExecutor(Executor):
                     i += 1
 
         for rcb, _ in contexts:
-            rcb.pc += 1
+            rcb.instructions.curr = rcb.instructions.curr.next
 
 class ImageEmbedExecutor(Executor):
     def __init__(self, context: ExecutorContext):
@@ -174,7 +174,7 @@ class ImageEmbedExecutor(Executor):
             instruction.image_featues_dst.image_features = image_features
 
         for rcb, _ in contexts:
-            rcb.pc += 1
+            rcb.instructions.curr = rcb.instructions.curr.next
 
         return
 
@@ -205,7 +205,7 @@ class BatchImageEmbedExecutor(Executor):
             left += n_images[i]
 
         for rcb, _ in contexts:
-            rcb.pc += 1
+            rcb.instructions.curr = rcb.instructions.curr.next
 
 
 class MultiStreamsDecorator(Executor):
@@ -264,4 +264,4 @@ class InstructionExecutor:
 
     def execute_empty(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
         for rcb, _ in contexts:
-            rcb.pc += 1
+            rcb.instructions.curr = rcb.instructions.curr.next

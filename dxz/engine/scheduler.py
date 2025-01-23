@@ -80,7 +80,7 @@ class RequestScheduler:
         next_step: list[RequestControlBlock] = []
         this_step: list[RequestControlBlock] = []
         for rcb in self.running:
-            inst = rcb.instructions[rcb.pc]
+            inst = rcb.instructions.curr
             if isinstance(inst, Fill):
                 if len(inst.token_ids) == 1:
                     decode_seqs.append(rcb)
@@ -105,7 +105,7 @@ class RequestScheduler:
         fill_seqs = prefill_seqs + decode_seqs if self.config.priority == 'prefill' else decode_seqs + prefill_seqs
             
         for seq in fill_seqs:
-            inst = rcb.instructions[rcb.pc]
+            inst = rcb.instructions.curr
             if batch_fill_tokens < self.config.max_batch_fill_tokens:
                 this_step.append(seq)
                 batch_fill_tokens += len(inst.token_ids)
@@ -115,7 +115,6 @@ class RequestScheduler:
         if self.config.debug_mode:
             print(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
             print(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
-            print(f'pc  : ' + ' '.join(f'{seq.pc : 2}'                 for seq in this_step))
             print(f'inst: ' + ' '.join(f'{seq.instructions[seq.pc]}' for seq in this_step))
 
         for seq in this_step:
@@ -123,4 +122,4 @@ class RequestScheduler:
                 seq.metric.first_schedule_time = schedule_time
 
         self.running = next_step
-        return [(seq, seq.instructions[seq.pc]) for seq in this_step]
+        return [(seq, seq.instructions.curr) for seq in this_step]
