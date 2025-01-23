@@ -1,8 +1,11 @@
 from torch import Tensor
 from typing import Optional
 
+
 class Instruction:
-    pass
+    next: "Instruction" = None
+    prev: "Instruction" = None
+
 
 class Fill(Instruction):
     def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional["Fill"]):
@@ -16,12 +19,14 @@ class Fill(Instruction):
         self.sample = sample
         self.sample_dst = sample_dst
 
+
 class TextFill(Fill):
     def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
         super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
 
     def __repr__(self):
         return "TF"
+
 
 class ImageFill(Fill):
     def __init__(self, pixel_values: Tensor, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
@@ -31,6 +36,7 @@ class ImageFill(Fill):
     def __repr__(self):
         return "IF"
 
+
 class ImageEmbedFill(Fill):
     def __init__(self, image_featues: Optional[Tensor], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
         super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
@@ -38,6 +44,7 @@ class ImageEmbedFill(Fill):
 
     def __repr__(self):
         return "EF"
+
 
 class Mov(Instruction):
     def __init__(self, src_cache_ids: list[list[int]], dst_cache_ids: list[list[int]], src_kv_cache_ids: list[int], dst_kv_cache_ids: list[int]):
@@ -50,6 +57,7 @@ class Mov(Instruction):
     def __repr__(self):
         return "MV"
 
+
 class ReAlloc(Instruction):
     def __init__(self, n_tokens: list[int], kv_cache_ids: list[int]):
         self.n_tokens     = n_tokens
@@ -57,6 +65,7 @@ class ReAlloc(Instruction):
 
     def __repr__(self):
         return "RA"
+
 
 class Merge(Instruction):
     def __init__(self, kv_cache1_ids: list[int], kv_cache2_ids: list[int]):
@@ -67,9 +76,11 @@ class Merge(Instruction):
     def __repr__(self):
         return "MR"
 
+
 class EmptyInstruction(Instruction):
     def __repr__(self):
         return "EM"
+
 
 class ImageEmbed(Instruction):
     def __init__(self, pixel_values: Tensor, image_featues_dst: Optional[ImageEmbedFill], token_pruning_params: dict):
@@ -80,3 +91,29 @@ class ImageEmbed(Instruction):
 
     def __repr__(self):
         return "IE"
+
+
+class InstructionList:
+    def __init__(self, head: Instruction, tail: Instruction, curr: Instruction):
+        self.head = head
+        self.tail = tail
+        self.curr = curr
+
+
+class InstructionListBuilder:
+    def __init__(self):
+        self.head = EmptyInstruction()
+        self.tail = EmptyInstruction()
+        self.head.next = self.tail
+        self.head.prev = None
+        self.tail.prev = self.head
+        self.tail.next = None
+
+    def append(self, inst: Instruction):
+        inst.prev = self.tail.prev
+        inst.next = self.tail
+        self.tail.prev.next = inst
+        self.tail.prev = inst
+
+    def build_instruction_list(self) -> InstructionList:
+        return InstructionList(self.head, self.tail, self.head.next)
