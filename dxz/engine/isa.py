@@ -6,6 +6,12 @@ class Instruction:
     next: "Instruction" = None
     prev: "Instruction" = None
 
+    def insert_next(self, inst: "Instruction"):
+        inst.next = self.next
+        inst.prev = self
+        self.next.prev = inst
+        self.next = inst
+
 
 class Fill(Instruction):
     def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional["Fill"]):
@@ -24,6 +30,23 @@ class TextFill(Fill):
     def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
         super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
 
+    def chunk_prefill(self, chunk_size: int):
+        assert chunk_size > 0 and chunk_size < len(self.token_ids), f"invalid chunk prefill size {chunk_size}"
+        rest_text_fill = TextFill(
+            token_ids = self.token_ids[chunk_size:], 
+            position_ids = self.position_ids[chunk_size:], 
+            cache_ids = [layer_cahce_ids[chunk_size:] for layer_cahce_ids in self.cache_ids], 
+            kv_cache_ids = self.kv_cache_ids, 
+            sample = self.sample, 
+            sample_dst = self.sample_dst, 
+        )
+        self.insert_next(rest_text_fill)
+        self.token_ids = self.token_ids[:chunk_size]
+        self.position_ids = self.position_ids[:chunk_size]
+        self.cache_ids = [layer_cahce_ids[:chunk_size] for layer_cahce_ids in self.cache_ids]
+        self.sample = False
+        self.sample_dst = None
+
     def __repr__(self):
         return "TF"
 
@@ -38,12 +61,31 @@ class ImageFill(Fill):
 
 
 class ImageEmbedFill(Fill):
-    def __init__(self, image_featues: Optional[Tensor], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+    def __init__(self, image_features: Optional[Tensor], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
         super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
-        self.image_features = image_featues # (m_tokens, hidden_size)
+        self.image_features = image_features # (m_tokens, hidden_size)
 
     def __repr__(self):
         return "EF"
+
+
+    def chunk_prefill(self, chunk_size: int):
+        rest_text_fill = ImageEmbedFill(
+            image_features = self.image_features[chunk_size:, ...], 
+            token_ids = self.token_ids[chunk_size:], 
+            position_ids = self.position_ids[chunk_size:], 
+            cache_ids = [layer_cahce_ids[chunk_size:] for layer_cahce_ids in self.cache_ids], 
+            kv_cache_ids = self.kv_cache_ids, 
+            sample = self.sample, 
+            sample_dst = self.sample_dst, 
+        )
+        self.image_features = self.image_features[:chunk_size, ...],  
+        self.insert_next(rest_text_fill)
+        self.token_ids = self.token_ids[:chunk_size]
+        self.position_ids = self.position_ids[:chunk_size]
+        self.cache_ids = [layer_cahce_ids[:chunk_size] for layer_cahce_ids in self.cache_ids]
+        self.sample = False
+        self.sample_dst = None
 
 
 class Mov(Instruction):
@@ -83,10 +125,10 @@ class EmptyInstruction(Instruction):
 
 
 class ImageEmbed(Instruction):
-    def __init__(self, pixel_values: Tensor, image_featues_dst: Optional[ImageEmbedFill], token_pruning_params: dict):
+    def __init__(self, pixel_values: Tensor, image_features_dst: Optional[ImageEmbedFill], token_pruning_params: dict):
         super().__init__()
         self.pixel_values = pixel_values
-        self.image_featues_dst = image_featues_dst
+        self.image_features_dst = image_features_dst
         self.token_pruning_params = token_pruning_params
 
     def __repr__(self):

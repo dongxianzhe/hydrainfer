@@ -1,4 +1,4 @@
-from dxz.engine.isa import Instruction, TextFill
+from dxz.engine.isa import Instruction, InstructionList
 from dxz.memory.virtual_kv_cache import VirtualKVCache
 from dxz.request.metric import RequestMetric
 from dxz.request.request import SamplingParameters
@@ -9,9 +9,8 @@ class OutputTokenProcessor:
 
 
 class RequestControlBlock:
-    def __init__(self, instructions: list[Instruction], n_virtual_kv_caches: int, sampling_params: SamplingParameters, output_token_processor: OutputTokenProcessor):
-        self.pc: int = 0
-        self.instructions: list[Instruction] = instructions
+    def __init__(self, instructions: InstructionList, n_virtual_kv_caches: int, sampling_params: SamplingParameters, output_token_processor: OutputTokenProcessor):
+        self.instructions: InstructionList = instructions
         self.n_virtual_kv_caches = n_virtual_kv_caches
         self.virtual_kv_caches: list[VirtualKVCache] = []
 
@@ -22,7 +21,7 @@ class RequestControlBlock:
         self.metric = RequestMetric()
 
     def is_finished(self) -> bool:
-        finished: bool = self.pc >= len(self.instructions)
+        finished: bool = self.instructions.curr is None
 
         if finished:
             for kv_cache in self.virtual_kv_caches:

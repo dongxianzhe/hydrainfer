@@ -151,8 +151,9 @@ class BatchFillExecutor(Executor):
             for rcb, instruction in contexts:
                 if (isinstance(instruction, Fill)) and instruction.sample:
                     next_token_id = sample_token_ids[i]
-                    instruction.sample_dst.token_ids = [next_token_id]
-                    is_last_token =  isinstance(instruction.sample_dst, EmptyInstruction)
+                    is_last_token =  instruction.sample_dst is None
+                    if not is_last_token:
+                        instruction.sample_dst.token_ids = [next_token_id]
                     rcb.metric.tokens_time.append(t)
                     rcb.output_token_processor.append_token_id(next_token_id, is_last_token)
                     i += 1
@@ -163,6 +164,7 @@ class BatchFillExecutor(Executor):
 class ImageEmbedExecutor(Executor):
     def __init__(self, context: ExecutorContext):
         self.context = context
+        self.vision_model = self.context.vision_model
 
     def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
         if len(contexts) == 0:
@@ -171,7 +173,7 @@ class ImageEmbedExecutor(Executor):
             pixel_values = instruction.pixel_values.to(self.context.dtype).to(self.context.device)
             vision_params = VisionModelParameters(return_last_layer_attention=False)
             image_features = self.vision_model.forward(pixel_values, vision_params).image_features
-            instruction.image_featues_dst.image_features = image_features
+            instruction.image_features_dst.image_features = image_features
 
         for rcb, _ in contexts:
             rcb.instructions.curr = rcb.instructions.curr.next
@@ -201,7 +203,7 @@ class BatchImageEmbedExecutor(Executor):
         left = 0
         for i, (rcb, instruction) in enumerate(contexts):
             right = left + n_images[i]
-            instruction.image_featues_dst.image_features = image_features[left: right, :, :]
+            instruction.image_features_dst.image_features = image_features[left: right, :, :]
             left += n_images[i]
 
         for rcb, _ in contexts:
