@@ -7,7 +7,7 @@ from dxz.model.parameters import AttentionParameters, LanguageModelParameters
 from dxz.request.request_processor import RequestProcessorConfig
 from dxz.request.rcb import RequestControlBlock
 from dxz.memory.virtual_kv_cache import MemoryManagementUnit, MemoryConfig, MemoryContext
-from dxz.engine.scheduler import SchedulerConfig, RequestScheduler
+from dxz.engine.scheduler import SchedulerConfig, BatchScheduler
 from dxz.model.model_factory import ModelFactory, getModelFactory
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
 import argparse
@@ -80,7 +80,7 @@ class Engine:
         self.executor = InstructionExecutor(config.executor_config, executor_context)
 
         # 4. scheduler
-        self.scheduler = RequestScheduler(self.config.scheduler_config)
+        self.scheduler = BatchScheduler(self.config.scheduler_config)
 
     def schedule(self, rcbs: list[RequestControlBlock]):
         self.scheduler.schedule_new(rcbs)

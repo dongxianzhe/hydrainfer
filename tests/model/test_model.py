@@ -1,7 +1,8 @@
 import torch
 from dxz.engine.engine import EngineConfig
 from dxz.request.request import Request, SamplingParameters
-from dxz.entrypoint.mllm import MLLM
+from dxz.entrypoint.mllm import MLLM, MLLMConfig
+from dxz.cluster.epdnode import EPDNodeConfig
 from transformers import LlamaForCausalLM as LlamaForCausalLMRef
 from transformers import AutoTokenizer
 
@@ -32,7 +33,7 @@ def engine_generate():
         sampling_params = SamplingParameters(max_tokens=20)
     )
 
-    config = EngineConfig(model_name=model_name)
+    config = MLLMConfig(epdnode_config=EPDNodeConfig(engine_config=EngineConfig(model_name=model_name)))
     mllm = MLLM(config)
 
     outputs = mllm.generate([request])
@@ -46,6 +47,6 @@ def engine_generate():
 
 if __name__ == '__main__':
     print('----------------------------- transformer -------------------------------')
-    transformer_generate()
+    # transformer_generate()
     print('-----------------------------     our     -------------------------------')
     engine_generate()

@@ -184,7 +184,7 @@ class LlamaModelFactory(ModelFactory):
         self.device = device
 
     def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
-        return LlamaVisionModel(), VisionModelConfig(image_token_id = 0, num_image_tokens = 0)
+        return LlamaVisionModel(), VisionModelConfig(image_token_id = -1, num_image_tokens = -1)
 
     def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
         model = LlamaLanguageModel(self.model_path, self.dtype, self.device)
