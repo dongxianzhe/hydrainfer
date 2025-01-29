@@ -3,8 +3,6 @@ from typing import Optional
 from dataclasses import dataclass, field, fields
 import torch
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
-from dxz.model.parameters import AttentionParameters, LanguageModelParameters
-from dxz.request.request_processor import RequestProcessorConfig
 from dxz.request.rcb import RequestControlBlock
 from dxz.memory.virtual_kv_cache import MemoryManagementUnit, MemoryConfig, MemoryContext
 from dxz.engine.scheduler import SchedulerConfig, BatchScheduler
