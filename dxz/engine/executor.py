@@ -8,7 +8,8 @@ from dataclasses import dataclass, fields
 from transformers import AutoTokenizer, AutoProcessor
 from dxz.request.rcb import RequestControlBlock
 from dxz.engine.isa import Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction
-from dxz.model.parameters import AttentionParametersBuilder, LanguageModelParameters, VisionModelParameters
+from dxz.layer.causal_attention import AttentionParametersBuilder
+from dxz.model.parameters import LanguageModelParameters, VisionModelParameters
 from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel
 from dxz.memory.virtual_kv_cache import MemoryManagementUnit
 
