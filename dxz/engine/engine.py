@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, fields
 import torch
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 from dxz.request.rcb import RequestControlBlock
-from dxz.memory.virtual_kv_cache import MemoryManagementUnit, MemoryConfig, MemoryContext
+from dxz.memory.memory_management import MemoryManagementUnit, MemoryConfig, MemoryContext, getMemoryManagementUnit
 from dxz.engine.scheduler import SchedulerConfig, BatchScheduler
 from dxz.model.model_factory import ModelFactory, getModelFactory
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
@@ -57,7 +57,7 @@ class Engine:
             dtype = self.config.dtype, 
             device = self.config.device, 
         )
-        self.mmu = MemoryManagementUnit(
+        self.mmu = getMemoryManagementUnit(
             config = self.config.memory_config, 
             context = self.memory_context, 
         )
@@ -120,5 +120,7 @@ class Engine:
         for rcb, _ in contexts:
             if rcb.is_finished():
                 rcb.metric.finished_time = t
+                for vkvc in rcb.virtual_kv_caches:
+                    self.mmu.realloc(vkvc, 0)
             else:
                 self.scheduler.schedule_running([rcb])
