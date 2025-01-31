@@ -1,6 +1,5 @@
 import torch
 from torch import Tensor
-from dxz.memory.block_allocator import BlockAllocator
 
 try:
     from dxz._C.kernel.kv_cache_kernels import set_kv_cache as set_kv_cache_kernel
@@ -8,19 +7,21 @@ except:
     print('import set_kv_cache failed')
     set_kv_cache_kernel = None
 
-class KVCache:
-    def __init__(self, key_cache: Tensor, value_cache: Tensor):
-        assert key_cache.dim() == 4, f'key cache dim should be 4 but got shape {key_cache.shape}'
-        assert value_cache.shape == key_cache.shape, f'key cache shape should be same with value cache but got {key_cache.shape} {value_cache.shape}'
-        self.key_cache = key_cache
-        self.value_cache = value_cache
-        self.dtype = key_cache.dtype
-        self.device = key_cache.device
 
-    def get_kv_cache(self) -> tuple[Tensor, Tensor]:
-        return (self.key_cache, self.value_cache)
-    
-    def set_kv_cache(self, slot_ids: Tensor, keys: Tensor, values: Tensor) -> None:
+class KVCache:
+    """
+        one layer's kv_cache
+    """
+    def __init__(self, kv_cache: Tensor):
+        assert kv_cache.shape.dim() == 5, f"kv_cache dim should be (2, n_blocks, block_size, num_heads, head_size) but got {kv_cache.shape}"
+        assert kv_cache.shape[0] == 2, f"kv_cache first dim should be 2 but got {kv_cache.shape}"
+        self.key_cache = kv_cache[0]
+        self.value_cache = kv_cache[1]
+
+    def get_kv_cache(self) -> tuple[Tensor, Tensor]: 
+        return self.key_cache, self.value_cache
+
+    def set_kv_cache(self, slot_ids: Tensor, keys: Tensor, values: Tensor):
         # set key tokens and value tokens to kv cache, each slot store one token
         # slot_ids (num_slots, ) int
         # keys (num_slots, num_heads, head_dim)

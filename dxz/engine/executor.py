@@ -11,7 +11,8 @@ from dxz.engine.isa import Instruction, ImageFill, ImageEmbedFill, Fill, EmptyIn
 from dxz.layer.causal_attention import AttentionParametersBuilder
 from dxz.model.parameters import LanguageModelParameters, VisionModelParameters
 from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel
-from dxz.memory.virtual_kv_cache import MemoryManagementUnit
+from dxz.memory.virtual_kv_cache import VirtualKVCache
+from dxz.memory.memory_management import MemoryManagementUnit, getMemoryManagementUnit
 
 
 @dataclass
@@ -116,8 +117,7 @@ class BatchFillExecutor(Executor):
         )
         for seq, inst in contexts:
             virtual_kv_cache = seq.virtual_kv_caches[inst.kv_cache_ids[0]]
-            virtual_kv_cache.set(inst.cache_ids[0])
-            slot_ids = virtual_kv_cache.v2p(inst.cache_ids[0])
+            slot_ids = self.mmu.set(virtual_kv_cache, inst.cache_ids[0])
 
             token_ids += inst.token_ids
             position_ids += inst.position_ids
@@ -129,8 +129,11 @@ class BatchFillExecutor(Executor):
                 new_cache_slots = slot_ids, 
                 block_table = virtual_kv_cache.block_table
             )
+
+        seq0, _ = contexts[0]
         for layer_id in range(self.language_model_config.n_layers):
-            attention_params_builder.add_kv_cache(self.mmu.kv_caches[layer_id])
+            attention_params_builder.add_kv_cache(self.mmu.get_kv_cache(seq.virtual_kv_caches[layer_id]))
+
         layers_attention_params = attention_params_builder.build_attention_parameters()
 
         model_params = LanguageModelParameters(
