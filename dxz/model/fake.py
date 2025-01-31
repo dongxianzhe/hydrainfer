@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from typing import Optional
 from dxz.memory.kv_cache import KVCache
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.model.parameters import VisionModelOutput, VisionModelParameters, LanguageModelOutput, LanguageModelParameters
 from dxz.model.downloader import download_hf_model
 from transformers import AutoProcessor, AutoTokenizer
@@ -47,33 +47,41 @@ class FakeLanguageModel(LanguageModel):
 
 
 class FakeModelFactory(ModelFactory):
-    def __init__(self, model_name: str, model_path: Optional[str] = None, dtype: torch.dtype=torch.half, device: torch.device=torch.device('cuda:0')):
-        self.model_name = model_name
-        if model_path is None:
+    def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
+        self.model_name = config.model_name
+        if config.model_path is None:
             self.model_path = download_hf_model(repo_id='llava-hf/llava-1.5-7b-hf')
         else:
-            self.model_path = model_path
-        self.dtype = dtype
-        self.device = device
+            self.model_path = config.model_path
+        self.dtype = config.dtype
+        self.device = config.device
 
-    def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
+    def getVisionModel(self) -> VisionModel:
         model = FakeVisionModel()
-        config = model.config
-        return FakeVisionModel(), VisionModelConfig(
-            image_token_id = config.image_token_id, 
-            num_image_tokens = config.num_image_tokens
-        )
+        return model
 
-    def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
-        model = FakeLanguageModel()
-        config = model.config
-        return model, LanguageModelConfig(
-            n_layers = config.n_layers, 
-            max_position_embeddings = config.max_position_embeddings, 
-            n_qo_heads = config.n_qo_heads, 
-            n_kv_heads = config.n_kv_heads, 
-            head_dim = config.head_dim, 
+    def getVisionModelConfig(self) -> VisionModelConfig:
+        config_ref = FakeConfig()
+        config = VisionModelConfig(
+            image_token_id = config_ref.image_token_id, 
+            num_image_tokens = config_ref.num_image_tokens
         )
+        return config
+
+    def getLanguageModel(self) -> LanguageModel:
+        model = FakeLanguageModel()
+        return model
+
+    def getLanguageModelConfig(self) -> LanguageModelConfig:
+        config_ref = FakeConfig()
+        config = LanguageModelConfig(
+            n_layers = config_ref.n_layers, 
+            max_position_embeddings = config_ref.max_position_embeddings, 
+            n_qo_heads = config_ref.n_qo_heads, 
+            n_kv_heads = config_ref.n_kv_heads, 
+            head_dim = config_ref.head_dim, 
+        )
+        return config
 
     def getProcessor(self) -> AutoProcessor:
         return AutoProcessor.from_pretrained(self.model_path)

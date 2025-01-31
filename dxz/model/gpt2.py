@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch import Tensor
 from transformers import GPT2Config
-from dxz.model.model_factory import ModelFactory, VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig
+from dxz.model.model_factory import ModelFactory, VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactoryConfig, ModelFactoryContext
 from transformers import AutoProcessor, AutoTokenizer
 from dxz.model.parameters import LanguageModelParameters, LanguageModelOutput, AttentionParameters
 from dxz.model.downloader import download_hf_model
@@ -139,27 +139,36 @@ class GPT2LanguageModel(LanguageModel):
 
 
 class GPT2ModelFactory(ModelFactory):
-    def __init__(self, model_name, model_path = None, dtype = torch.half, device = torch.device('cuda:0')):
-        if model_path is None:
-            self.model_path = download_hf_model(repo_id=model_name)
+    def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
+        if config.model_path is None:
+            self.model_path = download_hf_model(repo_id=config.model_name)
         else:
-            self.model_path = model_path
-        self.dtype = dtype
-        self.device = device
+            self.model_path = config.model_path
+        self.dtype = config.dtype
+        self.device = config.device
 
-    def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
-        return GPT2VisionModel(), VisionModelConfig(image_token_id = -1, num_image_tokens = -1)
+    def getVisionModel(self) -> VisionModel:
+        return GPT2VisionModel()
 
-    def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
-        model = GPT2LanguageModel(self.model_path, self.dtype, self.device)
-        config = model.config
-        return model, LanguageModelConfig(
-            n_layers = config.n_layer, 
-            max_position_embeddings = config.n_positions, 
-            n_qo_heads = config.n_head, 
-            n_kv_heads = config.n_head, 
-            head_dim = config.n_embd // config.n_head, 
+    def getLanguageModel(self) -> LanguageModel:
+        return GPT2LanguageModel(self.model_path, self.dtype, self.device)
+
+    def getVisionModelConfig(self)-> VisionModelConfig:
+        config = VisionModelConfig(image_token_id = -1, num_image_tokens = -1)
+        return config
+
+    def getLanguageModelConfig(self,) -> LanguageModelConfig:
+        from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
+        model_ref = GPT2LMHeadModelRef.from_pretrained(self.model_path)
+        config_ref = model_ref.config
+        config = LanguageModelConfig(
+            n_layers = config_ref.n_layer, 
+            max_position_embeddings = config_ref.n_positions, 
+            n_qo_heads = config_ref.n_head, 
+            n_kv_heads = config_ref.n_head, 
+            head_dim = config_ref.n_embd // config_ref.n_head, 
         )
+        return config
 
     def getProcessor(self) -> AutoProcessor:
         return None

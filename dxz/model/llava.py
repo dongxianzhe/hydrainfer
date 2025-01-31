@@ -7,7 +7,7 @@ from typing import Optional
 from dxz.model.llama import LlamaForCausalLM
 from dxz.model.clip import CLIPVisionModel
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.model.downloader import download_hf_model
 
 class LlavaMultiModalProjector(nn.Module):
@@ -69,10 +69,6 @@ class LlavaVisionModel(VisionModel):
 
         self.vision_tower = model_ref.vision_tower
         self.multi_modal_projector = model_ref.multi_modal_projector
-        self.config = VisionModelConfig(
-            image_token_id = config_ref.image_token_index, 
-            num_image_tokens = config_ref.image_seq_length, 
-        )
     
     def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
         # pixel_values (n_images, n_channels, height, width)
@@ -113,22 +109,41 @@ class LlavaLanguageModel(LanguageModel):
         )
 
 class LlavaModelFactory(ModelFactory):
-    def __init__(self, model_name: str, model_path: Optional[str] = None, dtype: torch.dtype=torch.half, device: torch.device=torch.device('cuda:0')):
-        self.model_name = model_name
-        if model_path is None:
-            self.model_path = download_hf_model(repo_id=model_name)
+    def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
+        self.model_name = config.model_name
+        if config.model_path is None:
+            self.model_path = download_hf_model(repo_id=config.model_name)
         else:
-            self.model_path = model_path
-        self.dtype = dtype
-        self.device = device
+            self.model_path = config.model_path
+        self.dtype = config.dtype
+        self.device = config.device
 
-    def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
+    def getVisionModel(self) -> VisionModel:
         model = LlavaVisionModel(self.model_path, self.dtype, self.device)
-        return model, model.config
+        return model
 
-    def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
+    def getLanguageModel(self) -> LanguageModel:
         model = LlavaLanguageModel(self.model_path, self.dtype, self.device)
-        return model, model.config
+        return model
+
+    def getVisionModelConfig(self) -> VisionModelConfig:
+        config_ref = LlavaConfig.from_pretrained(self.model_path)
+        config = VisionModelConfig(
+            image_token_id = config_ref.image_token_index, 
+            num_image_tokens = config_ref.image_seq_length, 
+        )
+        return config
+
+    def getLanguageModelConfig(self) -> LanguageModelConfig:
+        config_ref = LlavaConfig.from_pretrained(self.model_path)
+        config = LanguageModelConfig(
+            n_layers = config_ref.text_config.num_hidden_layers, 
+            max_position_embeddings = config_ref.text_config.max_position_embeddings, 
+            n_qo_heads = config_ref.text_config.num_attention_heads, 
+            n_kv_heads = config_ref.text_config.num_key_value_heads, 
+            head_dim = config_ref.text_config.head_dim, 
+        )
+        return config
 
     def getProcessor(self) -> AutoProcessor:
         return AutoProcessor.from_pretrained(self.model_path)

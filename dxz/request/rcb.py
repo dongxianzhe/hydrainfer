@@ -21,12 +21,7 @@ class RequestControlBlock:
         self.metric = RequestMetric()
 
     def is_finished(self) -> bool:
-        finished: bool = self.instructions.curr is None
-
-        if finished:
-            for kv_cache in self.virtual_kv_caches:
-                kv_cache.realloc(0)
-        return finished
+        return self.instructions.curr is None
 
     def print(self):
         print(f'---------------------------- request control block --------------------------------')
