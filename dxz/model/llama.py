@@ -8,7 +8,7 @@ from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from dxz.model.downloader import download_hf_model
 from dxz.model.parameters import LanguageModelParameters, AttentionParameters
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from dxz.layer.norm import rmsnorm
 from dxz.layer.activation import silu
@@ -174,28 +174,35 @@ class LlamaLanguageModel(LanguageModel):
     
 
 class LlamaModelFactory(ModelFactory):
-    def __init__(self, model_name: str, model_path: Optional[str] = None, dtype: torch.dtype=torch.half, device: torch.device=torch.device('cuda:0')):
-        self.model_name = model_name
-        if model_path is None:
-            self.model_path = download_hf_model(repo_id=model_name)
+    def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
+        self.model_name = config.model_name
+        if config.model_path is None:
+            self.model_path = download_hf_model(repo_id=config.model_name)
         else:
-            self.model_path = model_path
-        self.dtype = dtype
-        self.device = device
+            self.model_path = config.model_path
+        self.dtype = config.dtype
+        self.device = config.device
 
-    def getVisionModel(self) -> tuple[VisionModel, VisionModelConfig]:
-        return LlamaVisionModel(), VisionModelConfig(image_token_id = -1, num_image_tokens = -1)
+    def getVisionModel(self) -> VisionModel:
+        return LlamaVisionModel()
 
-    def getLanguageModel(self) -> tuple[LanguageModel, LanguageModelConfig]:
+    def getLanguageModel(self) -> LanguageModel:
         model = LlamaLanguageModel(self.model_path, self.dtype, self.device)
-        config = model.config
-        return model, LanguageModelConfig(
-            n_layers = config.num_hidden_layers, 
-            max_position_embeddings = config.max_position_embeddings, 
-            n_qo_heads = config.num_attention_heads, 
-            n_kv_heads = config.num_key_value_heads, 
-            head_dim = config.head_dim
+        return model
+
+    def getVisionModelConfig(self) -> VisionModelConfig:
+        return VisionModelConfig(image_token_id = -1, num_image_tokens = -1)
+
+    def getLanguageModelConfig(self) -> LanguageModelConfig:
+        config_ref = LlamaConfig.from_pretrained(self.model_path)
+        config = LanguageModelConfig(
+            n_layers = config_ref.num_hidden_layers, 
+            max_position_embeddings = config_ref.max_position_embeddings, 
+            n_qo_heads = config_ref.num_attention_heads, 
+            n_kv_heads = config_ref.num_key_value_heads, 
+            head_dim = config_ref.head_dim
         )
+        return config
 
     def getProcessor(self) -> AutoProcessor:
         return None

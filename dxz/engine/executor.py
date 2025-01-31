@@ -4,13 +4,13 @@ import argparse
 from torch import Tensor
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, fields
-from transformers import AutoTokenizer, AutoProcessor
+from dataclasses import dataclass, fields, field
 from dxz.request.rcb import RequestControlBlock
 from dxz.engine.isa import Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction
 from dxz.layer.causal_attention import AttentionParametersBuilder
 from dxz.model.parameters import LanguageModelParameters, VisionModelParameters
-from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel
+from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
+from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel, ModelFactory
 from dxz.memory.virtual_kv_cache import VirtualKVCache
 from dxz.memory.memory_management import MemoryManagementUnit, getMemoryManagementUnit
 
@@ -39,14 +39,7 @@ class ExecutorConfig:
 
 @dataclass
 class ExecutorContext:
-    vision_model: VisionModel
-    vision_model_config: VisionModelConfig
-    language_model: LanguageModel
-    language_model_config: LanguageModelConfig
-    processor: AutoProcessor
-    tokenizer: AutoTokenizer
-    dtype: torch.dtype
-    device: torch.device
+    model_factory_config: ModelFactoryConfig
     block_size: int
     mmu: MemoryManagementUnit
 
@@ -58,14 +51,16 @@ class Executor:
 
 class BatchFillExecutor(Executor):
     def __init__(self, config: ExecutorConfig, context: ExecutorContext):
+        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext(process_group=None))
+        self.vision_model = model_factory.getVisionModel() 
+        self.language_model = model_factory.getLanguageModel() 
+        self.vision_model_config = model_factory.getVisionModelConfig()
+        self.language_model_config = model_factory.getLanguageModelConfig()
+
         self.config = config
         self.context = context
-        self.dtype = context.dtype
-        self.device = context.device
-        self.vision_model = context.vision_model
-        self.vision_model_config = context.vision_model_config
-        self.language_model = context.language_model
-        self.language_model_config = context.language_model_config
+        self.dtype = context.model_factory_config.dtype
+        self.device = context.model_factory_config.device
         self.mmu = context.mmu
 
         self.workspace_buffer = None
@@ -168,7 +163,8 @@ class BatchFillExecutor(Executor):
 class ImageEmbedExecutor(Executor):
     def __init__(self, context: ExecutorContext):
         self.context = context
-        self.vision_model = self.context.vision_model
+        model_factory = getModelFactory(ModelFactoryConfig, ModelFactoryContext(process_group=None))
+        self.vision_model = model_factory.getVisionModel()
 
     def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
         if len(contexts) == 0:
@@ -244,12 +240,13 @@ class InstructionExecutor:
     def __init__(self, config: ExecutorConfig, context: ExecutorContext):
         self.config = config
         self.context = context
-        self.fill_executor = BatchFillExecutor(config, context)
 
         if self.config.batch_image_embed_forward:
             self.image_embed_executor = BatchImageEmbedExecutor(context)
         else:
             self.image_embed_executor = ImageEmbedExecutor(context)
+
+        self.fill_executor = BatchFillExecutor(config, context)
 
         self.streams: list[torch.cuda.Stream] = []
         if self.config.multi_streams_forward:

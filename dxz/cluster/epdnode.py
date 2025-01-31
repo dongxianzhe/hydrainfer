@@ -12,7 +12,8 @@ import argparse
 from dxz.request.request import Request
 from dxz.request.rcb import RequestControlBlock, OutputTokenProcessor
 from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext
-from dxz.engine.engine import EngineConfig, Engine
+from dxz.engine.engine import EngineConfig, Engine, EngineContext
+from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
 
 
 from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig
@@ -136,20 +137,23 @@ class SingleNodeRequestProcessor(RequestProcessor):
 @dataclass
 class EPDNodeConfig:
     multi_thread_request_process: bool = False
+    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
     request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
     engine_config: EngineConfig = field(default_factory=EngineConfig)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'EPDNodeConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['request_processor_config', 'engine_config']]
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['model_factory_config', 'request_processor_config', 'engine_config']]
+        model_factory_config = ModelFactoryConfig.from_cli_args(args)
         request_processor_config = RequestProcessorConfig.from_cli_args(args)
         engine_config = EngineConfig.from_cli_args(args)
-        config = cls(request_processor_config=request_processor_config, engine_config=engine_config, **{attr: getattr(args, attr) for attr in attrs})
+        config = cls(model_factory_config=model_factory_config, request_processor_config=request_processor_config, engine_config=engine_config, **{attr: getattr(args, attr) for attr in attrs})
         return config
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         parser.add_argument('--multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
+        parser = ModelFactoryConfig.add_cli_args(parser)
         parser = RequestProcessorConfig.add_cli_args(parser)
         parser = EngineConfig.add_cli_args(parser)
         return parser
@@ -158,15 +162,19 @@ class EPDNodeConfig:
 class EPDNode:
     def __init__(self, config: EPDNodeConfig):
         self.config = config
-        self.engine = Engine(self.config.engine_config)
-        self.tokenizer = self.engine.tokenizer
+        self.engine = Engine(self.config.engine_config, EngineContext(model_factory_config=config.model_factory_config))
+        model_factory = getModelFactory(config.model_factory_config, ModelFactoryContext(process_group=None))
+        self.vision_model_config = model_factory.getVisionModelConfig()
+        self.language_model_config = model_factory.getLanguageModelConfig()
+        self.processor = model_factory.getProcessor() 
+        self.tokenizer = model_factory.getTokenizer() 
 
         self.request_processor_context = RequestProcessorContext(
-            tokenizer = self.engine.tokenizer, 
-            processor = self.engine.processor, 
-            image_token_id = self.engine.vision_model_config.image_token_id, 
-            num_image_tokens = self.engine.vision_model_config.num_image_tokens, 
-            n_layers = self.engine.language_model_config.n_layers,
+            tokenizer = self.tokenizer, 
+            processor = self.processor, 
+            image_token_id = self.vision_model_config.image_token_id, 
+            num_image_tokens = self.vision_model_config.num_image_tokens, 
+            n_layers = self.language_model_config.n_layers,
         )
         self.processor = SingleNodeRequestProcessor(
             config = self.config.request_processor_config, 

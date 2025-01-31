@@ -6,27 +6,31 @@ from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc,
 from dxz.request.rcb import RequestControlBlock
 from dxz.memory.memory_management import MemoryManagementUnit, MemoryConfig, MemoryContext, getMemoryManagementUnit
 from dxz.engine.scheduler import SchedulerConfig, BatchScheduler
-from dxz.model.model_factory import ModelFactory, getModelFactory
+from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
 import argparse
 
+
+
+
 @dataclass
 class EngineConfig:
-    model_name: str          = "llava-hf/llava-1.5-7b-hf" 
-    model_path: Optional[str]= None
-    dtype: torch.dtype  = torch.half 
-    device: torch.device = torch.device('cuda:0') 
     memory_config: MemoryConfig = field(default_factory=MemoryConfig)
     scheduler_config: SchedulerConfig = field(default_factory=SchedulerConfig)
     executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'EngineConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['dtype', 'device', 'memory_config', 'scheduler_config', 'executor_config']]
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['memory_config', 'scheduler_config', 'executor_config']]
         memory_config = MemoryConfig.from_cli_args(args)
         scheduler_config = SchedulerConfig.from_cli_args(args)
         executor_config = ExecutorConfig.from_cli_args(args)
-        config = cls(memory_config=memory_config, scheduler_config=scheduler_config, executor_config=executor_config, **{attr: getattr(args, attr) for attr in attrs})
+        config = cls(
+            memory_config=memory_config, 
+            scheduler_config=scheduler_config, 
+            executor_config=executor_config, 
+            **{attr: getattr(args, attr) for attr in attrs}
+        )
         return config
 
     @staticmethod
@@ -34,51 +38,40 @@ class EngineConfig:
         parser = MemoryConfig.add_cli_args(parser)
         parser = SchedulerConfig.add_cli_args(parser)
         parser = ExecutorConfig.add_cli_args(parser)
-        parser.add_argument('--model-name', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
-        parser.add_argument('--model_path', type=str, nargs="?", default=None, help="path to the model, if set none will download model from huggingface to default cache directory of transformers library with the model-name arg.")
         return parser
 
 
-class Engine:
-    def __init__(self, config: EngineConfig):
-        self.config = config
-        # 1. model
-        model_factory: ModelFactory = getModelFactory(config.model_name, config.model_path, config.dtype, config.device)
-        self.vision_model, self.vision_model_config = model_factory.getVisionModel() 
-        self.language_model, self.language_model_config = model_factory.getLanguageModel() 
-        self.processor = model_factory.getProcessor() 
-        self.tokenizer = model_factory.getTokenizer() 
+@dataclass
+class EngineContext:
+    model_factory_config: ModelFactoryConfig
 
-        # 2. memory
+
+class Engine:
+    def __init__(self, config: EngineConfig, context: EngineContext):
+        self.config = config
+        # memory
+        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext())
+        language_model_config = model_factory.getLanguageModelConfig()
         self.memory_context = MemoryContext(
-            n_layers = self.language_model_config.n_layers,
-            head_size = self.language_model_config.head_dim, 
-            num_kv_heads = self.language_model_config.n_kv_heads, 
-            dtype = self.config.dtype, 
-            device = self.config.device, 
+            n_layers = language_model_config.n_layers,
+            head_size = language_model_config.head_dim, 
+            num_kv_heads = language_model_config.n_kv_heads, 
+            dtype = context.model_factory_config.dtype, 
+            device = context.model_factory_config.device, 
         )
         self.mmu = getMemoryManagementUnit(
             config = self.config.memory_config, 
             context = self.memory_context, 
         )
-
-        # 3. executor
+        # scheduler
+        self.scheduler = BatchScheduler(self.config.scheduler_config)
+        # executor
         executor_context = ExecutorContext(
-            vision_model = self.vision_model, 
-            vision_model_config = self.vision_model_config, 
-            language_model = self.language_model, 
-            language_model_config = self.language_model_config, 
-            processor = self.processor, 
-            tokenizer = self.tokenizer, 
-            dtype = config.dtype, 
-            device = config.device, 
+            model_factory_config = context.model_factory_config, 
             block_size = config.memory_config.block_size, 
             mmu = self.mmu
         )
         self.executor = InstructionExecutor(config.executor_config, executor_context)
-
-        # 4. scheduler
-        self.scheduler = BatchScheduler(self.config.scheduler_config)
 
     def schedule(self, rcbs: list[RequestControlBlock]):
         self.scheduler.schedule_new(rcbs)
