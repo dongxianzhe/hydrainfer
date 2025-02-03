@@ -11,6 +11,7 @@ from dxz.layer.causal_attention import AttentionParametersBuilder
 from dxz.model.parameters import LanguageModelParameters, VisionModelParameters
 from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel, ModelFactory
+from dxz.engine.worker import WorkerConfig, WorkerContext, getWorker, Worker
 from dxz.memory.virtual_kv_cache import VirtualKVCache
 from dxz.memory.memory_management import MemoryManagementUnit, getMemoryManagementUnit
 
@@ -21,11 +22,16 @@ class ExecutorConfig:
     batch_image_embed_forward: bool = True
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
+    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'ExecutorConfig':
-        attrs = [attr.name for attr in fields(cls)]
-        config = cls(**{attr: getattr(args, attr) for attr in attrs})
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['worker_config']]
+        worker_config = WorkerConfig.from_cli_args(args)
+        config = cls(
+            worker_config = worker_config, 
+            **{attr: getattr(args, attr) for attr in attrs}
+        )
         return config
 
     @staticmethod
@@ -34,6 +40,7 @@ class ExecutorConfig:
         parser.add_argument('--batch-image-embed-forward', action='store_true', help='Enable batch image embedding forwarding.')
         parser.add_argument('--multi-streams-forward', action='store_true', help='Enable multi-stream forwarding.')
         parser.add_argument('--multi-threads-forward', action='store_true', help='Enable multi-thread forwarding.')
+        parser = WorkerConfig.add_cli_args(parser)
         return parser
 
 
@@ -42,18 +49,18 @@ class ExecutorContext:
     model_factory_config: ModelFactoryConfig
     block_size: int
     mmu: MemoryManagementUnit
+    worker: Worker = None
 
 
 class Executor:
     def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
-        raise Exception('interface not implemented')
+        raise NotImplementedError
 
 
 class BatchFillExecutor(Executor):
     def __init__(self, config: ExecutorConfig, context: ExecutorContext):
         model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext(process_group=None))
-        self.vision_model = model_factory.getVisionModel() 
-        self.language_model = model_factory.getLanguageModel() 
+        self.worker = context.worker
         self.vision_model_config = model_factory.getVisionModelConfig()
         self.language_model_config = model_factory.getLanguageModelConfig()
 
@@ -140,8 +147,8 @@ class BatchFillExecutor(Executor):
         ten_position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.device)
 
         if pixel_values is not None:
-            image_features = self.vision_model.forward(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
-        sample_token_ids = self.language_model.forward(ten_input_ids, image_features, ten_position_ids, model_params).sample_token_ids
+            image_features = self.worker.execute_vision_model(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
+        sample_token_ids = self.worker.execute_language_model(ten_input_ids, image_features, ten_position_ids, model_params).sample_token_ids
         sample_token_ids = sample_token_ids.tolist()
 
         if len(selected_token_ids) > 0:
@@ -163,8 +170,7 @@ class BatchFillExecutor(Executor):
 class ImageEmbedExecutor(Executor):
     def __init__(self, context: ExecutorContext):
         self.context = context
-        model_factory = getModelFactory(ModelFactoryConfig, ModelFactoryContext(process_group=None))
-        self.vision_model = model_factory.getVisionModel()
+        self.worker = context.worker
 
     def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
         if len(contexts) == 0:
@@ -172,7 +178,7 @@ class ImageEmbedExecutor(Executor):
         for rcb, instruction in contexts:
             pixel_values = instruction.pixel_values.to(self.context.dtype).to(self.context.device)
             vision_params = VisionModelParameters(return_last_layer_attention=False)
-            image_features = self.vision_model.forward(pixel_values, vision_params).image_features
+            image_features = self.worker.execute_vision_model(pixel_values, vision_params).image_features
             instruction.image_features_dst.image_features = image_features
 
         for rcb, _ in contexts:
@@ -184,7 +190,7 @@ class ImageEmbedExecutor(Executor):
 class BatchImageEmbedExecutor(Executor):
     def __init__(self, context: ExecutorContext):
         self.context = context
-        self.vision_model = context.vision_model
+        self.worker = context.worker
 
     def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
         if len(contexts) == 0:
@@ -198,7 +204,7 @@ class BatchImageEmbedExecutor(Executor):
         pixel_values = torch.cat(batch_pixel_values, dim=0) 
 
         vision_params = VisionModelParameters(return_last_layer_attention=False)
-        image_features = self.vision_model.forward(pixel_values, vision_params).image_features
+        image_features = self.worker.execute_vision_model(pixel_values, vision_params).image_features
 
         left = 0
         for i, (rcb, instruction) in enumerate(contexts):
@@ -240,6 +246,8 @@ class InstructionExecutor:
     def __init__(self, config: ExecutorConfig, context: ExecutorContext):
         self.config = config
         self.context = context
+        self.worker = getWorker(config.worker_config, WorkerContext(model_factory_config=context.model_factory_config))
+        context.worker = self.worker
 
         if self.config.batch_image_embed_forward:
             self.image_embed_executor = BatchImageEmbedExecutor(context)
