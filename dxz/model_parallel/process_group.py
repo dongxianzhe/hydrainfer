@@ -1,7 +1,8 @@
 import torch
 from torch import Tensor
 import torch.distributed as dist
-from dataclasses import dataclass
+from dataclasses import dataclass, field, fields
+import argparse
 
 
 @dataclass
@@ -16,8 +17,8 @@ class ParallelConfig:
     """
     tp_size: int = 1
     pp_size: int = 1
-    tp_rank: int = 0
-    pp_rank: int = 0
+    # tp_rank: int = 0
+    # pp_rank: int = 0
 
     @property
     def world_size(self) -> int:
@@ -30,6 +31,18 @@ class ParallelConfig:
     @property
     def is_last_stage(self) -> bool:
         return self.pp_rank == (self.pp_size - 1)
+
+    @classmethod
+    def from_cli_args(cls, args: argparse.Namespace) -> 'ParallelConfig':
+        attrs = [attr.name for attr in fields(cls)]
+        config = cls(**{attr: getattr(args, attr) for attr in attrs})
+        return config
+
+    @staticmethod
+    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        parser.add_argument('--tp-size', type=int, default=1, help='number of tensor parallel worker')
+        parser.add_argument('--pp-size', type=int, default=1, help='number of tensor parallel worker')
+        return parser
 
 
 def init_global_process_group(backend='nccl', world_size=1, rank=0, init_method='env://'):
@@ -91,3 +104,8 @@ class ProcessGroup:
         tensors = [torch.empty_like(input) for _ in range(self.world_size)]
         dist.all_gather(tensors, input, group=self.process_group)
         return torch.cat(tensors, dim=-1).contiguous()
+
+class ParallelContext:
+    tp_rank: int
+    pp_rank: int
+    process_group: ProcessGroup

@@ -107,12 +107,8 @@ def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) ->
         from dxz.model.llava import LlavaModelFactory
         return LlavaModelFactory(config, context)
     if config.model_name == "gpt2":
-        if context.process_group is None or context.process_group.world_size <= 1:
-            from dxz.model.gpt2 import GPT2ModelFactory
-            return GPT2ModelFactory(config, context)
-        else:
-            from dxz.model.gpt2_model_parallel import GPT2ModelFactory
-            return GPT2ModelFactory(config, context)
+        from dxz.model.gpt2 import GPT2ModelFactory
+        return GPT2ModelFactory(config, context)
     if config.model_name == 'meta-llama/Llama-2-7b-hf':
         from dxz.model.llama import LlamaModelFactory
         return LlamaModelFactory(config, context)
