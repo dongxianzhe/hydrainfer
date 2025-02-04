@@ -162,7 +162,8 @@ class BatchFillExecutor(Executor):
                     if not is_last_token:
                         instruction.sample_dst.token_ids = [next_token_id]
                     rcb.metric.tokens_time.append(t)
-                    rcb.output_token_processor.append_token_id(next_token_id, is_last_token)
+                    for output_token_processor in rcb.output_token_processors:
+                        output_token_processor.append_token_id(next_token_id, is_last_token)
                     i += 1
 
         for rcb, _ in contexts:

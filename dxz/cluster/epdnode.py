@@ -130,7 +130,6 @@ class SingleNodeRequestProcessor(RequestProcessor):
             instructions = instructions, 
             n_virtual_kv_caches = n_virtual_kv_caches, 
             sampling_params = request.sampling_params, 
-            output_token_processor = None
         )
 
 
@@ -198,7 +197,7 @@ class EPDNode:
         arrival_time = time.perf_counter()
         rcb = self.processor.process(request=request)
         rcb.metric.arrival_time = arrival_time
-        rcb.output_token_processor = output_processor
+        rcb.register_output_token_processor(output_processor)
         self.engine.schedule([rcb])
 
     def step(self):
