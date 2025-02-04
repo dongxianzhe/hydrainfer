@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, field
 from dxz.request.rcb import RequestControlBlock
 from dxz.engine.isa import Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction
-from dxz.layer.causal_attention import AttentionParametersBuilder
+from dxz.layer.causal_attention import AttentionParametersBuilder, AttentionParameters
 from dxz.model.parameters import LanguageModelParameters, VisionModelParameters
 from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel, ModelFactory
@@ -23,14 +23,11 @@ class ExecutorConfig:
     batch_image_embed_forward: bool = True
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
-    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'ExecutorConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['worker_config']]
-        worker_config = WorkerConfig.from_cli_args(args)
+        attrs = [attr.name for attr in fields(cls)]
         config = cls(
-            worker_config = worker_config, 
             **{attr: getattr(args, attr) for attr in attrs}
         )
         return config
@@ -80,76 +77,87 @@ class BatchFillExecutor(Executor):
             self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
             self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
 
+    def execute_image_embed(self, contexts: BatchRequest) -> Tensor:
+        if len(contexts) == 0:
+            return None
+        pixel_values: list[Tensor] = []
+        for rcb, inst in contexts:
+            pixel_values.append(inst.pixel_values)
+            inst.pixel_values = None
+        pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.dtype, device=self.device)
+        image_features = self.worker.execute_vision_model(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
+        return image_features
+            
+
     def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return {}
 
-        pixel_values: list[Tensor] = []
-        image_features: list[Tensor] = []
+        # 1. allocate memory if necessary
+        for rcb, _ in contexts:
+            if len(rcb.virtual_kv_caches) == 0:
+                rcb.virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(rcb.n_virtual_kv_caches)
+
+        # 2. filter out request which need image embed
+        batch_image_fill = BatchRequest()
+        list_image_features: list[Tensor] = []
         for seq, inst in contexts:
             if isinstance(inst, ImageFill):
-                pixel_values.append(inst.pixel_values)
-                inst.pixel_values = None
-            if isinstance(inst, ImageEmbedFill):
-                image_features.append(inst.image_features)
+                batch_image_fill.append(seq)
+            elif isinstance(inst, ImageEmbedFill):
+                list_image_features.append(inst.image_features)
                 inst.image_features = None
-        if len(pixel_values) > 0 and len(image_features) > 0:
+        if len(batch_image_fill) > 0 and len(list_image_features) > 0:
             raise Exception('not support pixel value and image embed batch')
 
-        if len(pixel_values):
-            pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.dtype, device=self.device)
+        if len(list_image_features) == 0:
+            image_features = self.execute_image_embed(batch_image_fill)
         else:
-            pixel_values = None
-
-        if len(image_features):
-            image_features = torch.cat(image_features, dim=0).to(dtype=self.dtype, device=self.device)
-        else:
-            image_features = None
+            image_features = torch.cat(list_image_features, dim=0).to(dtype=self.dtype, device=self.device)
 
         token_ids         : list[int] = []
         position_ids      : list[int] = []
         selected_token_ids: list[int] = []
-        attention_params_builder = AttentionParametersBuilder(
+        attention_params_builders = [AttentionParametersBuilder(
             num_qo_heads = self.language_model_config.n_qo_heads,
             num_kv_heads = self.language_model_config.n_kv_heads,
             head_dim = self.language_model_config.head_dim, 
             block_size = self.context.block_size, 
             device = self.device, 
-            flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper, 
-            flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper, 
-        )
+            flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper if layer_id == 0 else None, 
+            flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper if layer_id == 0 else None, 
+        ) for layer_id in range(self.language_model_config.n_layers)]
         for seq, inst in contexts:
-            virtual_kv_cache = seq.virtual_kv_caches[inst.kv_cache_ids[0]]
-            slot_ids = self.mmu.set(virtual_kv_cache, inst.cache_ids[0])
-
             token_ids += inst.token_ids
             position_ids += inst.position_ids
             if inst.sample:
                 selected_token_ids.append(len(token_ids) - 1)
-            attention_params_builder.add_request(
-                q_seq_len = len(inst.token_ids), 
-                kv_seq_len = virtual_kv_cache.n_kv_cache_tokens, 
-                new_cache_slots = slot_ids, 
-                block_table = virtual_kv_cache.block_table
-            )
 
-        seq0, _ = contexts[0]
+            for layer_id in range(self.language_model_config.n_layers):
+                virtual_kv_cache = seq.virtual_kv_caches[inst.kv_cache_ids[layer_id]]
+                slot_ids = self.mmu.set(virtual_kv_cache, inst.cache_ids[layer_id])
+                attention_params_builders[layer_id].add_request(
+                    q_seq_len = len(inst.token_ids), 
+                    kv_seq_len = virtual_kv_cache.n_kv_cache_tokens, 
+                    new_cache_slots = slot_ids, 
+                    block_table = virtual_kv_cache.block_table
+                )
+
+        layers_attention_params: list[AttentionParameters] = []
         for layer_id in range(self.language_model_config.n_layers):
-            attention_params_builder.add_kv_cache(self.mmu.get_kv_cache(seq.virtual_kv_caches[layer_id]))
-
-        layers_attention_params = attention_params_builder.build_attention_parameters()
+            attention_params_builder = attention_params_builders[layer_id]
+            attention_params_builder.add_kv_cache(self.mmu.get_layer_kv_cache(layer_id))
+            layers_attention_params.append(attention_params_builder.build_attention_parameters()[0])
 
         model_params = LanguageModelParameters(
             attention_params = layers_attention_params, 
             all_sequences_decode = layers_attention_params[0].all_sequences_decode, 
             selected_token_ids = selected_token_ids
         )
-        ten_input_ids = torch.tensor(token_ids, dtype=torch.int, device=self.device)
-        ten_position_ids = torch.tensor(position_ids, dtype=torch.int, device=self.device)
+        input_ids_tensor = torch.tensor(token_ids, dtype=torch.int, device=self.device)
+        position_ids_tensor = torch.tensor(position_ids, dtype=torch.int, device=self.device)
 
-        if pixel_values is not None:
-            image_features = self.worker.execute_vision_model(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
-        sample_token_ids = self.worker.execute_language_model(ten_input_ids, image_features, ten_position_ids, model_params).sample_token_ids
+        sample_token_ids = self.worker.execute_language_model(input_ids_tensor, image_features, position_ids_tensor, model_params).sample_token_ids
         sample_token_ids = sample_token_ids.tolist()
 
         if len(selected_token_ids) > 0:
@@ -248,8 +256,6 @@ class InstructionExecutor:
     def __init__(self, config: ExecutorConfig, context: ExecutorContext):
         self.config = config
         self.context = context
-        self.worker = getWorker(config.worker_config, WorkerContext(model_factory_config=context.model_factory_config))
-        context.worker = self.worker
 
         if self.config.batch_image_embed_forward:
             self.image_embed_executor = BatchImageEmbedExecutor(context)

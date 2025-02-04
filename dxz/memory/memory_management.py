@@ -100,7 +100,13 @@ class MemoryManagementUnit:
         """
         raise NotImplementedError
 
+    def get_layer_kv_cache(self, layer_id: int) -> KVCache:
+        raise NotImplementedError
+
     def get_kv_cache(self, virtual_kv_cache: VirtualKVCache) -> KVCache:
+        raise NotImplementedError
+
+    def migrate_blocks(self, src_virtual_kv_cache: VirtualKVCache, dst_virtual_kvcache: VirtualKVCache):
         raise NotImplementedError
 
 
