@@ -135,6 +135,11 @@ class ImageEmbed(Instruction):
         return "IE"
 
 
+class MigrateRequest(Instruction):
+    def __repr__(self):
+        return "MR"
+
+
 class InstructionList:
     def __init__(self, head: Instruction, tail: Instruction, curr: Instruction):
         self.head = head

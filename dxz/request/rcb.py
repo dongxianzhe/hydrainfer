@@ -20,6 +20,12 @@ class RequestControlBlock:
         self.sampling_params = sampling_params
         self.metric = RequestMetric()
 
+    def current_instruction(self) -> Instruction:
+        return self.instructions.curr
+
+    def step(self):
+        self.instructions.curr = self.instructions.curr.next
+
     def is_finished(self) -> bool:
         return self.instructions.curr is None
 
