@@ -14,6 +14,7 @@ from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, Visi
 from dxz.engine.worker import WorkerConfig, WorkerContext, getWorker, Worker
 from dxz.memory.virtual_kv_cache import VirtualKVCache
 from dxz.memory.memory_management import MemoryManagementUnit, getMemoryManagementUnit
+from dxz.engine.scheduler import BatchRequest
 
 
 @dataclass
@@ -53,7 +54,7 @@ class ExecutorContext:
 
 
 class Executor:
-    def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute(self, contexts: BatchRequest):
         raise NotImplementedError
 
 
@@ -79,7 +80,7 @@ class BatchFillExecutor(Executor):
             self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
             self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
 
-    def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return {}
 
@@ -172,7 +173,7 @@ class ImageEmbedExecutor(Executor):
         self.context = context
         self.worker = context.worker
 
-    def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return
         for rcb, instruction in contexts:
@@ -192,7 +193,7 @@ class BatchImageEmbedExecutor(Executor):
         self.context = context
         self.worker = context.worker
 
-    def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return
         n_images: list[int] = []
@@ -221,7 +222,7 @@ class MultiStreamsDecorator(Executor):
         self.stream = stream
         self.executor = executor
 
-    def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return
         with torch.cuda.stream(self.stream):
@@ -234,7 +235,7 @@ class MultiThreadsDecorator:
         self.pool = pool
         self.executor = executor
 
-    def execute(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return
 
@@ -267,12 +268,12 @@ class InstructionExecutor:
             self.pool = ThreadPoolExecutor(max_workers=1)
             self.image_embed_executor = MultiThreadsDecorator(self.pool, self.image_embed_executor)
 
-    def execute_fill(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute_fill(self, contexts: BatchRequest):
         return self.fill_executor.execute(contexts)
 
-    def execute_image_embed(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute_image_embed(self, contexts: BatchRequest):
         return self.image_embed_executor.execute(contexts)
 
-    def execute_empty(self, contexts: list[tuple[RequestControlBlock, Instruction]]):
+    def execute_empty(self, contexts: BatchRequest):
         for rcb, _ in contexts:
             rcb.instructions.curr = rcb.instructions.curr.next

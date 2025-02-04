@@ -5,7 +5,7 @@ import torch
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 from dxz.request.rcb import RequestControlBlock
 from dxz.memory.memory_management import MemoryManagementUnit, MemoryConfig, MemoryContext, getMemoryManagementUnit
-from dxz.engine.scheduler import SchedulerConfig, BatchScheduler
+from dxz.engine.scheduler import SchedulerConfig, BatchScheduler, BatchRequest
 from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
 import argparse
@@ -77,40 +77,39 @@ class Engine:
         self.scheduler.schedule_new(rcbs)
     
     @torch.inference_mode()
-    def step(self) -> dict[int, int]:
+    def step(self):
         # 1. schedule requests
-        contexts = self.scheduler.step()
-        if len(contexts) == 0:
-            return {}
+        batch = self.scheduler.step()
+        if len(batch) == 0:
+            return
 
         # 2. execute instructions
-        fill_contexts = []
-        image_embed_contexts = []
-        empty_contexts = []
-        for context in contexts:
-            rcb, instruction = context
+        batch_fill = BatchRequest()
+        batch_image_embed = BatchRequest()
+        batch_empty = BatchRequest()
+        for rcb, inst in batch:
             if len(rcb.virtual_kv_caches) == 0:
                 rcb.virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(rcb.n_virtual_kv_caches)
-            if isinstance(instruction, Fill):
-                fill_contexts.append(context)
+            if isinstance(inst, Fill):
+                batch_fill.append(rcb)
                 continue
-            if isinstance(instruction, EmptyInstruction):
-                empty_contexts.append(context)
+            if isinstance(inst, EmptyInstruction):
+                batch_empty.append(rcb)
                 continue
-            if isinstance(instruction, ImageEmbed):
-                image_embed_contexts.append(context)
+            if isinstance(inst, ImageEmbed):
+                batch_image_embed.append(rcb)
                 continue
-            raise Exception(f'unsupported instrction {type(instruction)}')
+            raise Exception(f'unsupported instrction {type(inst)}')
 
-        future = self.executor.execute_image_embed(image_embed_contexts)
-        self.executor.execute_fill(fill_contexts)
+        future = self.executor.execute_image_embed(batch_image_embed)
+        self.executor.execute_fill(batch_fill)
         if future is not None:
             future.result()
-        self.executor.execute_empty(empty_contexts)
+        self.executor.execute_empty(batch_empty)
 
         # 3. scheduler requests
         t = time.perf_counter()
-        for rcb, _ in contexts:
+        for rcb, _ in batch:
             if rcb.is_finished():
                 rcb.metric.finished_time = t
                 for vkvc in rcb.virtual_kv_caches:
