@@ -36,6 +36,20 @@ class SchedulerConfig:
         return parser
 
 
+class BatchRequest:
+    def __init__(self, rcbs: Optional[list[RequestControlBlock]] = None):
+        self.rcbs = rcbs if rcbs is not None else []
+
+    def __len__(self):
+        return len(self.rcbs)
+    
+    def __getitem__(self, idx: int) -> tuple[RequestControlBlock, Instruction]:
+        return self.rcbs[idx], self.rcbs[idx].instructions.curr
+
+    def append(self, rcb: RequestControlBlock):
+        self.rcbs.append(rcb)
+
+
 class BatchScheduler:
     def __init__(self, config: SchedulerConfig):
         self.config = config
@@ -53,7 +67,7 @@ class BatchScheduler:
     def schedule_running(self, rcbs: list[RequestControlBlock]):
         self.running += rcbs
 
-    def step(self) -> list[tuple[RequestControlBlock, Instruction]]:
+    def step(self) -> BatchRequest:
         self.step_cnt += 1
         schedule_time = time.perf_counter()
         # 1. get enough requests to participate in the batch
@@ -137,4 +151,4 @@ class BatchScheduler:
                 seq.metric.first_schedule_time = schedule_time
 
         self.running = next_step
-        return [(seq, seq.instructions.curr) for seq in this_step]
+        return BatchRequest(this_step)
