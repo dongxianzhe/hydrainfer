@@ -4,6 +4,7 @@ from dxz.request.rcb import RequestControlBlock
 from dataclasses import dataclass, fields
 from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
 import time
+from dxz.utils.allocate import IncreaingAllocator
 import argparse
 
 @dataclass
@@ -56,12 +57,11 @@ class BatchScheduler:
         self.waiting = Queue()
         self.running: list[RequestControlBlock] = []
         self.step_cnt = 0
-        self.sid_allocator = 0
+        self.sid_allocator = IncreaingAllocator(first_value=1)
     
     def schedule_new(self, rcbs: list[RequestControlBlock]):
         for rcb in rcbs:
-            rcb.sid = self.sid_allocator
-            self.sid_allocator += 1
+            rcb.sid = self.sid_allocator.allocate()
             self.waiting.put(rcb)
     
     def schedule_running(self, rcbs: list[RequestControlBlock]):
