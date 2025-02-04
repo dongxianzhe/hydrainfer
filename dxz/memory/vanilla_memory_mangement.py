@@ -1,8 +1,15 @@
 import torch
+from torch import Tensor
 from dxz.memory.block_allocator import BlockAllocator
 from dxz.memory.kv_cache import KVCache
 from dxz.memory.virtual_kv_cache import VirtualKVCache
 from dxz.memory.memory_management import MemoryConfig, MemoryContext, MemoryManagementUnit
+from dxz.utils.allocate import IncreaingAllocator
+
+try:
+    from dxz._C.data_transfer import block_migration 
+except ImportError:
+    print('block migration lib import failed')
 
 
 class VinallaMemoryManagementUnit(MemoryManagementUnit):
@@ -11,26 +18,35 @@ class VinallaMemoryManagementUnit(MemoryManagementUnit):
         self.context = context
         assert self.config.memory_management_policy == 'vanilla'
         n_blocks_per_layer = config.num_blocks // context.n_layers
-        self.kv_cache = torch.randn(size=(context.n_layers, 2, n_blocks_per_layer, config.block_size, context.num_kv_heads, context.head_size), dtype=context.dtype, device=context.device)
-        self.kv_caches = [KVCache(self.kv_cache[layer_id, 0, :, :, :, :], self.kv_cache[layer_id, 1, :, :, :, :]) for layer_id in range(context.n_layers)]
+        # self.kv_cache = torch.randn(size=(context.n_layers, 2, n_blocks_per_layer, config.block_size, context.num_kv_heads, context.head_size), dtype=context.dtype, device=context.device)
+        self.tensor_kv_caches: list[Tensor] = []
+        self.kv_caches: list[KVCache] = []
+        self.kv_caches_memory_handle: list[block_migration.cudaMemoryIpcHandle] = []
+        for layer_id in range(context.n_layers):
+            kv_cache = torch.randn(size=(2, n_blocks_per_layer, config.block_size, context.num_kv_heads, context.head_size), dtype=context.dtype, device=context.device)
+            self.tensor_kv_caches.append(kv_cache)
+            self.kv_caches.append(KVCache(key_cache=kv_cache[0, :, :, :, :], value_cache=kv_cache[1, :, :, :, :]))
+            self.kv_caches_memory_handle.append(block_migration.get_ipc_mem_handle(kv_cache))
+
         self.block_allocator = BlockAllocator(n_blocks_per_layer)
 
-        self.vid_allocator = 0
-        self.vid2kv_cache = {}
+        self.vid_allocator = IncreaingAllocator(first_value=1)
+
+        for handle in self.kv_caches_memory_handle:
+            print(f'handle {handle}')
 
     def allocate_virtual_kv_caches(self, n_virtual_kv_caches: int) -> list[VirtualKVCache]:
-        assert n_virtual_kv_caches == self.context.n_layers, "not supported other allocation yet"
+        assert n_virtual_kv_caches == self.context.n_layers, f"not supported other allocation yet {n_virtual_kv_caches}"
         virtual_kv_caches: list["VirtualKVCache"] = []
         for layer_id in range(n_virtual_kv_caches):
-            vid = self.vid_allocator
-            self.vid_allocator += 1
             virtual_kv_cache = VirtualKVCache(
-                vid = vid, 
+                vid = self.vid_allocator.allocate(), 
                 n_kv_cache_tokens = 0, 
                 block_table = [], 
+                layer_id = layer_id, 
+                memory_handle=self.kv_caches_memory_handle[layer_id]
             )
             virtual_kv_caches.append(virtual_kv_cache)
-            self.vid2kv_cache[vid] = self.kv_caches[layer_id]
         return virtual_kv_caches
 
     def set(self, virtual_kv_cache: VirtualKVCache, virtual_cache_ids: list[int]) -> list[int]:
@@ -63,11 +79,10 @@ class VinallaMemoryManagementUnit(MemoryManagementUnit):
                 virtual_kv_cache.n_kv_cache_tokens -= self.config.block_size
             del virtual_kv_cache.block_table[virtual_block_id]
 
-
     def realloc(self, virtual_kv_cache: VirtualKVCache, n_tokens: int):
         if n_tokens > virtual_kv_cache.n_kv_cache_tokens:
             n_need_blocks = (n_tokens + self.config.block_size - 1) // self.config.block_size
-            virtual_kv_cache.block_table += self.block_allocator.allocate(n_need_blocks - len(self.block_table))
+            virtual_kv_cache.block_table += self.block_allocator.allocate(n_need_blocks - len(virtual_kv_cache.block_table))
             virtual_kv_cache.n_kv_cache_tokens = n_tokens
         else:
             n_need_blocks = (n_tokens + self.config.block_size - 1) // self.config.block_size
@@ -79,4 +94,25 @@ class VinallaMemoryManagementUnit(MemoryManagementUnit):
         raise NotImplementedError
 
     def get_kv_cache(self, virtual_kv_cache: VirtualKVCache) -> KVCache:
-        return self.vid2kv_cache[virtual_kv_cache.vid]
+        return self.kv_caches[virtual_kv_cache.layer_id]
+
+    def migrate_blocks(self, src_virtual_kv_cache: VirtualKVCache, dst_virtual_kvcache: VirtualKVCache):
+        # if src_memory_handle not in self.src_memory_handle_dict:
+        #     block_migration.register_ipc_mem_handle(src_memory_handle)
+        #     src_memory_handle_dict[]
+        assert src_virtual_kv_cache.memory_handle is not None
+        dev_ptr = block_migration.register_ipc_mem_handle(src_virtual_kv_cache.memory_handle)
+        print(f'dev_ptr {dev_ptr}')
+        block_migration.migrate_blocks(
+            0, # prefill_start_head: int
+            self.context.num_kv_heads, # prefill_end_head: int
+            src_virtual_kv_cache.block_table, # prefill_block_indexes: list[int]
+            0, # decoding_start_head: int
+            self.context.num_kv_heads, # decoding_end_head:int
+            dst_virtual_kvcache.block_table, # decoding_block_indexes: list[int]
+            dev_ptr, # prefill_dev_ptr_index: int
+            self.context.num_kv_heads, # num_heads: int
+            self.tensor_kv_caches[dst_virtual_kvcache.layer_id], # decoding_worker_kv_cache: Tensor
+        )
+        torch.cuda.synchronize()
+        print('torch.cuda.synchronize()')
