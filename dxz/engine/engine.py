@@ -8,6 +8,7 @@ from dxz.memory.memory_management import MemoryManagementUnit, MemoryConfig, Mem
 from dxz.engine.scheduler import SchedulerConfig, BatchScheduler, BatchRequest
 from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
+from dxz.engine.worker import getWorker, WorkerContext, WorkerConfig
 import argparse
 
 
@@ -18,17 +19,20 @@ class EngineConfig:
     memory_config: MemoryConfig = field(default_factory=MemoryConfig)
     scheduler_config: SchedulerConfig = field(default_factory=SchedulerConfig)
     executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
+    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'EngineConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['memory_config', 'scheduler_config', 'executor_config']]
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['worker_config', 'memory_config', 'scheduler_config', 'executor_config']]
         memory_config = MemoryConfig.from_cli_args(args)
         scheduler_config = SchedulerConfig.from_cli_args(args)
         executor_config = ExecutorConfig.from_cli_args(args)
+        worker_config = WorkerConfig.from_cli_args(args)
         config = cls(
             memory_config=memory_config, 
             scheduler_config=scheduler_config, 
             executor_config=executor_config, 
+            worker_config=worker_config, 
             **{attr: getattr(args, attr) for attr in attrs}
         )
         return config
@@ -38,6 +42,7 @@ class EngineConfig:
         parser = MemoryConfig.add_cli_args(parser)
         parser = SchedulerConfig.add_cli_args(parser)
         parser = ExecutorConfig.add_cli_args(parser)
+        parser = WorkerConfig.add_cli_args(parser)
         return parser
 
 
@@ -66,10 +71,13 @@ class Engine:
         # scheduler
         self.scheduler = BatchScheduler(self.config.scheduler_config)
         # executor
+        self.worker = getWorker(config.worker_config, WorkerContext(model_factory_config=context.model_factory_config))
+        context.worker = self.worker
         executor_context = ExecutorContext(
             model_factory_config = context.model_factory_config, 
             block_size = config.memory_config.block_size, 
-            mmu = self.mmu
+            mmu = self.mmu, 
+            worker = self.worker, 
         )
         self.executor = InstructionExecutor(config.executor_config, executor_context)
 
@@ -88,8 +96,6 @@ class Engine:
         batch_image_embed = BatchRequest()
         batch_empty = BatchRequest()
         for rcb, inst in batch:
-            if len(rcb.virtual_kv_caches) == 0:
-                rcb.virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(rcb.n_virtual_kv_caches)
             if isinstance(inst, Fill):
                 batch_fill.append(rcb)
                 continue
