@@ -14,6 +14,7 @@ from dxz.cluster.pnode import PNode, PNodeConfig, PNodeContext
 from dxz.cluster.dnode import DNode, DNodeConfig, DNodeContext
 from dxz.request.request import Request, SamplingParameters
 from dxz.utils.counter import Counter
+from dxz.request.offline_inference_output import OfflineInferenceOutput
 
 @dataclass
 class OfflineClusterConfig:
@@ -83,33 +84,42 @@ class OfflineCluster:
             node.step_loop.remote()
             
 
-    async def generate(self, requests: list[Request]) -> list[GenerateOutput]:
+    async def generate(self, requests: list[Request]) -> list[OfflineInferenceOutput]:
         finished = Counter()
         for request in requests:
             self.enode.add_request.remote(request)
-        outputs: list[GenerateOutput] = []
+        outputs: list[OfflineInferenceOutput] = []
         while finished.value() < len(requests):
-            print('waiting loop')
             output = await self.zmq_recv.recv_pyobj()
             outputs.append(output)
             finished.count()
         return outputs
 
+
 async def main():
-    request = Request(
-        request_id = 0, 
-        prompt = f"What is the content of this image?", 
-        image = None, 
-        image_base64 = None, 
-        sampling_params = SamplingParameters(max_tokens=10)
-    )
+    requests = [
+        Request(
+            request_id = 0, 
+            prompt = f"What is the content of this image?", 
+            image = None, 
+            image_base64 = None, 
+            sampling_params = SamplingParameters(max_tokens=10)
+        ), 
+        Request(
+            request_id = 1, 
+            prompt = f"What is the content of this image?", 
+            image = None, 
+            image_base64 = None, 
+            sampling_params = SamplingParameters(max_tokens=12)
+        ), 
+    ]
     config = OfflineClusterConfig()
     config.model_factory_config.model_name='gpt2'
     config.scheduler_config.debug_mode = True
     mllm = OfflineCluster(config) 
-    outputs = await mllm.generate(requests=[request, request])
+    outputs = await mllm.generate(requests=requests)
     for i, output in enumerate(outputs):
-        print(f'request{i}: {output.text}')
+        print(f'output{i}: {output.text}')
 
 if __name__ == '__main__':
     asyncio.run(main())

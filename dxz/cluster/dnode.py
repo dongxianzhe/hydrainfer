@@ -10,6 +10,7 @@ from dxz.engine.isa import TextFill, MigrateRequest, EmptyInstruction
 from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
 from dxz.engine.worker import Worker, WorkerConfig, getWorker,WorkerContext
 from dxz.request.rcb import RequestControlBlock, OutputTokenProcessor, LogOutputTokenProcessor
+from dxz.request.offline_inference_output import OfflineInferenceOutput
 from dxz.cluster.raynode import RayNode
 
 @dataclass
@@ -77,8 +78,7 @@ class DNode(RayNode):
                 for output_token_processor in rcb.output_token_processors:
                     if isinstance(output_token_processor, LogOutputTokenProcessor):
                         text = self.tokenizer.decode(output_token_processor.token_ids)
-                        from dxz.entrypoint.mllm import GenerateOutput
-                        self.zmq_send.send_pyobj(GenerateOutput(text=text))
+                        self.zmq_send.send_pyobj(OfflineInferenceOutput(text=text))
             else:
                 self.scheduler.schedule_running([rcb])
 
