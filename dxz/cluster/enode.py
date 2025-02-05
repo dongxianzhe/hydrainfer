@@ -3,12 +3,14 @@ import base64
 import asyncio
 from dataclasses import dataclass
 from dxz.model.model_factory import getModelFactory, ModelFactoryConfig, ModelFactoryContext
-from dxz.engine.scheduler import BatchRequest, BatchScheduler, SchedulerConfig
-from dxz.engine.executor import InstructionExecutor, ExecutorConfig, ExecutorContext
-from dxz.cluster.raynode import RayNode
+from dxz.memory.memory_management import MemoryConfig, MemoryContext
 from dxz.request.request import Request
 from dxz.request.rcb import RequestControlBlock
+from dxz.engine.scheduler import BatchRequest, BatchScheduler, SchedulerConfig
+from dxz.engine.executor import InstructionExecutor, ExecutorConfig, ExecutorContext
+from dxz.engine.worker import Worker, WorkerConfig, getWorker,WorkerContext
 from dxz.engine.isa import *
+from dxz.cluster.raynode import RayNode
 
 
 @dataclass
@@ -18,22 +20,28 @@ class ENodeConfig:
 
 @dataclass
 class ENodeContext:
-    executor_config = ExecutorConfig
+    model_factory_config: ModelFactoryConfig
+    memory_config: MemoryConfig
+    executor_config: ExecutorConfig
     scheduler_config: SchedulerConfig
+    worker_config: WorkerConfig
 
 
 class ENode(RayNode):
     def __init__(self, config: ENodeConfig, context: ENodeContext):
-        model_factory = getModelFactory(ModelFactoryConfig, ModelFactoryContext)
+        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext())
         self.scheduler = BatchScheduler(context.scheduler_config)
         self.vision_model_config = model_factory.getVisionModelConfig()
         self.language_model_config = model_factory.getLanguageModelConfig()
         self.tokenizer = model_factory.getTokenizer()
         self.processor = model_factory.getProcessor()
+        self.worker = getWorker(context.worker_config, WorkerContext(
+            model_factory_config=context.model_factory_config
+        ))
         self.executor = InstructionExecutor(context.executor_config, ExecutorContext(
             model_factory_config = context.model_factory_config, 
             block_size = context.memory_config.block_size, 
-            mmu = self.mmu, 
+            mmu = None, 
             worker=self.worker, 
         ))
         self.nodes = []
@@ -147,17 +155,18 @@ class ENode(RayNode):
             instructions = instructions, 
             n_virtual_kv_caches = n_virtual_kv_caches, 
             sampling_params = request.sampling_params, 
-            output_token_processor = None
         )
 
     async def add_request(self, request: Request):
         rcb = await self.process_request(request)
+        from dxz.request.rcb import PrintOutputTokenProcessor, LogOutputTokenProcessor
+        rcb.register_output_token_processor(PrintOutputTokenProcessor())
+        rcb.register_output_token_processor(LogOutputTokenProcessor())
         curr = rcb.instructions.head
         while curr:
             print(curr)
             curr = curr.next
         self.scheduler.schedule_new([rcb])
-        
 
     async def step(self):
         batch: BatchRequest = self.scheduler.step()
@@ -171,14 +180,14 @@ class ENode(RayNode):
                 batch_image_embed.append(rcb)
             else:
                 raise Exception(f'{inst} is not supported in enode')
-        self.executor.execute_image_embed()
+        self.executor.execute_image_embed(batch_image_embed)
         await self.execute_batch_migrate(batch_migrate)
-        for rcb, inst in batch:
+
+        for rcb, inst in batch_image_embed:
             if rcb.is_finished():
                 pass
             else:
-                self.scheduler.schedule_running(rcb)
-        raise NotImplementedError
+                self.scheduler.schedule_running([rcb])
 
     async def step_loop(self):
         while True:

@@ -1,3 +1,4 @@
+import asyncio
 import ray
 from dataclasses import dataclass, field, fields
 from dxz.utils.ray_utils import get_ip_address
@@ -12,6 +13,7 @@ from dxz.cluster.enode import ENode, ENodeConfig, ENodeContext
 from dxz.cluster.pnode import PNode, PNodeConfig, PNodeContext
 from dxz.cluster.dnode import DNode, DNodeConfig, DNodeContext
 from dxz.request.request import Request, SamplingParameters
+from dxz.utils.counter import Counter
 
 @dataclass
 class OfflineClusterConfig:
@@ -21,9 +23,9 @@ class OfflineClusterConfig:
     memory_management_config: MemoryConfig = field(default_factory=MemoryConfig)
     executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
     worker_config: WorkerConfig = field(default_factory=WorkerConfig)
-    enode_config: ENodeConfig
-    pnode_config: PNodeConfig
-    dnode_config: DNodeConfig
+    enode_config: ENodeConfig = field(default_factory=ENodeConfig)
+    pnode_config: PNodeConfig = field(default_factory=PNodeConfig)
+    dnode_config: DNodeConfig = field(default_factory=DNodeConfig)
 
 
 class OfflineCluster:
@@ -38,7 +40,11 @@ class OfflineCluster:
             namespace='dxz',
             lifetime='detached'
         )(ENode).remote(config.enode_config, ENodeContext(
-            
+            model_factory_config = config.model_factory_config, 
+            executor_config = config.executor_config,
+            scheduler_config = config.scheduler_config,
+            memory_config = config.memory_management_config, 
+            worker_config = config.worker_config, 
         ))
         self.pnode = ray.remote(
             num_cpus=0,
@@ -62,6 +68,7 @@ class OfflineCluster:
             namespace='dxz',
             lifetime='detached'
         )(DNode).remote(config.dnode_config, DNodeContext(
+            zmq_url = config.zmq_url, 
             model_factory_config = config.model_factory_config, 
             memory_config = config.memory_management_config, 
             scheduler_config = config.scheduler_config,
@@ -69,22 +76,24 @@ class OfflineCluster:
             worker_config = config.worker_config
         ))
         self.nodes = [self.enode, self.pnode, self.dnode]
-        obj1 = self.enode.register_pnode.remote(self.pnode)
-        obj2 = self.pnode.register_dnode.remote(self.dnode)
+        obj1 = self.enode.register_node.remote(self.pnode)
+        obj2 = self.pnode.register_node.remote(self.dnode)
         ray.get([obj1, obj2])
         for node in self.nodes:
             node.step_loop.remote()
+            
 
     async def generate(self, requests: list[Request]) -> list[GenerateOutput]:
+        finished = Counter()
         for request in requests:
             self.enode.add_request.remote(request)
         outputs: list[GenerateOutput] = []
-        while self.finished.value() < len(requests):
+        while finished.value() < len(requests):
             print('waiting loop')
             output = await self.zmq_recv.recv_pyobj()
             outputs.append(output)
-            self.finished.count()
-        return [output]
+            finished.count()
+        return outputs
 
 async def main():
     request = Request(
@@ -98,9 +107,9 @@ async def main():
     config.model_factory_config.model_name='gpt2'
     config.scheduler_config.debug_mode = True
     mllm = OfflineCluster(config) 
-    outputs = await mllm.generate(requests=[request])
-    for output in outputs:
-        print(output.text)
+    outputs = await mllm.generate(requests=[request, request])
+    for i, output in enumerate(outputs):
+        print(f'request{i}: {output.text}')
 
 if __name__ == '__main__':
     asyncio.run(main())

@@ -65,7 +65,6 @@ User need to decide which index should be used, since the layer_id, rank, tp siz
 */
 
 int64_t register_ipc_mem_handle(std::vector<int64_t> kv_cache_handle_vec) {
-    for(int i = 0;i < kv_cache_handle_vec.size();i ++)printf("%d ",kv_cache_handle_vec[i]);printf("\n");
 	// Convert the handles to cudaIpcMemHandle_t
 	const cudaIpcMemHandle_t kv_cache_handle = bytes2CudaIpcMemHandle(kv_cache_handle_vec);
 	void* devPtr = nullptr;
