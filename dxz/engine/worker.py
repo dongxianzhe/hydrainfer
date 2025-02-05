@@ -114,9 +114,7 @@ class RayWorkers(Worker):
 
 def getWorker(config: WorkerConfig, context: WorkerContext) -> Worker:
     if config.use_ray:
-        print('-----------------------------use ray worker-------------------------------')
         return RayWorkers(config, context)
     if config.parallel_config.is_parallel:
         return RayWorkers(config, context)
-    print('-----------------------------use vanilla worker-------------------------------')
     return VanillaWorker(config, context)

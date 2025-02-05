@@ -9,10 +9,13 @@ from dxz.engine.worker import Worker, getWorker, WorkerConfig, WorkerContext
 from dxz.request.rcb import RequestControlBlock
 from dxz.cluster.raynode import RayNode
 
+
+@dataclass
 class PNodeConfig:
     pass
 
 
+@dataclass
 class PNodeContext:
     model_factory_config: ModelFactoryConfig
     memory_config: MemoryConfig
@@ -60,7 +63,7 @@ class PNode(RayNode):
         self.executor.execute_fill(batch_fills)
         await self.execute_batch_migrate(batch_migrate)
 
-        for rcb, inst in batch:
+        for rcb, inst in batch_fills:
             if rcb.is_finished():
                 for virtual_kv_cache in rcb.virtual_kv_caches:
                     self.mmu.realloc(virtual_kv_cache, 0)
@@ -82,3 +85,6 @@ class PNode(RayNode):
         for rcb, _ in contexts:
             rcb.step()
             node.migrate.remote(rcb)
+
+    async def migrate(self, rcb: RequestControlBlock):
+        self.scheduler.schedule_new([rcb])

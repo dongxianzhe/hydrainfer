@@ -35,7 +35,7 @@ class VinallaMemoryManagementUnit(MemoryManagementUnit):
             print(f'handle {handle}')
 
     def allocate_virtual_kv_caches(self, n_virtual_kv_caches: int) -> list[VirtualKVCache]:
-        assert n_virtual_kv_caches == self.context.n_layers, f"not supported other allocation yet {n_virtual_kv_caches}"
+        assert n_virtual_kv_caches == self.context.n_layers, f"not supported other allocation yet {n_virtual_kv_caches} {self.context.n_layers}"
         virtual_kv_caches: list["VirtualKVCache"] = []
         for layer_id in range(n_virtual_kv_caches):
             virtual_kv_cache = VirtualKVCache(
@@ -117,7 +117,7 @@ class VinallaMemoryManagementUnit(MemoryManagementUnit):
             dst_virtual_kvcache.block_table, # decoding_block_indexes: list[int]
             dev_ptr, # prefill_dev_ptr_index: int
             self.context.num_kv_heads, # num_heads: int
-            self.tensor_kv_caches[dst_virtual_kvcache.layer_id], # decoding_worker_kv_cache: Tensor
+            self.kv_caches_tensor[dst_virtual_kvcache.layer_id], # decoding_worker_kv_cache: Tensor
         )
         torch.cuda.synchronize()
         print('torch.cuda.synchronize()')
