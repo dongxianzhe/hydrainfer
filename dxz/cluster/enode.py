@@ -162,10 +162,7 @@ class ENode(RayNode):
         from dxz.request.rcb import PrintOutputTokenProcessor, LogOutputTokenProcessor
         rcb.register_output_token_processor(PrintOutputTokenProcessor())
         rcb.register_output_token_processor(LogOutputTokenProcessor())
-        curr = rcb.instructions.head
-        while curr:
-            print(curr)
-            curr = curr.next
+        print(rcb.instructions)
         self.scheduler.schedule_new([rcb])
 
     async def step(self):
