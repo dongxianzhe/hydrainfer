@@ -1,3 +1,4 @@
+import io
 from PIL import Image
 import base64
 import asyncio
@@ -11,51 +12,29 @@ from dxz.engine.executor import InstructionExecutor, ExecutorConfig, ExecutorCon
 from dxz.engine.worker import Worker, WorkerConfig, getWorker,WorkerContext
 from dxz.engine.isa import *
 from dxz.cluster.raynode import RayNode
+from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext
+from dxz.request.rcb import PrintOutputTokenProcessor, LogOutputTokenProcessor
 
 
-@dataclass
-class ENodeConfig:
-    pass
-
-
-@dataclass
-class ENodeContext:
-    model_factory_config: ModelFactoryConfig
-    memory_config: MemoryConfig
-    executor_config: ExecutorConfig
-    scheduler_config: SchedulerConfig
-    worker_config: WorkerConfig
-
-
-class ENode(RayNode):
-    def __init__(self, config: ENodeConfig, context: ENodeContext):
-        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext())
-        self.scheduler = BatchScheduler(context.scheduler_config)
-        self.vision_model_config = model_factory.getVisionModelConfig()
-        self.language_model_config = model_factory.getLanguageModelConfig()
-        self.tokenizer = model_factory.getTokenizer()
-        self.processor = model_factory.getProcessor()
-        self.worker = getWorker(context.worker_config, WorkerContext(
-            model_factory_config=context.model_factory_config
-        ))
-        self.executor = InstructionExecutor(context.executor_config, ExecutorContext(
-            model_factory_config = context.model_factory_config, 
-            block_size = context.memory_config.block_size, 
-            mmu = None, 
-            worker=self.worker, 
-        ))
-        self.nodes = []
+class EPDDisaggregateRequestProcessor(RequestProcessor):
+    def __init__(self, config: RequestProcessorConfig, context: RequestProcessorContext):
+        super().__init__()
+        self.tokenizer        = context.tokenizer
+        self.processor        = context.processor
+        self.image_token_id   = context.image_token_id
+        self.num_image_tokens = context.num_image_tokens
+        self.n_layers         = context.n_layers
 
     def insert_image_tokens(self, token_ids: list[int], num_image_tokens):
         # replace each image_token_id with num_image_tokens image_token_id
         inserted_token_ids: list[int] = []
         for token_id in token_ids:
-            if token_id == self.vision_model_config.image_token_id:
-                inserted_token_ids.extend([self.vision_model_config.image_token_id] * (num_image_tokens - 1))
+            if token_id == self.image_token_id:
+                inserted_token_ids.extend([self.image_token_id] * (num_image_tokens - 1))
             inserted_token_ids.append(token_id)
         return inserted_token_ids 
 
-    async def process_request(self, request: Request) -> RequestControlBlock:
+    def process(self, request: Request) -> RequestControlBlock:
         # 1. images
         image: Optional[Image.Image] = None
         images_tensor: Optional[Tensor] = None # (n_images, n_channels, width, height)
@@ -72,18 +51,18 @@ class ENode(RayNode):
         n_pixel_values_images = images_tensor.shape[0] if images_tensor is not None else 0
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt)
-        n_token_ids_images = token_ids.count(self.vision_model_config.image_token_id)
+        n_token_ids_images = token_ids.count(self.image_token_id)
         assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
-        token_ids = self.insert_image_tokens(token_ids, self.vision_model_config.num_image_tokens)
+        token_ids = self.insert_image_tokens(token_ids, self.num_image_tokens)
         n_prompt_tokens = len(token_ids)
         token_ids = token_ids + [-1] * (request.sampling_params.max_tokens - 1) # -1 will be set when executing
         # 3. image_overwrite_mask
-        image_overwrite_mask = [token_id == self.vision_model_config.image_token_id for token_id in token_ids]
+        image_overwrite_mask = [token_id == self.image_token_id for token_id in token_ids]
         # 4. position_ids
         position_ids = list(range(len(token_ids)))
         # 5. cache_ids
-        n_virtual_kv_caches: int = self.language_model_config.n_layers
-        layer_virtual_kv_cache_ids = list(range(self.language_model_config.n_layers))
+        n_virtual_kv_caches: int = self.n_layers
+        layer_virtual_kv_cache_ids = list(range(self.n_layers))
         cache_ids = list(range(len(token_ids)))
         # 6. instruction list
         builder = InstructionListBuilder()
@@ -98,7 +77,7 @@ class ENode(RayNode):
                     image_features = None, 
                     token_ids = token_ids[:n_prompt_tokens], 
                     position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.language_model_config.n_layers)], 
+                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.n_layers)], 
                     kv_cache_ids = layer_virtual_kv_cache_ids, 
                     sample = True, 
                     sample_dst = None, 
@@ -113,7 +92,7 @@ class ENode(RayNode):
                     pixel_values = images_tensor, 
                     token_ids = token_ids[:n_prompt_tokens], 
                     position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.language_model_config.n_layers)], 
+                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.n_layers)], 
                     kv_cache_ids = layer_virtual_kv_cache_ids, 
                     sample = True, 
                     sample_dst = None, 
@@ -124,7 +103,7 @@ class ENode(RayNode):
             prefill = TextFill(
                 token_ids = token_ids[:n_prompt_tokens], 
                 position_ids = position_ids[:n_prompt_tokens], 
-                cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.language_model_config.n_layers)], 
+                cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.n_layers)], 
                 kv_cache_ids = layer_virtual_kv_cache_ids, 
                 sample = True, 
                 sample_dst = None, 
@@ -140,7 +119,7 @@ class ENode(RayNode):
             decode = TextFill(
                 token_ids = token_ids[left:right], 
                 position_ids = position_ids[left:right], 
-                cache_ids = [cache_ids[left:right] for _ in range(self.language_model_config.n_layers)], 
+                cache_ids = [cache_ids[left:right] for _ in range(self.n_layers)], 
                 kv_cache_ids = layer_virtual_kv_cache_ids, 
                 sample = True, 
                 sample_dst = None, 
@@ -157,9 +136,54 @@ class ENode(RayNode):
             sampling_params = request.sampling_params, 
         )
 
+
+@dataclass
+class ENodeConfig:
+    pass
+
+
+@dataclass
+class ENodeContext:
+    model_factory_config: ModelFactoryConfig
+    memory_config: MemoryConfig
+    executor_config: ExecutorConfig
+    scheduler_config: SchedulerConfig
+    worker_config: WorkerConfig
+    request_processor_config: RequestProcessorConfig
+
+
+class ENode(RayNode):
+    def __init__(self, config: ENodeConfig, context: ENodeContext):
+        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext())
+        self.scheduler = BatchScheduler(context.scheduler_config)
+        self.vision_model_config = model_factory.getVisionModelConfig()
+        self.language_model_config = model_factory.getLanguageModelConfig()
+        self.tokenizer = model_factory.getTokenizer()
+        self.processor = model_factory.getProcessor()
+        self.request_processor = EPDDisaggregateRequestProcessor(
+            context.request_processor_config, 
+            RequestProcessorContext(
+                tokenizer = self.tokenizer, 
+                processor = self.processor, 
+                image_token_id = self.vision_model_config.image_token_id, 
+                num_image_tokens = self.vision_model_config.num_image_tokens, 
+                n_layers = self.language_model_config.n_layers, 
+            )
+        )
+        self.worker = getWorker(context.worker_config, WorkerContext(
+            model_factory_config=context.model_factory_config
+        ))
+        self.executor = InstructionExecutor(context.executor_config, ExecutorContext(
+            model_factory_config = context.model_factory_config, 
+            block_size = context.memory_config.block_size, 
+            mmu = None, 
+            worker=self.worker, 
+        ))
+        self.nodes = []
+
+
     async def add_request(self, request: Request):
-        rcb = await self.process_request(request)
-        from dxz.request.rcb import PrintOutputTokenProcessor, LogOutputTokenProcessor
+        rcb = self.request_processor.process(request)
         rcb.register_output_token_processor(PrintOutputTokenProcessor())
         rcb.register_output_token_processor(LogOutputTokenProcessor())
         print(rcb.instructions)

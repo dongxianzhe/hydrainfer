@@ -15,6 +15,7 @@ from dxz.cluster.dnode import DNode, DNodeConfig, DNodeContext
 from dxz.request.request import Request, SamplingParameters
 from dxz.utils.counter import Counter
 from dxz.request.offline_inference_output import OfflineInferenceOutput
+from dxz.request.request_processor import RequestProcessorConfig
 
 @dataclass
 class OfflineClusterConfig:
@@ -27,6 +28,7 @@ class OfflineClusterConfig:
     enode_config: ENodeConfig = field(default_factory=ENodeConfig)
     pnode_config: PNodeConfig = field(default_factory=PNodeConfig)
     dnode_config: DNodeConfig = field(default_factory=DNodeConfig)
+    request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
 
 
 class OfflineCluster:
@@ -46,6 +48,7 @@ class OfflineCluster:
             scheduler_config = config.scheduler_config,
             memory_config = config.memory_management_config, 
             worker_config = config.worker_config, 
+            request_processor_config = config.request_processor_config, 
         ))
         self.pnode = ray.remote(
             num_cpus=0,
