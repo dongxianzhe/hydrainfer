@@ -87,4 +87,5 @@ class PNode(RayNode):
             node.migrate.remote(rcb)
 
     async def migrate(self, rcb: RequestControlBlock):
+        print(rcb.instructions)
         self.scheduler.schedule_new([rcb])

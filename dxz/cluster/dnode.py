@@ -91,6 +91,7 @@ class DNode(RayNode):
         self.nodes.append(node)
 
     async def migrate(self,rcb: RequestControlBlock):
+        print(rcb.instructions)
         # 1. allocate kv cache for request
         dst_virtual_kv_caches = self.mmu.allocate_virtual_kv_caches(rcb.n_virtual_kv_caches)
         for src_virtual_kv_cache, dst_virtual_kv_cache in zip(rcb.virtual_kv_caches, dst_virtual_kv_caches):

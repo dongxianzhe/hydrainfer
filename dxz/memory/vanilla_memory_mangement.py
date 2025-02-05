@@ -107,7 +107,6 @@ class VinallaMemoryManagementUnit(MemoryManagementUnit):
         #     src_memory_handle_dict[]
         assert src_virtual_kv_cache.memory_handle is not None
         dev_ptr = block_migration.register_ipc_mem_handle(src_virtual_kv_cache.memory_handle)
-        print(f'dev_ptr {dev_ptr}')
         block_migration.migrate_blocks(
             0, # prefill_start_head: int
             self.context.num_kv_heads, # prefill_end_head: int
@@ -120,4 +119,4 @@ class VinallaMemoryManagementUnit(MemoryManagementUnit):
             self.kv_caches_tensor[dst_virtual_kvcache.layer_id], # decoding_worker_kv_cache: Tensor
         )
         torch.cuda.synchronize()
-        print('torch.cuda.synchronize()')
+        print('migrate_blocks cuda synchronize')

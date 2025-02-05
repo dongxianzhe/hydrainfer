@@ -146,6 +146,18 @@ class InstructionList:
         self.tail = tail
         self.curr = curr
 
+    def __repr__(self):
+        s = ""
+        curr = self.head
+        while curr:
+            if curr is self.curr:
+                s += "*"
+            s += repr(curr)
+            if curr.next is not None:
+                s += "->"
+            curr = curr.next
+        return s
+
 
 class InstructionListBuilder:
     def __init__(self):
