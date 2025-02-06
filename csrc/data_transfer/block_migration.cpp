@@ -117,6 +117,9 @@ void migrate_blocks(
 	cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 	CHECK(decoding_worker_kv_cache.is_contiguous());
 
+	// for kv cache block migration num_cache_pool is 2 because each token has key cache and value cache
+	// for image cache block migration num_cache_pool is 1
+	const int64_t num_cache_pool = decoding_worker_kv_cache.size(0);
 	// Calculate some misc stuff
 	const int64_t num_blocks = decoding_worker_kv_cache.size(1);
 	const int64_t block_size = decoding_worker_kv_cache.size(2);
@@ -135,7 +138,7 @@ void migrate_blocks(
 	for (int64_t block_id = 0; block_id < num_blocks_to_copy; ++block_id) {
 		const int64_t prefill_block_index = prefill_block_indexes[block_id];
 		const int64_t decoding_block_index = decoding_block_indexes[block_id];
-		for (int64_t is_value = 0; is_value < 2; ++is_value) {
+		for (int64_t is_value = 0; is_value < num_cache_pool; ++is_value) {
 			char* prefill_worker_base_ptr = (char*)(prefill_dev_ptr_vec.at(prefill_dev_ptr_index));
 			if (!prefill_worker_base_ptr) {
 				fprintf(stderr, "Error: registered prefill_worker_base_ptr is null\n");
