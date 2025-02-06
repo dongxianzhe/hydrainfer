@@ -35,6 +35,8 @@ class WorkerConfig:
 @dataclass
 class WorkerContext:
     model_factory_config: ModelFactoryConfig
+    has_vision_model: bool = True
+    has_language_model: bool = True
 
 
 class Worker:
@@ -49,8 +51,10 @@ class VanillaWorker(Worker):
     def __init__(self, config: WorkerConfig, context: WorkerContext):
         model_factory_context = ModelFactoryContext(process_group=None)
         model_factory: ModelFactory = getModelFactory(context.model_factory_config, model_factory_context)
-        self.vision_model = model_factory.getVisionModel() 
-        self.language_model = model_factory.getLanguageModel() 
+        if context.has_vision_model:
+            self.vision_model = model_factory.getVisionModel() 
+        if context.has_language_model:
+            self.language_model = model_factory.getLanguageModel() 
 
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         return self.language_model.forward(input_ids, image_features, position_ids, model_params)

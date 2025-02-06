@@ -37,7 +37,8 @@ class PNode(RayNode):
             device = context.model_factory_config.device, 
         ))
         self.worker = getWorker(context.worker_config, WorkerContext(
-            model_factory_config=context.model_factory_config
+            model_factory_config=context.model_factory_config, 
+            has_vision_model=False, 
         ))
         self.executor = InstructionExecutor(context.executor_config, ExecutorContext(
             model_factory_config = context.model_factory_config, 

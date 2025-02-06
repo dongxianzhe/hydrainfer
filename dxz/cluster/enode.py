@@ -171,7 +171,8 @@ class ENode(RayNode):
             )
         )
         self.worker = getWorker(context.worker_config, WorkerContext(
-            model_factory_config=context.model_factory_config
+            model_factory_config=context.model_factory_config, 
+            has_language_model=False, 
         ))
         self.executor = InstructionExecutor(context.executor_config, ExecutorContext(
             model_factory_config = context.model_factory_config, 
