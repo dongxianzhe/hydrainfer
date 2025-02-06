@@ -3,6 +3,9 @@ from typing import Optional
 
 
 class Instruction:
+    """
+        Instruction is the scheduling granularity of the batch scheduler
+    """
     next: "Instruction" = None
     prev: "Instruction" = None
 
@@ -61,16 +64,21 @@ class ImageFill(Fill):
 
 
 class ImageEmbedFill(Fill):
-    def __init__(self, image_features: Optional[Tensor], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+    def __init__(self, image_token_cache_ids: list[int], image_token_mask: list[bool], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
         super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
-        self.image_features = image_features # (m_tokens, hidden_size)
+        self.image_token_cache_ids = image_token_cache_ids # 0, 1, 2, ..., 575 
+        self.image_token_mask = image_token_mask
 
     def __repr__(self):
         return "EF"
 
-
     def chunk_prefill(self, chunk_size: int):
-        rest_text_fill = ImageEmbedFill(
+        assert chunk_size > 0 and chunk_size < len(self.token_ids), f"invalid chunk prefill size {chunk_size}"
+        image_token_mask_chunk = self.image_token_mask[:chunk_size]
+        num_image_token = sum(image_token_mask_chunk)
+        rest_fill = ImageEmbedFill(
+            image_token_cache_ids = self.image_token_cache_ids[num_image_token:], 
+            image_token_mask = self.image_token_mask[chunk_size:], 
             image_features = self.image_features[chunk_size:, ...], 
             token_ids = self.token_ids[chunk_size:], 
             position_ids = self.position_ids[chunk_size:], 
@@ -79,8 +87,9 @@ class ImageEmbedFill(Fill):
             sample = self.sample, 
             sample_dst = self.sample_dst, 
         )
-        self.image_features = self.image_features[:chunk_size, ...],  
-        self.insert_next(rest_text_fill)
+        self.insert_next(rest_fill)
+        self.image_token_cache_ids = self.image_token_cache_ids[:num_image_token]
+        self.image_token_mask = self.image_token_mask[:chunk_size]
         self.token_ids = self.token_ids[:chunk_size]
         self.position_ids = self.position_ids[:chunk_size]
         self.cache_ids = [layer_cahce_ids[:chunk_size] for layer_cahce_ids in self.cache_ids]
@@ -125,7 +134,7 @@ class EmptyInstruction(Instruction):
 
 
 class ImageEmbed(Instruction):
-    def __init__(self, pixel_values: Tensor, image_features_dst: Optional[ImageEmbedFill], token_pruning_params: dict):
+    def __init__(self, pixel_values: Tensor, image_features_dst: list[int], token_pruning_params: dict):
         super().__init__()
         self.pixel_values = pixel_values
         self.image_features_dst = image_features_dst
