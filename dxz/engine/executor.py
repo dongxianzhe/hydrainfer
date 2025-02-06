@@ -38,7 +38,6 @@ class ExecutorConfig:
         parser.add_argument('--batch-image-embed-forward', action='store_true', help='Enable batch image embedding forwarding.')
         parser.add_argument('--multi-streams-forward', action='store_true', help='Enable multi-stream forwarding.')
         parser.add_argument('--multi-threads-forward', action='store_true', help='Enable multi-thread forwarding.')
-        parser = WorkerConfig.add_cli_args(parser)
         return parser
 
 
@@ -118,15 +117,26 @@ class BatchFillExecutor(Executor):
         token_ids         : list[int] = []
         position_ids      : list[int] = []
         selected_token_ids: list[int] = []
-        attention_params_builders = [AttentionParametersBuilder(
-            num_qo_heads = self.language_model_config.n_qo_heads,
-            num_kv_heads = self.language_model_config.n_kv_heads,
-            head_dim = self.language_model_config.head_dim, 
-            block_size = self.context.block_size, 
-            device = self.device, 
-            flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper if layer_id == 0 else None, 
-            flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper if layer_id == 0 else None, 
-        ) for layer_id in range(self.language_model_config.n_layers)]
+        if self.config.use_flash_infer:
+            attention_params_builder = AttentionParametersBuilder(
+                num_qo_heads = self.language_model_config.n_qo_heads,
+                num_kv_heads = self.language_model_config.n_kv_heads,
+                head_dim = self.language_model_config.head_dim, 
+                block_size = self.context.block_size, 
+                device = self.device, 
+                flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper, 
+                flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper, 
+            )
+        else:
+            attention_params_builders = [AttentionParametersBuilder(
+                num_qo_heads = self.language_model_config.n_qo_heads,
+                num_kv_heads = self.language_model_config.n_kv_heads,
+                head_dim = self.language_model_config.head_dim, 
+                block_size = self.context.block_size, 
+                device = self.device, 
+                flash_infer_batch_prefill_handler = None, 
+                flash_infer_batch_decode_handler = None, 
+            ) for layer_id in range(self.language_model_config.n_layers)]
         for seq, inst in contexts:
             token_ids += inst.token_ids
             position_ids += inst.position_ids
@@ -136,18 +146,32 @@ class BatchFillExecutor(Executor):
             for layer_id in range(self.language_model_config.n_layers):
                 virtual_kv_cache = seq.virtual_kv_caches[inst.kv_cache_ids[layer_id]]
                 slot_ids = self.mmu.set(virtual_kv_cache, inst.cache_ids[layer_id])
-                attention_params_builders[layer_id].add_request(
-                    q_seq_len = len(inst.token_ids), 
-                    kv_seq_len = virtual_kv_cache.n_kv_cache_tokens, 
-                    new_cache_slots = slot_ids, 
-                    block_table = virtual_kv_cache.block_table
-                )
+                if self.config.use_flash_infer:
+                    if layer_id == 0:
+                        attention_params_builder.add_request(
+                            q_seq_len = len(inst.token_ids), 
+                            kv_seq_len = virtual_kv_cache.n_kv_cache_tokens, 
+                            new_cache_slots = slot_ids, 
+                            block_table = virtual_kv_cache.block_table
+                        )
+                else:
+                    attention_params_builders[layer_id].add_request(
+                        q_seq_len = len(inst.token_ids), 
+                        kv_seq_len = virtual_kv_cache.n_kv_cache_tokens, 
+                        new_cache_slots = slot_ids, 
+                        block_table = virtual_kv_cache.block_table
+                    )
 
-        layers_attention_params: list[AttentionParameters] = []
-        for layer_id in range(self.language_model_config.n_layers):
-            attention_params_builder = attention_params_builders[layer_id]
-            attention_params_builder.add_kv_cache(self.mmu.get_layer_kv_cache(layer_id))
-            layers_attention_params.append(attention_params_builder.build_attention_parameters()[0])
+        if self.config.use_flash_infer:
+            for layer_id in range(self.language_model_config.n_layers):
+                attention_params_builder.add_kv_cache(self.mmu.get_layer_kv_cache(layer_id))
+            layers_attention_params = attention_params_builder.build_attention_parameters()
+        else:
+            layers_attention_params: list[AttentionParameters] = []
+            for layer_id in range(self.language_model_config.n_layers):
+                attention_params_builder = attention_params_builders[layer_id]
+                attention_params_builder.add_kv_cache(self.mmu.get_layer_kv_cache(layer_id))
+                layers_attention_params.append(attention_params_builder.build_attention_parameters()[0])
 
         model_params = LanguageModelParameters(
             attention_params = layers_attention_params, 
