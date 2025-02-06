@@ -63,12 +63,37 @@ class LlavaForConditionalGeneration(nn.Module):
 class LlavaVisionModel(VisionModel):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
-        model_ref = LlavaForConditionalGeneration.from_safetensor(model_path, dtype, device)
-        config_ref = model_ref.config
-        self.vision_feature_layer = config_ref.vision_feature_layer
+        # 1. config
+        config = LlavaConfig.from_pretrained(model_path)
+        self.vision_feature_layer = config.vision_feature_layer
+        # 2. create model
+        torch.set_default_dtype(dtype)
+        with torch.device(device):
+            self.vision_tower = CLIPVisionModel(config.vision_config)
+            self.multi_modal_projector = LlavaMultiModalProjector(config)
+        torch.set_default_dtype(torch.float)
+        # 3. load vision_tower state dict
+        state_dict = self.vision_tower.state_dict()
+        state_dict.update(self.multi_modal_projector.state_dict())
+        loaded_set = set() # used to verify all weight are loaded
+        for entry in os.scandir(model_path):
+            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
+                print(f'load safetensor from {entry.path}')
+                for name, weight in safetensors.torch.load_file(entry.path).items():
+                    if name.startswith('vision_tower.'):
+                        state_dict[name.removeprefix('vision_tower.')].copy_(weight)
+                        loaded_set.add(name)
+                    elif name.startswith('multi_modal_projector.'):
+                        state_dict[name.removeprefix('multi_modal_projector.')].copy_(weight)
+                        loaded_set.add(name)
 
-        self.vision_tower = model_ref.vision_tower
-        self.multi_modal_projector = model_ref.multi_modal_projector
+        self.vision_tower.to(dtype)
+        self.vision_tower.eval()
+        self.multi_modal_projector.to(dtype)
+        self.multi_modal_projector.eval()
+        # 4. verify
+        assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
+
     
     def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
         # pixel_values (n_images, n_channels, height, width)
@@ -81,18 +106,29 @@ class LlavaVisionModel(VisionModel):
 class LlavaLanguageModel(LanguageModel):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
-        model_ref = LlavaForConditionalGeneration.from_safetensor(model_path, dtype, device)
-        config_ref = model_ref.config
-        self.image_token_id = config_ref.image_token_index
+        # 1. config
+        config = LlavaConfig.from_pretrained(model_path)
+        self.image_token_id = config.image_token_index
+        # 2. create model
+        torch.set_default_dtype(dtype)
+        with torch.device(device):
+            self.language_model = LlamaForCausalLM(config.text_config)
+        torch.set_default_dtype(torch.float)
+        # 3. load vision_tower state dict
+        state_dict = self.language_model.state_dict()
+        loaded_set = set() # used to verify all weight are loaded
+        for entry in os.scandir(model_path):
+            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
+                print(f'load safetensor from {entry.path}')
+                for name, weight in safetensors.torch.load_file(entry.path).items():
+                    if name.startswith('language_model.'):
+                        state_dict[name.removeprefix('language_model.')].copy_(weight)
+                        loaded_set.add(name)
 
-        self.language_model = model_ref.language_model
-        self.config = LanguageModelConfig(
-            n_layers = config_ref.text_config.num_hidden_layers, 
-            max_position_embeddings = config_ref.text_config.max_position_embeddings, 
-            n_qo_heads = config_ref.text_config.num_attention_heads, 
-            n_kv_heads = config_ref.text_config.num_key_value_heads, 
-            head_dim = config_ref.text_config.head_dim, 
-        )
+        self.language_model.to(dtype)
+        self.language_model.eval()
+        # 4. verify
+        assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
     
     def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         # input_ids      (n_tokens + m_tokens) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
