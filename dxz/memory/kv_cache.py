@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 from dxz.memory.block_allocator import BlockAllocator
+from dxz.memory import TokenCache
 
 try:
     from dxz._C.kernel.kv_cache_kernels import set_kv_cache as set_kv_cache_kernel
@@ -44,3 +45,9 @@ class KVCache:
                 block_offset = slot_ids[i] % self.block_size
                 self.key_cache[block_id, block_offset, :, :] = keys[i, :, :]
                 self.value_cache[block_id, block_offset, :, :] = values[i, :, :]
+
+    @classmethod
+    def from_token_cache(cls, token_cache: TokenCache):
+        tensors = TokenCache.get_caches
+        assert len(tensors) == 2, f'can not convert token_cache with {len(tensors)} to kv cache'
+        return KVCache(token_cache[0], token_cache[1])
