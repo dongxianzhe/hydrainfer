@@ -36,12 +36,9 @@ class TokenCache:
             assert slot_ids.shape[0] == value.shape[0], f"{slot_ids[0].shape} {value.shape[0]}"
             assert slot_ids.device == value.device, f"{slot_ids.device} {value.device}"
 
-        num_tokens = slot_ids.shape[0]
-        for i in range(num_tokens):
-            block_id = slot_ids[i] // self.block_size
-            block_offset = slot_ids[i] % self.block_size
-            for cache, value in zip(self.caches, values):
-                cache[block_id, block_offset, :, :] = value[i, :, :]
+        for cache, value in zip(self.caches, values):
+            slot_view = cache.view(-1, cache.shape[-2], cache.shape[-1])
+            cache[slot_ids, :, :] = value
 
 
 @dataclass
@@ -80,7 +77,7 @@ class TokenCacheBlockManager:
         self.block_allocator = BlockAllocator(self.n_blocks)
         self.vid_allocator = IncreaingAllocator(first_value=1)
 
-    def allocate(self) -> VirtualTokenCache:
+    def allocate_virtual_cache(self) -> VirtualTokenCache:
         return VirtualTokenCache(
             vid = self.vid_allocator.allocate(), 
             n_cache_tokens = 0, 
@@ -93,7 +90,7 @@ class TokenCacheBlockManager:
         n_tokens = max(virtual_cache_ids) + 1
         n_blocks = (n_tokens + self.block_size - 1) // self.block_size
         if len(virtual_cache.block_table) < n_blocks:
-            virtual_cache.block_table += self.block_allocators.allocate(n_blocks - len(virtual_cache.block_table))
+            virtual_cache.block_table += self.block_allocator.allocate(n_blocks - len(virtual_cache.block_table))
         if len(virtual_cache.block_table) < n_blocks:
             raise Exception(f'not enough cache, total n_blocks {self.n_blocks}')
         # 2. set vitual cache
@@ -111,7 +108,7 @@ class TokenCacheBlockManager:
     def free_blocks(self, virtual_cache: VirtualTokenCache, virtual_block_ids: list[int]):
         for virtual_block_id in sorted(virtual_block_ids, reverse=True):
             physical_block_id = virtual_cache.block_table[virtual_block_id]
-            self.block_allocators.free([physical_block_id])
+            self.block_allocator.free([physical_block_id])
             if virtual_block_id == len(virtual_cache.block_tables) - 1:
                 virtual_cache.n_cache_tokens -= (virtual_cache.n_cache_tokens + self.block_size - 1) % self.block_size + 1
             else:
@@ -121,11 +118,11 @@ class TokenCacheBlockManager:
     def realloc(self, virtual_cache: VirtualTokenCache, n_tokens: int):
         if n_tokens > virtual_cache.n_cache_tokens:
             n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
-            virtual_cache.block_table += self.block_allocators.allocate(n_need_blocks - len(virtual_cache.block_table))
+            virtual_cache.block_table += self.block_allocator.allocate(n_need_blocks - len(virtual_cache.block_table))
             virtual_cache.n_cache_tokens = n_tokens
         else:
             n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
-            self.block_allocators.free(virtual_cache.block_table[n_need_blocks:])
+            self.block_allocator.free(virtual_cache.block_table[n_need_blocks:])
             virtual_cache.block_table = virtual_cache.block_table[:n_need_blocks]
             virtual_cache.n_cache_tokens = n_tokens
 
