@@ -1,9 +1,9 @@
 from dxz.request import Request
-from dxz.engine import RequestControlBlock
+from dxz.engine import RequestControlBlock, RequestProcessParameters
 
 
 class Engine:
-    def add_request(request: Request):
+    def add_request(self, request: Request, params: RequestProcessParameters):
         raise NotImplementedError
 
     def step(self):
@@ -11,7 +11,7 @@ class Engine:
 
 
 class AsyncEngine:
-    async def add_request(self, request: Request):
+    async def add_request(self, request: Request, params: RequestProcessParameters):
         raise NotImplementedError
 
     async def step(self):
