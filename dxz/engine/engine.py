@@ -1,124 +1,27 @@
-import time
-from typing import Optional
-from dataclasses import dataclass, field, fields
-import torch
-from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
-from dxz.request.rcb import RequestControlBlock
-from dxz.memory.memory_management import MemoryManagementUnit, MemoryConfig, MemoryContext, getMemoryManagementUnit
-from dxz.engine.scheduler import SchedulerConfig, BatchScheduler, BatchRequest
-from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
-from dxz.engine.executor import InstructionExecutor, ExecutorContext, ExecutorConfig
-from dxz.engine.worker import getWorker, WorkerContext, WorkerConfig
-import argparse
-
-
-
-
-@dataclass
-class EngineConfig:
-    memory_config: MemoryConfig = field(default_factory=MemoryConfig)
-    scheduler_config: SchedulerConfig = field(default_factory=SchedulerConfig)
-    executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
-    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
-
-    @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> 'EngineConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['worker_config', 'memory_config', 'scheduler_config', 'executor_config']]
-        memory_config = MemoryConfig.from_cli_args(args)
-        scheduler_config = SchedulerConfig.from_cli_args(args)
-        executor_config = ExecutorConfig.from_cli_args(args)
-        worker_config = WorkerConfig.from_cli_args(args)
-        config = cls(
-            memory_config=memory_config, 
-            scheduler_config=scheduler_config, 
-            executor_config=executor_config, 
-            worker_config=worker_config, 
-            **{attr: getattr(args, attr) for attr in attrs}
-        )
-        return config
-
-    @staticmethod
-    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser = MemoryConfig.add_cli_args(parser)
-        parser = SchedulerConfig.add_cli_args(parser)
-        parser = ExecutorConfig.add_cli_args(parser)
-        parser = WorkerConfig.add_cli_args(parser)
-        return parser
-
-
-@dataclass
-class EngineContext:
-    model_factory_config: ModelFactoryConfig
+from dxz.request import Request
+from dxz.engine import RequestControlBlock
 
 
 class Engine:
-    def __init__(self, config: EngineConfig, context: EngineContext):
-        self.config = config
-        # memory
-        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext())
-        language_model_config = model_factory.getLanguageModelConfig()
-        self.memory_context = MemoryContext(
-            n_layers = language_model_config.n_layers,
-            head_size = language_model_config.head_dim, 
-            num_kv_heads = language_model_config.n_kv_heads, 
-            dtype = context.model_factory_config.dtype, 
-            device = context.model_factory_config.device, 
-        )
-        self.mmu = getMemoryManagementUnit(
-            config = self.config.memory_config, 
-            context = self.memory_context, 
-        )
-        # scheduler
-        self.scheduler = BatchScheduler(self.config.scheduler_config)
-        # executor
-        self.worker = getWorker(config.worker_config, WorkerContext(model_factory_config=context.model_factory_config))
-        context.worker = self.worker
-        executor_context = ExecutorContext(
-            model_factory_config = context.model_factory_config, 
-            block_size = config.memory_config.block_size, 
-            mmu = self.mmu, 
-            worker = self.worker, 
-        )
-        self.executor = InstructionExecutor(config.executor_config, executor_context)
+    def add_request(request: Request):
+        raise NotImplementedError
 
-    def schedule(self, rcbs: list[RequestControlBlock]):
-        self.scheduler.schedule_new(rcbs)
-    
-    @torch.inference_mode()
     def step(self):
-        # 1. schedule requests
-        batch = self.scheduler.step()
-        if len(batch) == 0:
-            return
+        raise NotImplementedError
 
-        # 2. execute instructions
-        batch_fill = BatchRequest()
-        batch_image_embed = BatchRequest()
-        batch_empty = BatchRequest()
-        for rcb, inst in batch:
-            if isinstance(inst, Fill):
-                batch_fill.append(rcb)
-                continue
-            if isinstance(inst, EmptyInstruction):
-                batch_empty.append(rcb)
-                continue
-            if isinstance(inst, ImageEmbed):
-                batch_image_embed.append(rcb)
-                continue
-            raise Exception(f'unsupported instrction {type(inst)}')
 
-        future = self.executor.execute_image_embed(batch_image_embed)
-        self.executor.execute_fill(batch_fill)
-        if future is not None:
-            future.result()
-        self.executor.execute_empty(batch_empty)
+class AsyncEngine:
+    async def add_request(self, request: Request):
+        raise NotImplementedError
 
-        # 3. scheduler requests
-        t = time.perf_counter()
-        for rcb, _ in batch:
-            if rcb.is_finished():
-                rcb.metric.finished_time = t
-                for vkvc in rcb.virtual_kv_caches:
-                    self.mmu.realloc(vkvc, 0)
-            else:
-                self.scheduler.schedule_running([rcb])
+    async def step(self):
+        raise NotImplementedError
+
+    async def step_loop(self):
+        raise NotImplementedError
+
+    async def register_node(self, node: "AsyncEngine"): 
+        raise NotImplementedError
+
+    async def migrate(self, rcb: RequestControlBlock):
+        raise NotImplementedError

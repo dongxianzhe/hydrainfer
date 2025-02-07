@@ -1,14 +1,13 @@
+import time
 from queue import Queue
 from typing import Literal, Optional
-from dxz.request.rcb import RequestControlBlock
 from dataclasses import dataclass, fields
-from dxz.engine.isa import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed
-import time
+from dxz.engine import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock
 from dxz.utils.allocate import IncreaingAllocator
 import argparse
 
 @dataclass
-class SchedulerConfig:
+class BatchSchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
@@ -19,7 +18,7 @@ class SchedulerConfig:
     debug_mode: bool = False
 
     @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> 'SchedulerConfig':
+    def from_cli_args(cls, args: argparse.Namespace) -> 'BatchSchedulerConfig':
         attrs = [attr.name for attr in fields(cls)]
         config = cls(**{attr: getattr(args, attr) for attr in attrs})
         return config
@@ -52,7 +51,7 @@ class BatchRequest:
 
 
 class BatchScheduler:
-    def __init__(self, config: SchedulerConfig):
+    def __init__(self, config: BatchSchedulerConfig):
         self.config = config
         self.waiting = Queue()
         self.running: list[RequestControlBlock] = []

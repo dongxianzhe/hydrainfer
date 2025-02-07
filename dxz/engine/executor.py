@@ -5,8 +5,7 @@ from torch import Tensor
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, field
-from dxz.request.rcb import RequestControlBlock
-from dxz.engine.isa import Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction
+from dxz.engine import RequestControlBlock, Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction
 from dxz.layer.causal_attention import AttentionParametersBuilder, AttentionParameters
 from dxz.model.parameters import LanguageModelParameters, VisionModelParameters
 from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
@@ -20,7 +19,7 @@ from dxz.engine.scheduler import BatchRequest
 @dataclass
 class ExecutorConfig:
     use_flash_infer: bool = False
-    batch_image_embed_forward: bool = True
+    batch_image_embed_forward: bool = False
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
 
@@ -46,6 +45,9 @@ class ExecutorContext:
     model_factory_config: ModelFactoryConfig
     block_size: int
     mmu: MemoryManagementUnit
+    image_token_mmu: MemoryManagementUnit
+    dtype: torch.dtype
+    device: torch.device
     worker: Worker = None
 
 
@@ -202,9 +204,10 @@ class BatchFillExecutor(Executor):
             rcb.instructions.curr = rcb.instructions.curr.next
 
 class ImageEmbedExecutor(Executor):
-    def __init__(self, context: ExecutorContext):
+    def __init__(self, config: ExecutorConfig, context: ExecutorContext):
         self.context = context
         self.worker = context.worker
+        self.mmu = context.image_token_mmu
 
     def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
@@ -222,13 +225,21 @@ class ImageEmbedExecutor(Executor):
 
 
 class BatchImageEmbedExecutor(Executor):
-    def __init__(self, context: ExecutorContext):
+    def __init__(self, config: ExecutorConfig, context: ExecutorContext):
         self.context = context
         self.worker = context.worker
+        self.mmu = self.context.image_token_mmu
+        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext(process_group=None))
+        self.language_model_config = model_factory.getLanguageModelConfig()
+        self.n_qo_heads = self.language_model_config.n_qo_heads
+        self.head_dim = self.language_model_config.head_dim
 
     def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return
+        for rcb, _ in contexts:
+            if rcb.virtual_token_cache is None:
+                rcb.virtual_token_cache = self.mmu.allocate_virtual_kv_caches(n_virtual_kv_caches=1)[0]
         n_images: list[int] = []
         batch_pixel_values: list[Tensor] = []
         for rcb, instruction in contexts:
@@ -239,11 +250,19 @@ class BatchImageEmbedExecutor(Executor):
 
         vision_params = VisionModelParameters(return_last_layer_attention=False)
         image_features = self.worker.execute_vision_model(pixel_values, vision_params).image_features
+        print(f'image_features.shape {image_features.shape}')
+        print(f'instruction.image_features_dst {instruction.image_features_dst}')
 
         left = 0
         for i, (rcb, instruction) in enumerate(contexts):
+            # set cache logically
+            print(f'type(rcb.virtual_token_cache) {type(rcb.virtual_token_cache)}')
+            slot_ids = self.mmu.set(rcb.virtual_token_cache, instruction.image_features_dst)
+            print(f'slot_ids {slot_ids}')
+            # set cache physically
             right = left + n_images[i]
-            instruction.image_features_dst.image_features = image_features[left: right, :, :]
+            request_image_features = image_features[left: right, :, :] # (n_images, n_image_tokens, hidden_size)
+            tokens = request_image_features.view(-1, self.n_qo_heads, self.head_dim)
             left += n_images[i]
 
         for rcb, _ in contexts:
@@ -282,9 +301,9 @@ class InstructionExecutor:
         self.context = context
 
         if self.config.batch_image_embed_forward:
-            self.image_embed_executor = BatchImageEmbedExecutor(context)
+            self.image_embed_executor = BatchImageEmbedExecutor(config, context)
         else:
-            self.image_embed_executor = ImageEmbedExecutor(context)
+            self.image_embed_executor = ImageEmbedExecutor(config, context)
 
         self.fill_executor = BatchFillExecutor(config, context)
 
