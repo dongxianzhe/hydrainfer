@@ -1,33 +1,17 @@
+from typing import Optional
 from dxz.engine.isa import Instruction, InstructionList
 from dxz.memory.virtual_kv_cache import VirtualKVCache
 from dxz.request.metric import RequestMetric
 from dxz.request.request import SamplingParameters
+from dxz.request.output_token_processor import OutputTokenProcessor
 
-class OutputTokenProcessor:
-    def append_token_id(self, token_id: int, is_last_token: bool=False):
-        raise Exception('interface not implemented')
-
-
-class PrintOutputTokenProcessor(OutputTokenProcessor):
-    def __init__(self):
-        pass
-
-    def append_token_id(self, token_id, is_last_token = False):
-        print(f'output token {token_id}, {is_last_token}')
-
-
-class LogOutputTokenProcessor(OutputTokenProcessor):
-    def __init__(self):
-        self.token_ids: list[int] = []
-
-    def append_token_id(self, token_id, is_last_token = False):
-        self.token_ids.append(token_id)
 
 class RequestControlBlock:
     def __init__(self, instructions: InstructionList, n_virtual_kv_caches: int, sampling_params: SamplingParameters):
         self.instructions: InstructionList = instructions
         self.n_virtual_kv_caches = n_virtual_kv_caches
         self.virtual_kv_caches: list[VirtualKVCache] = []
+        self.virtual_token_cache: VirtualKVCache = None
 
         self.sid: int = -1
 

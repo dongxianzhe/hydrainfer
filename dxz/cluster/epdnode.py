@@ -69,13 +69,15 @@ class SingleNodeRequestProcessor(RequestProcessor):
         builder = InstructionListBuilder()
         if images_tensor is not None:
             if self.config.disaggregate_embed_prefill:
+                image_token_cache_ids = list(range(n_pixel_values_images * self.context.num_image_tokens))
                 embed = ImageEmbed(
                     pixel_values = images_tensor,
-                    image_features_dst = None,
+                    image_features_dst = image_token_cache_ids,
                     token_pruning_params = None, 
                 )
                 prefill = ImageEmbedFill(
-                    image_features = None, 
+                    image_token_cache_ids=image_token_cache_ids, 
+                    image_token_mask=image_overwrite_mask[:n_prompt_tokens], 
                     token_ids = token_ids[:n_prompt_tokens], 
                     position_ids = position_ids[:n_prompt_tokens], 
                     cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.context.n_layers)], 
@@ -83,7 +85,6 @@ class SingleNodeRequestProcessor(RequestProcessor):
                     sample = True, 
                     sample_dst = None, 
                 )
-                embed.image_features_dst = prefill
                 builder.append(embed)
                 builder.append(prefill)
             else:
