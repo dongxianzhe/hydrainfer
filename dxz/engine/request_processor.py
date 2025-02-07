@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
-from dxz.engine import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor
+from dxz.engine import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor
 
 
 @dataclass
@@ -40,10 +40,13 @@ class RequestProcessorContext:
     n_layers: int
     ep_migrate: bool = False
     pd_migrate: bool = False
+    batch_scheduler: BatchScheduler = None
 
 
+@dataclass
 class RequestProcessParameters:
     output_token_processors: list[OutputTokenProcessor]
+    print_output_text: bool = False
 
 
 class RequestProcessor:
@@ -57,9 +60,10 @@ class RequestProcessor:
         if config.multi_thread_request_process:
             self.lock = threading.Lock()
             self.executor = ThreadPoolExecutor(max_workers=32)
+        self.batch_scheduler = context.batch_scheduler
 
 
-    def process(self, request: Request, params: RequestProcessParameters) -> RequestControlBlock:
+    def process(self, request: Request, params: RequestProcessParameters):
         if self.config.multi_thread_request_process:
             self.executor.map(self._request_process_lock_wrapper, [(request, params)])
         else:
@@ -78,7 +82,7 @@ class RequestProcessor:
             inserted_token_ids.append(token_id)
         return inserted_token_ids 
 
-    def _request_process(self, request: Request, params: RequestProcessParameters) -> RequestControlBlock:
+    def _request_process(self, request: Request, params: RequestProcessParameters):
         # 1. images
         image: Optional[Image.Image] = None
         images_tensor: Optional[Tensor] = None # (n_images, n_channels, width, height)
@@ -182,4 +186,9 @@ class RequestProcessor:
         )
         for output_token_processor in params.output_token_processors:
             rcb.register_output_token_processor(output_token_processor)
-        return rcb
+
+        if params.print_output_text:
+            rcb.register_output_token_processor(PrintTextOutputTokenProcessor(self.tokenizer))
+
+        if self.batch_scheduler:
+            self.batch_scheduler.schedule_new(rcb)
