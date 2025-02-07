@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field, fields
 
+
 @dataclass
 class OfflineInferenceOutput:
     text : str = ""

@@ -1,10 +1,12 @@
-from typing import Optional, Literal
 from PIL import Image
+from typing import Optional, Literal
 from dataclasses import dataclass, field
+
 
 @dataclass
 class SamplingParameters:
     max_tokens: int = 50
+
 
 @dataclass
 class TokenParameters:
