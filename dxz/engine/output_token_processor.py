@@ -19,6 +19,14 @@ class PrintOutputTokenProcessor(OutputTokenProcessor):
         print(f'output token {token_id}, {is_last_token}')
 
 
+class PrintTextOutputTokenProcessor(OutputTokenProcessor):
+    def __init__(self, tokenizer: AutoTokenizer):
+        self.tokenizer = tokenizer
+
+    def append_token_id(self, token_id, is_last_token = False):
+        print(f'output token {self.tokenizer.decode(token_id)}, {is_last_token}')
+
+
 class LogOutputTokenProcessor(OutputTokenProcessor):
     def __init__(self):
         self.token_ids: list[int] = []

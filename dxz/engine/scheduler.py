@@ -58,13 +58,12 @@ class BatchScheduler:
         self.step_cnt = 0
         self.sid_allocator = IncreaingAllocator(first_value=1)
     
-    def schedule_new(self, rcbs: list[RequestControlBlock]):
-        for rcb in rcbs:
-            rcb.sid = self.sid_allocator.allocate()
-            self.waiting.put(rcb)
+    def schedule_new(self, rcb: RequestControlBlock):
+        rcb.sid = self.sid_allocator.allocate()
+        self.waiting.put(rcb)
     
-    def schedule_running(self, rcbs: list[RequestControlBlock]):
-        self.running += rcbs
+    def schedule_running(self, rcb: RequestControlBlock):
+        self.running.append(rcb)
 
     def step(self) -> BatchRequest:
         self.step_cnt += 1

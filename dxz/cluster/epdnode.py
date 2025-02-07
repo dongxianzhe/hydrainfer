@@ -1,205 +1,176 @@
-import io
 import time
-import base64
-import threading
-from PIL import Image
-from torch import Tensor
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, fields
-from typing import Optional
+import torch
 import argparse
-
-from dxz.request.request import Request
-from dxz.request.rcb import RequestControlBlock, OutputTokenProcessor
-from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig, RequestProcessorContext
-from dxz.engine.engine import EngineConfig, Engine, EngineContext
-from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
-
-
-from dxz.request.request_processor import RequestProcessor, RequestProcessorConfig
-from dxz.engine.isa import ImageEmbed, ImageEmbedFill, ImageFill, TextFill, InstructionListBuilder
-class SingleNodeRequestProcessor(RequestProcessor):
-    def __init__(self, config: RequestProcessorConfig, context: RequestProcessorContext):
-        super().__init__()
-        self.config = config
-        self.context = context
-        self.tokenizer = context.tokenizer
-        self.processor = context.processor
-
-    def insert_image_tokens(self, token_ids: list[int], num_image_tokens):
-        # replace each image_token_id with num_image_tokens image_token_id
-        inserted_token_ids: list[int] = []
-        for token_id in token_ids:
-            if token_id == self.context.image_token_id:
-                inserted_token_ids.extend([self.context.image_token_id] * (num_image_tokens - 1))
-            inserted_token_ids.append(token_id)
-        return inserted_token_ids 
-
-    def process(self, request: Request) -> RequestControlBlock:
-        # 1. images
-        image: Optional[Image.Image] = None
-        images_tensor: Optional[Tensor] = None # (n_images, n_channels, width, height)
-        if request.image_base64 is not None:
-            image = Image.open(io.BytesIO(base64.b64decode(request.image_base64)))
-        if image is None and request.image:
-            image = request.image
-        if image is not None:
-            images_tensor = self.processor(
-                text="", 
-                images = image, 
-                return_tensors="pt"
-            )['pixel_values']
-        n_pixel_values_images = images_tensor.shape[0] if images_tensor is not None else 0
-        # 2. token_ids
-        token_ids = self.tokenizer.encode(request.prompt)
-        n_token_ids_images = token_ids.count(self.context.image_token_id)
-        assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
-        token_ids = self.insert_image_tokens(token_ids, self.context.num_image_tokens)
-        n_prompt_tokens = len(token_ids)
-        token_ids = token_ids + [-1] * (request.sampling_params.max_tokens - 1) # -1 will be set when executing
-        # 3. image_overwrite_mask
-        image_overwrite_mask = [token_id == self.context.image_token_id for token_id in token_ids]
-        # 4. position_ids
-        position_ids = list(range(len(token_ids)))
-        # 5. cache_ids
-        n_virtual_kv_caches: int = self.context.n_layers
-        layer_virtual_kv_cache_ids = list(range(self.context.n_layers))
-        cache_ids = list(range(len(token_ids)))
-        # 6. instruction list
-        builder = InstructionListBuilder()
-        if images_tensor is not None:
-            if self.config.disaggregate_embed_prefill:
-                image_token_cache_ids = list(range(n_pixel_values_images * self.context.num_image_tokens))
-                embed = ImageEmbed(
-                    pixel_values = images_tensor,
-                    image_features_dst = image_token_cache_ids,
-                    token_pruning_params = None, 
-                )
-                prefill = ImageEmbedFill(
-                    image_token_cache_ids=image_token_cache_ids, 
-                    image_token_mask=image_overwrite_mask[:n_prompt_tokens], 
-                    token_ids = token_ids[:n_prompt_tokens], 
-                    position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.context.n_layers)], 
-                    kv_cache_ids = layer_virtual_kv_cache_ids, 
-                    sample = True, 
-                    sample_dst = None, 
-                )
-                builder.append(embed)
-                builder.append(prefill)
-            else:
-                prefill = ImageFill(
-                    pixel_values = images_tensor, 
-                    token_ids = token_ids[:n_prompt_tokens], 
-                    position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.context.n_layers)], 
-                    kv_cache_ids = layer_virtual_kv_cache_ids, 
-                    sample = True, 
-                    sample_dst = None, 
-                )
-                builder.append(prefill)
-        else:
-            prefill = TextFill(
-                token_ids = token_ids[:n_prompt_tokens], 
-                position_ids = position_ids[:n_prompt_tokens], 
-                cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.context.n_layers)], 
-                kv_cache_ids = layer_virtual_kv_cache_ids, 
-                sample = True, 
-                sample_dst = None, 
-            )
-            builder.append(prefill)
-
-        last_inst = prefill
-        left = n_prompt_tokens     
-        while left + 1 <= len(token_ids):
-            right = left + 1
-            decode = TextFill(
-                token_ids = token_ids[left:right], 
-                position_ids = position_ids[left:right], 
-                cache_ids = [cache_ids[left:right] for _ in range(self.context.n_layers)], 
-                kv_cache_ids = layer_virtual_kv_cache_ids, 
-                sample = True, 
-                sample_dst = None, 
-            )
-            builder.append(decode)
-            last_inst.sample_dst = decode
-            last_inst = decode
-            left = right
-
-        instructions = builder.build_instruction_list()
-        return RequestControlBlock(
-            instructions = instructions, 
-            n_virtual_kv_caches = n_virtual_kv_caches, 
-            sampling_params = request.sampling_params, 
-        )
+from dataclasses import dataclass, field, fields
+from dxz.request import Request
+from dxz.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext
+from dxz.engine import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, ImageEmbed, Fill, EmptyInstruction, BatchScheduler, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, getWorker, WorkerContext, ExecutorContext, InstructionExecutor, Engine, BatchRequest, RequestProcessParameters
+from dxz.memory import MemoryConfig, getMemoryManagementUnit, MemoryContext, MemoryManagementUnit
 
 
 @dataclass
 class EPDNodeConfig:
-    multi_thread_request_process: bool = False
-    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
     request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
-    engine_config: EngineConfig = field(default_factory=EngineConfig)
+    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
+    memory_config: MemoryConfig = field(default_factory=MemoryConfig)
+    batch_scheduler_config: BatchSchedulerConfig = field(default_factory=BatchSchedulerConfig)
+    executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
+    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
 
     @classmethod
     def from_cli_args(cls, args: argparse.Namespace) -> 'EPDNodeConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['model_factory_config', 'request_processor_config', 'engine_config']]
+        attrs = [attr.name for attr in fields(cls) if attr.name not in ['request_processor_config', 'model_factory_config', 'memory_config', 'batch_scheduler_config', 'executor_config', 'worker_config',]]
         model_factory_config = ModelFactoryConfig.from_cli_args(args)
         request_processor_config = RequestProcessorConfig.from_cli_args(args)
-        engine_config = EngineConfig.from_cli_args(args)
-        config = cls(model_factory_config=model_factory_config, request_processor_config=request_processor_config, engine_config=engine_config, **{attr: getattr(args, attr) for attr in attrs})
+        memory_config = MemoryConfig.from_cli_args(args)
+        batch_scheduler_config = BatchSchedulerConfig.from_cli_args(args)
+        executor_config = ExecutorConfig.from_cli_args(args)
+        worker_config = WorkerConfig.from_cli_args(args)
+        config = cls(
+            request_processor_config = request_processor_config, 
+            model_factory_config     = model_factory_config, 
+            memory_config            = memory_config, 
+            batch_scheduler_config   = batch_scheduler_config, 
+            executor_config          = executor_config, 
+            worker_config            = worker_config, 
+            **{attr: getattr(args, attr) for attr in attrs}
+        )
         return config
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser.add_argument('--multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
         parser = ModelFactoryConfig.add_cli_args(parser)
         parser = RequestProcessorConfig.add_cli_args(parser)
-        parser = EngineConfig.add_cli_args(parser)
+        parser = MemoryConfig.add_cli_args(parser)
+        parser = BatchSchedulerConfig.from_cli_args(parser)
+        parser = ExecutorConfig.from_cli_args(parser)
+        parser = WorkerConfig.from_cli_args(parser)
         return parser
 
 
-class EPDNode:
-    def __init__(self, config: EPDNodeConfig):
+@dataclass
+class EPDNodeContext:
+    pass
+
+
+class EPDNode(Engine):
+    def __init__(self, config: EPDNodeConfig, context: EPDNodeContext):
         self.config = config
-        self.engine = Engine(self.config.engine_config, EngineContext(model_factory_config=config.model_factory_config))
-        model_factory = getModelFactory(config.model_factory_config, ModelFactoryContext(process_group=None))
-        self.vision_model_config = model_factory.getVisionModelConfig()
+        model_factory = getModelFactory(config.model_factory_config, ModelFactoryContext())
         self.language_model_config = model_factory.getLanguageModelConfig()
+        self.vision_model_config = model_factory.getVisionModelConfig()
         self.processor = model_factory.getProcessor() 
         self.tokenizer = model_factory.getTokenizer() 
-
-        self.request_processor_context = RequestProcessorContext(
-            tokenizer = self.tokenizer, 
-            processor = self.processor, 
-            image_token_id = self.vision_model_config.image_token_id, 
-            num_image_tokens = self.vision_model_config.num_image_tokens, 
-            n_layers = self.language_model_config.n_layers,
+        self.mmu = getMemoryManagementUnit(self.config.memory_config, MemoryContext(
+                n_layers = self.language_model_config.n_layers,
+                head_size = self.language_model_config.head_dim, 
+                num_kv_heads = self.language_model_config.n_kv_heads, 
+                dtype = config.model_factory_config.dtype, 
+                device = config.model_factory_config.device, 
+            )
         )
-        self.processor = SingleNodeRequestProcessor(
+        # self.image_token_mmu = getMemoryManagementUnit(
+        #     config = MemoryConfig(
+        #         memory_management_policy = 'vanilla', 
+        #         num_blocks = 30, 
+        #         block_size = vision_model_config.num_image_tokens, 
+        #     ), 
+        #     context = MemoryContext(
+        #         n_layers = 1, 
+        #         num_kv_heads = language_model_config.n_qo_heads, 
+        #         head_size = language_model_config.head_dim, 
+        #         dtype = context.model_factory_config.dtype, 
+        #         device = context.model_factory_config.device, 
+        #         n_tokens=1, 
+        #     )
+        # )
+        # scheduler
+        self.batch_scheduler = BatchScheduler(self.config.batch_scheduler_config)
+        # executor
+        self.worker = getWorker(config.worker_config, WorkerContext(model_factory_config=config.model_factory_config))
+        context.worker = self.worker
+        self.executor = InstructionExecutor(config.executor_config, ExecutorContext(
+                model_factory_config = config.model_factory_config, 
+                block_size = config.memory_config.block_size, 
+                mmu = self.mmu, 
+                image_token_mmu=None, 
+                worker = self.worker, 
+                dtype = config.model_factory_config.dtype, 
+                device = config.model_factory_config.device, 
+            ), 
+        )
+        self.request_processor = RequestProcessor(
             config = self.config.request_processor_config, 
-            context = self.request_processor_context, 
+            context = RequestProcessorContext(
+                tokenizer = self.tokenizer, 
+                processor = self.processor, 
+                image_token_id = self.vision_model_config.image_token_id, 
+                num_image_tokens = self.vision_model_config.num_image_tokens, 
+                n_layers = self.language_model_config.n_layers,
+                batch_scheduler=self.batch_scheduler, 
+            ), 
         )
 
-        self.add_request_lock = threading.Lock()
-        self.executor = ThreadPoolExecutor(max_workers=32)
+    def add_request(self, request: Request, params: RequestProcessParameters):
+        self.request_processor.process(request, params)
 
-    def add_request(self, request: Request, output_processor: OutputTokenProcessor):
-        if self.config.multi_thread_request_process:
-            self.executor.map(self._add_request_async, [(request, output_processor)])
-        else:
-            self._add_request(request, output_processor)
-
-    def _add_request_async(self, request: Request, output_processor: OutputTokenProcessor):
-        with self.add_request_lock:
-            self._add_request(request, output_processor)
-    
-    def _add_request(self, request: Request, output_processor: OutputTokenProcessor):
-        arrival_time = time.perf_counter()
-        rcb = self.processor.process(request=request)
-        rcb.metric.arrival_time = arrival_time
-        rcb.register_output_token_processor(output_processor)
-        self.engine.schedule([rcb])
-
+    @torch.inference_mode()
     def step(self):
-        self.engine.step()
+        # 1. schedule requests
+        batch = self.batch_scheduler.step()
+        if len(batch) == 0:
+            return
+
+        # 2. execute instructions
+        batch_fill = BatchRequest()
+        batch_image_embed = BatchRequest()
+        batch_empty = BatchRequest()
+        for rcb, inst in batch:
+            if isinstance(inst, Fill):
+                batch_fill.append(rcb)
+                continue
+            if isinstance(inst, EmptyInstruction):
+                batch_empty.append(rcb)
+                continue
+            if isinstance(inst, ImageEmbed):
+                batch_image_embed.append(rcb)
+                continue
+            raise Exception(f'unsupported instrction {type(inst)}')
+
+        future = self.executor.execute_image_embed(batch_image_embed)
+        self.executor.execute_fill(batch_fill)
+        if future is not None:
+            future.result()
+        self.executor.execute_empty(batch_empty)
+
+        # 3. scheduler requests
+        t = time.perf_counter()
+        for rcb, _ in batch:
+            if rcb.is_finished():
+                rcb.metric.finished_time = t
+                for vkvc in rcb.virtual_kv_caches:
+                    self.mmu.realloc(vkvc, 0)
+            else:
+                self.batch_scheduler.schedule_running(rcb)
+
+if __name__ == '__main__':
+    from dxz.request import Request, SamplingParameters
+    from dxz.engine import PrintOutputTokenProcessor
+
+    config = EPDNodeConfig()
+    config.batch_scheduler_config.debug_mode = True
+    config.model_factory_config.model_name = "llava-hf/llava-1.5-7b-hf"
+    node = EPDNode(config, EPDNodeContext())
+    request = Request(
+        request_id = 0, 
+        prompt = f"what's the weather like today?", 
+        image = None, 
+        image_base64 = None, 
+        sampling_params = SamplingParameters(max_tokens=10)
+    )
+    node.add_request(request, RequestProcessParameters(
+        output_token_processors = [], 
+        print_output_text=True, 
+    ))
+    for i in range(10):
+        node.step()
