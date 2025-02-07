@@ -10,7 +10,7 @@ from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
-from dxz.engine import Instruction, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor
+from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor
 
 
 @dataclass
@@ -103,15 +103,15 @@ class RequestProcessor:
         assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
         token_ids = self._insert_image_tokens(token_ids, self.context.num_image_tokens)
         n_prompt_tokens = len(token_ids)
+        n_image_tokens = n_pixel_values_images * self.context.num_image_tokens
         token_ids = token_ids + [-1] * (request.sampling_params.max_tokens - 1) # -1 will be set when executing
         # 3. image_overwrite_mask
         image_overwrite_mask = [token_id == self.context.image_token_id for token_id in token_ids]
         # 4. position_ids
         position_ids = list(range(len(token_ids)))
         # 5. cache_ids
-        n_virtual_kv_caches: int = self.context.n_layers
-        layer_virtual_kv_cache_ids = list(range(self.context.n_layers))
         cache_ids = list(range(len(token_ids)))
+        image_token_cache_ids = list(range(n_image_tokens))
         # 6. stage division
         builder = InstructionListBuilder()
         if images_tensor is not None:
@@ -119,7 +119,7 @@ class RequestProcessor:
                 image_token_cache_ids = list(range(n_pixel_values_images * self.context.num_image_tokens))
                 embed = ImageEmbed(
                     pixel_values = images_tensor,
-                    image_features_dst = image_token_cache_ids,
+                    cache_ids=image_token_cache_ids, 
                     token_pruning_params = None, 
                 )
                 prefill = ImageEmbedFill(
@@ -127,8 +127,7 @@ class RequestProcessor:
                     image_token_mask=image_overwrite_mask[:n_prompt_tokens], 
                     token_ids = token_ids[:n_prompt_tokens], 
                     position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.context.n_layers)], 
-                    kv_cache_ids = layer_virtual_kv_cache_ids, 
+                    cache_ids = cache_ids[:n_prompt_tokens], 
                     sample = True, 
                     sample_dst = None, 
                 )
@@ -141,8 +140,7 @@ class RequestProcessor:
                     pixel_values = images_tensor, 
                     token_ids = token_ids[:n_prompt_tokens], 
                     position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.context.n_layers)], 
-                    kv_cache_ids = layer_virtual_kv_cache_ids, 
+                    cache_ids = cache_ids[:n_prompt_tokens], 
                     sample = True, 
                     sample_dst = None, 
                 )
@@ -151,8 +149,7 @@ class RequestProcessor:
             prefill = TextFill(
                 token_ids = token_ids[:n_prompt_tokens], 
                 position_ids = position_ids[:n_prompt_tokens], 
-                cache_ids = [cache_ids[:n_prompt_tokens] for _ in range(self.context.n_layers)], 
-                kv_cache_ids = layer_virtual_kv_cache_ids, 
+                cache_ids = cache_ids[:n_prompt_tokens], 
                 sample = True, 
                 sample_dst = None, 
             )
@@ -167,8 +164,7 @@ class RequestProcessor:
             decode = TextFill(
                 token_ids = token_ids[left:right], 
                 position_ids = position_ids[left:right], 
-                cache_ids = [cache_ids[left:right] for _ in range(self.context.n_layers)], 
-                kv_cache_ids = layer_virtual_kv_cache_ids, 
+                cache_ids = cache_ids[left:right], 
                 sample = True, 
                 sample_dst = None, 
             )
@@ -181,7 +177,6 @@ class RequestProcessor:
         # 7. output tokenizer
         rcb = RequestControlBlock(
             instructions = instructions, 
-            n_virtual_kv_caches = n_virtual_kv_caches, 
             sampling_params = request.sampling_params, 
         )
         for output_token_processor in params.output_token_processors:

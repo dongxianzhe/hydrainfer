@@ -17,6 +17,7 @@ class KVCache:
         self.value_cache = value_cache
         self.dtype = key_cache.dtype
         self.device = key_cache.device
+        self.block_size = key_cache.shape[1]
 
     def get_kv_cache(self) -> tuple[Tensor, Tensor]:
         return (self.key_cache, self.value_cache)
@@ -47,7 +48,7 @@ class KVCache:
                 self.value_cache[block_id, block_offset, :, :] = values[i, :, :]
 
     @classmethod
-    def from_token_cache(cls, token_cache: TokenCache):
-        tensors = TokenCache.get_caches
+    def from_token_cache(cls, token_cache: TokenCache) -> "KVCache":
+        tensors = token_cache.get_caches()
         assert len(tensors) == 2, f'can not convert token_cache with {len(tensors)} to kv cache'
-        return KVCache(token_cache[0], token_cache[1])
+        return cls(tensors[0], tensors[1])
