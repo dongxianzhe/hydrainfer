@@ -38,7 +38,7 @@ class TokenCache:
 
         for cache, value in zip(self.caches, values):
             slot_view = cache.view(-1, cache.shape[-2], cache.shape[-1])
-            cache[slot_ids, :, :] = value
+            slot_view[slot_ids, :, :] = value
 
 
 @dataclass
@@ -85,6 +85,15 @@ class TokenCacheBlockManager:
             memory_handle = self.memory_handle,
         )
 
+    def v2p(self, virtual_cache: VirtualTokenCache, virtual_cache_ids: list[int]) -> list[int]:
+        physical_cache_ids: list[int] = []
+        for vcid in virtual_cache_ids:
+            block_id = vcid // self.block_size
+            block_offset = vcid % self.block_size
+            slot_id = virtual_cache.block_table[block_id] * self.block_size + block_offset
+            physical_cache_ids.append(slot_id)
+        return physical_cache_ids
+
     def set(self, virtual_cache: VirtualTokenCache, virtual_cache_ids: list[int]) -> list[int]:
         # 1. try to allocate memory if block is not enough
         n_tokens = max(virtual_cache_ids) + 1
@@ -97,13 +106,7 @@ class TokenCacheBlockManager:
         virtual_cache.n_cache_tokens = max(virtual_cache.n_cache_tokens, n_tokens)
 
         # 3. get phyical cache slot id
-        slot_ids: list[int] = []
-        for vcid in virtual_cache_ids:
-            block_id = vcid // self.block_size
-            block_offset = vcid % self.block_size
-            slot_id = virtual_cache.block_table[block_id] * self.block_size + block_offset
-            slot_ids.append(slot_id)
-        return slot_ids
+        return self.v2p(virtual_cache, virtual_cache_ids)
 
     def free_blocks(self, virtual_cache: VirtualTokenCache, virtual_block_ids: list[int]):
         for virtual_block_id in sorted(virtual_block_ids, reverse=True):
@@ -130,6 +133,7 @@ class TokenCacheBlockManager:
         return TokenCache([self.cache_tensor[layer_id, token_id, :, :, :, :] for token_id in range(self.n_tokens)])
 
     def migrate_blocks(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache):
+        assert src_virtual_cache.n_cache_tokens == dst_virtual_cache.n_cache_tokens, f'{src_virtual_cache.n_cache_tokens} {dst_virtual_cache.n_cache_tokens}'
         # if src_memory_handle not in self.src_memory_handle_dict:
         #     block_migration.register_ipc_mem_handle(src_memory_handle)
         #     src_memory_handle_dict[]
@@ -137,7 +141,7 @@ class TokenCacheBlockManager:
         dev_ptr = block_migration.register_ipc_mem_handle(src_virtual_cache.memory_handle)
         # todo modify cpp code to support general layers migrate
         # todo memory copy stream
-        for layer_id in self.n_layers:
+        for layer_id in range(self.n_layers):
             block_migration.migrate_blocks(
                 0, # prefill_start_head: int
                 self.n_heads, # prefill_end_head: int

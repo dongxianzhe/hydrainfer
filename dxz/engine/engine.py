@@ -83,7 +83,7 @@ class EngineComponentFactory:
         return BatchScheduler(self.batch_scheduler_config)
 
     def get_executor(self, kv_cache_block_manager: Optional[TokenCacheBlockManager], image_cache_block_manager: Optional[TokenCacheBlockManager]) -> InstructionExecutor:
-        worker = getWorker(self.worker_config, WorkerContext(model_factory_config=self.model_factory_config))
+        worker = getWorker(self.worker_config, WorkerContext(model_factory_config=self.model_factory_config, has_language_model=kv_cache_block_manager is not None, has_vision_model=image_cache_block_manager is not None))
         return InstructionExecutor(self.executor_config, ExecutorContext(
                 model_factory_config = self.model_factory_config, 
                 block_size = self.kv_block_size, 
@@ -105,5 +105,7 @@ class EngineComponentFactory:
                 num_image_tokens = self.vision_model_config.num_image_tokens, 
                 n_layers = self.language_model_config.n_layers,
                 batch_scheduler=batch_scheduler, 
+                ep_migrate = True, 
+                pd_migrate = False, 
             ), 
         )

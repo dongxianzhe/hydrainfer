@@ -7,62 +7,25 @@ from dxz.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.engine import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, ImageEmbed, Fill, EmptyInstruction, BatchScheduler, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, getWorker, WorkerContext, ExecutorContext, InstructionExecutor, Engine, BatchRequest, RequestProcessParameters, EngineComponentFactory
 from dxz.memory import TokenCacheBlockManager, TokenCacheBlockManagerContext
 
-@dataclass
-class EPDNodeConfig:
-    request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
-    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
-    batch_scheduler_config: BatchSchedulerConfig = field(default_factory=BatchSchedulerConfig)
-    executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
-    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
-    n_kv_blocks: int = 512
-    n_image_blocks: int = 16
-
-    @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> 'EPDNodeConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ['request_processor_config', 'model_factory_config', 'batch_scheduler_config', 'executor_config', 'worker_config',]]
-        model_factory_config = ModelFactoryConfig.from_cli_args(args)
-        request_processor_config = RequestProcessorConfig.from_cli_args(args)
-        batch_scheduler_config = BatchSchedulerConfig.from_cli_args(args)
-        executor_config = ExecutorConfig.from_cli_args(args)
-        worker_config = WorkerConfig.from_cli_args(args)
-        config = cls(
-            request_processor_config = request_processor_config, 
-            model_factory_config     = model_factory_config, 
-            batch_scheduler_config   = batch_scheduler_config, 
-            executor_config          = executor_config, 
-            worker_config            = worker_config, 
-            **{attr: getattr(args, attr) for attr in attrs}
-        )
-        return config
-
-    @staticmethod
-    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser = ModelFactoryConfig.add_cli_args(parser)
-        parser = RequestProcessorConfig.add_cli_args(parser)
-        parser = BatchSchedulerConfig.from_cli_args(parser)
-        parser = ExecutorConfig.from_cli_args(parser)
-        parser.add_argument('--n-kv-blocks', type=int, default=512, help='number kv cache blocks')
-        parser.add_argument('--n-image-blocks', type=int, default=16, help='number image cache blocks')
-        parser = WorkerConfig.from_cli_args(parser)
-        return parser
-
-
-@dataclass
-class EPDNodeContext:
-    pass
-
 
 class EPDNode(Engine):
-    def __init__(self, config: EPDNodeConfig, context: EPDNodeContext):
-        self.config = config
+    def __init__(self, 
+            request_processor_config: RequestProcessorConfig, 
+            model_factory_config: ModelFactoryConfig, 
+            batch_scheduler_config: BatchSchedulerConfig, 
+            executor_config: ExecutorConfig, 
+            worker_config: WorkerConfig, 
+            n_kv_blocks: int, 
+            n_image_blocks: int, 
+        ):
         factory = EngineComponentFactory(
-            request_processor_config = config.request_processor_config, 
-            model_factory_config     = config.model_factory_config, 
-            batch_scheduler_config   = config.batch_scheduler_config, 
-            executor_config          = config.executor_config, 
-            worker_config            = config.worker_config, 
-            n_kv_blocks              = config.n_kv_blocks, 
-            n_image_blocks           = config.n_image_blocks
+            request_processor_config = request_processor_config, 
+            model_factory_config     = model_factory_config    , 
+            batch_scheduler_config   = batch_scheduler_config  , 
+            executor_config          = executor_config         , 
+            worker_config            = worker_config           , 
+            n_kv_blocks              = n_kv_blocks             , 
+            n_image_blocks           = n_image_blocks          , 
         )
         self.kv_cache_block_manager = factory.get_kv_cache_block_manager()
         self.image_cache_block_manager = factory.get_image_cache_block_manager()
