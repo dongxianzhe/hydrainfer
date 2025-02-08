@@ -46,7 +46,8 @@ class RequestProcessorContext:
 @dataclass
 class RequestProcessParameters:
     output_token_processors: list[OutputTokenProcessor]
-    print_output_text: bool = False
+    print_output_text: bool = False # if true request processor will register a print output token processor to the request
+    is_stream_output: bool = False
 
 
 class RequestProcessor:
