@@ -25,7 +25,7 @@ class BatchSchedulerConfig:
 
     @staticmethod
     def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser.add_argument('--batch_policy', type=str, choices=['nobatch', 'requestlevel', 'continuousbatch'], default='continuousbatch', help='Batch policy for scheduling.')
+        parser.add_argument('--batch-policy', type=str, choices=['nobatch', 'requestlevel', 'continuousbatch'], default='continuousbatch', help='Batch policy for scheduling.')
         parser.add_argument('--priority', type=str, choices=['prefill', 'decode'], default='prefill', help='Prefill prioritize or decode prioritize')
         parser.add_argument('--max-running-requests', type=int, default=15, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
         parser.add_argument('--max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
