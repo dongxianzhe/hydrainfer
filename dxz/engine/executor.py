@@ -65,6 +65,7 @@ class BatchFillExecutor(Executor):
         self.dtype = context.model_factory_config.dtype
         self.device = context.model_factory_config.device
         self.block_mangaer = context.kv_cache_block_manager
+        self.image_block_manager = context.image_cache_block_manager
 
         self.workspace_buffer = None
         self.batch_prefill_with_paged_kvcache_wrapper = None
@@ -97,20 +98,25 @@ class BatchFillExecutor(Executor):
 
         # 2. filter out request which need image embed
         batch_image_fill = BatchRequest()
-        list_image_features: list[Tensor] = []
+        image_tokens: list[Tensor] = []
         for rcb, inst in contexts:
             if isinstance(inst, ImageFill):
                 batch_image_fill.append(rcb)
             elif isinstance(inst, ImageEmbedFill):
-                list_image_features.append(inst.image_features)
-                inst.image_features = None
-        if len(batch_image_fill) > 0 and len(list_image_features) > 0:
+                token_cache = self.image_block_manager.get_layer_cache(layer_id=0)
+                slot_ids = self.image_block_manager.v2p(rcb.virtual_image_cache, inst.image_token_cache_ids)
+                image_token_cache = token_cache.get_caches()[0]
+                image_token_cache = image_token_cache.view(-1, self.language_model_config.n_qo_heads * self.language_model_config.head_dim)
+                slot_ids = torch.tensor(slot_ids, dtype=torch.int, device=self.context.device)
+                request_image_tokens = image_token_cache[slot_ids, :]
+                image_tokens.append(request_image_tokens)
+        if len(batch_image_fill) > 0 and len(image_tokens) > 0:
             raise Exception('not support pixel value and image embed batch')
 
-        if len(list_image_features) == 0:
+        if len(image_tokens) == 0:
             image_features = self._execute_image_embed(batch_image_fill)
         else:
-            image_features = torch.cat(list_image_features, dim=0).to(dtype=self.dtype, device=self.device)
+            image_features = torch.cat(image_tokens, dim=0).to(dtype=self.dtype, device=self.device)
 
         token_ids         : list[int] = []
         position_ids      : list[int] = []
@@ -202,8 +208,6 @@ class BatchImageEmbedExecutor(Executor):
         # (total_images, num_image_tokens, hidden_size)
         image_tokens = image_features.reshape(-1, self.n_qo_heads, self.head_dim) # (total_image_tokens, n_qo_heads, head_size)
         new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.device)
-        print(f'new_cache_slots {new_cache_slots}')
-        print(f'image_features.shape {image_features.shape}')
         token_cache = self.block_manager.get_layer_cache(layer_id=0)
         token_cache.set_caches(new_cache_slots, [image_tokens])
 
@@ -264,5 +268,7 @@ class InstructionExecutor:
         return self.image_embed_executor.execute(contexts)
 
     def execute_empty(self, contexts: BatchRequest):
+        if len(contexts) == 0:
+            return
         for rcb, _ in contexts:
             rcb.instructions.curr = rcb.instructions.curr.next

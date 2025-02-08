@@ -2,7 +2,7 @@ import time
 from queue import Queue
 from typing import Literal, Optional
 from dataclasses import dataclass, fields
-from dxz.engine import Instruction, Fill, TextFill, ImageFill, Mov, ReAlloc, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock
+from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock
 from dxz.utils.allocate import IncreaingAllocator
 import argparse
 
