@@ -1,15 +1,14 @@
 from typing import Optional
 from dxz.engine import Instruction, InstructionList, OutputTokenProcessor, RequestMetric
-from dxz.memory.virtual_kv_cache import VirtualKVCache
+from dxz.memory import VirtualTokenCache
 from dxz.request import SamplingParameters
 
 
 class RequestControlBlock:
-    def __init__(self, instructions: InstructionList, n_virtual_kv_caches: int, sampling_params: SamplingParameters):
+    def __init__(self, instructions: InstructionList, sampling_params: SamplingParameters):
         self.instructions: InstructionList = instructions
-        self.n_virtual_kv_caches = n_virtual_kv_caches
-        self.virtual_kv_caches: list[VirtualKVCache] = []
-        self.virtual_token_cache: VirtualKVCache = None
+        self.virtual_kv_cache: VirtualTokenCache = None
+        self.virtual_image_cache: VirtualTokenCache = None
 
         self.sid: int = -1
 

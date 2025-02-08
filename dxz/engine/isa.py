@@ -17,28 +17,27 @@ class Instruction:
 
 
 class Fill(Instruction):
-    def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional["Fill"]):
+    def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional["Fill"]):
         super().__init__()
         # cache_ids (n_layers, n_tokens)
         # kv_caches (n_layers, )
         self.token_ids = token_ids
         self.position_ids = position_ids
         self.cache_ids = cache_ids
-        self.kv_cache_ids = kv_cache_ids
         self.sample = sample
         self.sample_dst = sample_dst
 
 
 class TextFill(Fill):
-    def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
-        super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
+    def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
 
     def chunk_prefill(self, chunk_size: int):
         assert chunk_size > 0 and chunk_size < len(self.token_ids), f"invalid chunk prefill size {chunk_size}"
         rest_text_fill = TextFill(
             token_ids = self.token_ids[chunk_size:], 
             position_ids = self.position_ids[chunk_size:], 
-            cache_ids = [layer_cahce_ids[chunk_size:] for layer_cahce_ids in self.cache_ids], 
+            cache_ids = self.cache_ids[chunk_size:], 
             kv_cache_ids = self.kv_cache_ids, 
             sample = self.sample, 
             sample_dst = self.sample_dst, 
@@ -46,7 +45,7 @@ class TextFill(Fill):
         self.insert_next(rest_text_fill)
         self.token_ids = self.token_ids[:chunk_size]
         self.position_ids = self.position_ids[:chunk_size]
-        self.cache_ids = [layer_cahce_ids[:chunk_size] for layer_cahce_ids in self.cache_ids]
+        self.cache_ids = self.cache_ids[:chunk_size]
         self.sample = False
         self.sample_dst = None
 
@@ -55,8 +54,8 @@ class TextFill(Fill):
 
 
 class ImageFill(Fill):
-    def __init__(self, pixel_values: Tensor, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
-        super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
+    def __init__(self, pixel_values: Tensor, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
         self.pixel_values    = pixel_values # (n_images, n_channel, )
 
     def __repr__(self):
@@ -64,8 +63,8 @@ class ImageFill(Fill):
 
 
 class ImageEmbedFill(Fill):
-    def __init__(self, image_token_cache_ids: list[int], image_token_mask: list[bool], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[list[int]], kv_cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
-        super().__init__(token_ids, position_ids, cache_ids, kv_cache_ids, sample, sample_dst)
+    def __init__(self, image_token_cache_ids: list[int], image_token_mask: list[bool], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
         self.image_token_cache_ids = image_token_cache_ids # 0, 1, 2, ..., 575 
         self.image_token_mask = image_token_mask
 
@@ -82,7 +81,7 @@ class ImageEmbedFill(Fill):
             image_features = self.image_features[chunk_size:, ...], 
             token_ids = self.token_ids[chunk_size:], 
             position_ids = self.position_ids[chunk_size:], 
-            cache_ids = [layer_cahce_ids[chunk_size:] for layer_cahce_ids in self.cache_ids], 
+            cache_ids = self.cache_ids[chunk_size:], 
             kv_cache_ids = self.kv_cache_ids, 
             sample = self.sample, 
             sample_dst = self.sample_dst, 
@@ -92,40 +91,9 @@ class ImageEmbedFill(Fill):
         self.image_token_mask = self.image_token_mask[:chunk_size]
         self.token_ids = self.token_ids[:chunk_size]
         self.position_ids = self.position_ids[:chunk_size]
-        self.cache_ids = [layer_cahce_ids[:chunk_size] for layer_cahce_ids in self.cache_ids]
+        self.cache_ids = self.cache_ids[:chunk_size]
         self.sample = False
         self.sample_dst = None
-
-
-class Mov(Instruction):
-    def __init__(self, src_cache_ids: list[list[int]], dst_cache_ids: list[list[int]], src_kv_cache_ids: list[int], dst_kv_cache_ids: list[int]):
-        super().__init__()
-        self.src_cache_ids = src_cache_ids
-        self.dst_cache_ids = dst_cache_ids
-        self.src_kv_cache_ids = src_kv_cache_ids
-        self.dst_kv_cache_ids = dst_kv_cache_ids
-
-    def __repr__(self):
-        return "MV"
-
-
-class ReAlloc(Instruction):
-    def __init__(self, n_tokens: list[int], kv_cache_ids: list[int]):
-        self.n_tokens     = n_tokens
-        self.kv_cache_ids = kv_cache_ids
-
-    def __repr__(self):
-        return "RA"
-
-
-class Merge(Instruction):
-    def __init__(self, kv_cache1_ids: list[int], kv_cache2_ids: list[int]):
-        super().__init__()
-        self.kv_cache1_ids = kv_cache1_ids
-        self.kv_cache2_ids = kv_cache2_ids
-
-    def __repr__(self):
-        return "MR"
 
 
 class EmptyInstruction(Instruction):
@@ -134,10 +102,10 @@ class EmptyInstruction(Instruction):
 
 
 class ImageEmbed(Instruction):
-    def __init__(self, pixel_values: Tensor, image_features_dst: list[int], token_pruning_params: dict):
+    def __init__(self, pixel_values: Tensor, cache_ids: list[int], token_pruning_params: dict):
         super().__init__()
         self.pixel_values = pixel_values
-        self.image_features_dst = image_features_dst
+        self.cache_ids = cache_ids
         self.token_pruning_params = token_pruning_params
 
     def __repr__(self):
