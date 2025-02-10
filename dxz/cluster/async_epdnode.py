@@ -1,60 +1,53 @@
 import time
 import asyncio
+import argparse
 from typing import Optional
 from dataclasses import dataclass, field, fields
 from dxz.request import Request
-from dxz.model import ModelFactoryConfig
-from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest
+from dxz.model import ModelFactoryConfig, getModelFactory, ModelFactoryContext
+from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, RequestProcessorContext
 from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest
-from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, EngineComponentFactory
-from dxz.memory import VirtualTokenCache, TokenCacheBlockManager
+from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig
+from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerConfig, TokenCacheBlockManagerContext
 from dxz.utils.zmq_utils import init_zmq_send
+from dxz.cluster.node_config import NodeConfig
+from dxz.cluster.epdnode import EPDNode
 
 
 class AsyncEPDNode(AsyncEngine):
-    def __init__(
-        self, 
-        request_processor_config: RequestProcessorConfig, 
-        model_factory_config: ModelFactoryConfig, 
-        batch_scheduler_config: BatchSchedulerConfig, 
-        executor_config: ExecutorConfig, 
-        worker_config: WorkerConfig, 
-        n_kv_blocks: int, 
-        n_image_blocks: int, 
-        enable_encode: bool = True, 
-        enable_prefill: bool = True, 
-        enable_decode: bool = True, 
-        zmq_send_url: Optional[str] = None
-    ):
-        self.enable_encode = enable_encode
-        self.enable_prefill = enable_prefill
-        self.enable_decode = enable_decode
-        self.zmq_send_url = zmq_send_url
-        factory = EngineComponentFactory(
-            request_processor_config = request_processor_config, 
-            model_factory_config     = model_factory_config    , 
-            batch_scheduler_config   = batch_scheduler_config  , 
-            executor_config          = executor_config         , 
-            worker_config            = worker_config           , 
-            n_kv_blocks              = n_kv_blocks             , 
-            n_image_blocks           = n_image_blocks          , 
-        )
-        if enable_prefill or enable_decode:
-            self.kv_cache_block_manager = factory.get_kv_cache_block_manager()
+    def __init__(self, config: NodeConfig):
+        self.config = config
+        if config.has_kv_cache:
+            self.kv_cache_block_manager = TokenCacheBlockManager(config.kv_cache_config, TokenCacheBlockManagerContext())
         else:
             self.kv_cache_block_manager = None
 
-        if enable_encode or enable_prefill:
-            self.image_cache_block_manager = factory.get_image_cache_block_manager()
+        if config.has_image_cache:
+            self.image_cache_block_manager = TokenCacheBlockManager(config.image_cache_config, TokenCacheBlockManagerContext())
         else:
             self.image_cache_block_manager = None
-        self.batch_scheduler = factory.get_batch_scheduler()
-        self.executor = factory.get_executor(self.kv_cache_block_manager, self.image_cache_block_manager)
-        self.request_processor = factory.get_request_processor(self.batch_scheduler)
 
-        if zmq_send_url:
-            self.zmq_send = init_zmq_send(zmq_send_url)
-
+        self.batch_scheduler = BatchScheduler(config.batch_scheduler_config)
+        self.worker = getWorker(
+            config.worker_config, 
+            WorkerContext()
+        )
+        self.executor = InstructionExecutor(
+            config.executor_config, 
+            ExecutorContext(
+                kv_cache_block_manager = self.kv_cache_block_manager, 
+                image_cache_block_manager = self.image_cache_block_manager, 
+                worker = self.worker
+            )
+        )
+        self.request_processor = RequestProcessor(
+            config.request_processor_config, 
+            RequestProcessorContext(
+                batch_scheduler=self.batch_scheduler, 
+            )
+        )
+        if config.zmq_send_url:
+            self.zmq_send = init_zmq_send(config.zmq_send_url)
         self.nodes = []
 
     async def add_request(self, request: Request, params: RequestProcessParameters):

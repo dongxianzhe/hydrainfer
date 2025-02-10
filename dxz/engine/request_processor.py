@@ -4,42 +4,39 @@ import base64
 import random
 import argparse
 from torch import Tensor
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, field
 from concurrent.futures import ThreadPoolExecutor
 from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
 from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor
+from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
+from dxz.utils.config_util import CLIConfig
 
 
 @dataclass
-class RequestProcessorConfig:
+class RequestProcessorConfig(CLIConfig):
     multi_thread_request_process: bool = False
     disaggregate_embed_prefill: bool = True
+    ep_migrate: bool = False
+    pd_migrate: bool = False
+    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
+    debug_request_process: bool = False
 
     @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> 'RequestProcessorConfig':
-        attrs = [attr.name for attr in fields(cls)]
-        config = cls(**{attr: getattr(args, attr) for attr in attrs})
-        return config
-
-    @staticmethod
-    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser.add_argument('--multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
-        parser.add_argument('--disaggregate-embed-prefill', action='store_true', help='Enable disaggregation of embedding prefill.')
+    def add_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
+        parser.add_argument(f'{prefix}multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
+        parser.add_argument(f'{prefix}disaggregate-embed-prefill', action='store_true', default=True, help='Enable disaggregation of embedding prefill.')
+        parser.add_argument(f'{prefix}ep-migrate', action='store_true', default=False, help='Enable embed prefill migrate')
+        parser.add_argument(f'{prefix}pd-migrate', action='store_true', default=False, help='Enable prefill decode migrate')
+        parser.add_argument(f'{prefix}debug-request-process', action='store_true', default=False, help='debug request process output')
+        cls.add_sub_configs_cli_args(cls, parser, prefix)
         return parser
 
 
 @dataclass
 class RequestProcessorContext:
-    tokenizer: AutoTokenizer
-    processor: AutoProcessor
-    image_token_id: int
-    num_image_tokens: int
-    n_layers: int
-    ep_migrate: bool = False
-    pd_migrate: bool = False
     batch_scheduler: BatchScheduler = None
 
 
@@ -55,8 +52,15 @@ class RequestProcessor:
         super().__init__()
         self.config = config
         self.context = context
-        self.tokenizer = context.tokenizer
-        self.processor = context.processor
+
+        model_factory = getModelFactory(self.config.model_factory_config, ModelFactoryContext())
+        self.tokenizer = model_factory.getTokenizer()
+        self.processor = model_factory.getProcessor()
+        language_model_config = model_factory.getLanguageModelConfig()
+        vision_model_config = model_factory.getVisionModelConfig()
+        self.image_token_id = vision_model_config.image_token_id
+        self.num_image_tokens = vision_model_config.num_image_tokens
+        self.n_layers = language_model_config.n_layers
 
         if config.multi_thread_request_process:
             self.lock = threading.Lock()
@@ -78,8 +82,8 @@ class RequestProcessor:
         # replace each image_token_id with num_image_tokens image_token_id
         inserted_token_ids: list[int] = []
         for token_id in token_ids:
-            if token_id == self.context.image_token_id:
-                inserted_token_ids.extend([self.context.image_token_id] * (num_image_tokens - 1))
+            if token_id == self.image_token_id:
+                inserted_token_ids.extend([self.image_token_id] * (num_image_tokens - 1))
             inserted_token_ids.append(token_id)
         return inserted_token_ids 
 
@@ -100,14 +104,14 @@ class RequestProcessor:
         n_pixel_values_images = images_tensor.shape[0] if images_tensor is not None else 0
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt)
-        n_token_ids_images = token_ids.count(self.context.image_token_id)
+        n_token_ids_images = token_ids.count(self.image_token_id)
         assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
-        token_ids = self._insert_image_tokens(token_ids, self.context.num_image_tokens)
+        token_ids = self._insert_image_tokens(token_ids, self.num_image_tokens)
         n_prompt_tokens = len(token_ids)
-        n_image_tokens = n_pixel_values_images * self.context.num_image_tokens
+        n_image_tokens = n_pixel_values_images * self.num_image_tokens
         token_ids = token_ids + [-1] * (request.sampling_params.max_tokens - 1) # -1 will be set when executing
         # 3. image_overwrite_mask
-        image_overwrite_mask = [token_id == self.context.image_token_id for token_id in token_ids]
+        image_overwrite_mask = [token_id == self.image_token_id for token_id in token_ids]
         # 4. position_ids
         position_ids = list(range(len(token_ids)))
         # 5. cache_ids
@@ -117,7 +121,7 @@ class RequestProcessor:
         builder = InstructionListBuilder()
         if images_tensor is not None:
             if self.config.disaggregate_embed_prefill:
-                image_token_cache_ids = list(range(n_pixel_values_images * self.context.num_image_tokens))
+                image_token_cache_ids = list(range(n_pixel_values_images * self.num_image_tokens))
                 embed = ImageEmbed(
                     pixel_values = images_tensor,
                     cache_ids=image_token_cache_ids, 
@@ -133,7 +137,7 @@ class RequestProcessor:
                     sample_dst = None, 
                 )
                 builder.append(embed)
-                if self.context.ep_migrate:
+                if self.config.ep_migrate:
                     builder.append(MigrateRequest())
                 builder.append(prefill)
             else:
@@ -155,7 +159,7 @@ class RequestProcessor:
                 sample_dst = None, 
             )
             builder.append(prefill)
-        if self.context.pd_migrate:
+        if self.config.pd_migrate:
             builder.append(MigrateRequest())
 
         last_inst = prefill
@@ -175,6 +179,8 @@ class RequestProcessor:
             left = right
 
         instructions = builder.build_instruction_list()
+        if self.config.debug_request_process:
+            print(f'{request.prompt[:10]} {instructions}')
         # 7. output tokenizer
         rcb = RequestControlBlock(
             instructions = instructions, 

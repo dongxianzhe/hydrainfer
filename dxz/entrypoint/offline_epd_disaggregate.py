@@ -1,26 +1,41 @@
-from PIL import Image
-import asyncio
 import ray
+import asyncio
+import argparse
+from PIL import Image
 from dataclasses import dataclass, field, fields
 from dxz.utils.ray_utils import get_ip_address
 from dxz.request import Request, OfflineInferenceOutput, SamplingParameters
 from dxz.model import ModelFactoryConfig, getModelFactory, ModelFactoryContext
 from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, OfflineOutputTokenProcessor, RequestProcessParameters
-from dxz.cluster import AsyncEPDNode
+from dxz.cluster import AsyncEPDNode, NodeConfig
 from dxz.utils.counter import Counter
 from dxz.utils.zmq_utils import init_zmq_recv
+from dxz.utils.config_util import CLIConfig
 
 
 @dataclass
-class OfflineEPDDisaggregateEntryPointConfig:
+class OfflineEPDDisaggregateEntryPointConfig(CLIConfig):
     zmq_url: str = f"tcp://{get_ip_address()}:40832"
-    request_processor_config: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
-    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
-    batch_scheduler_config: BatchSchedulerConfig = field(default_factory=BatchSchedulerConfig)
-    executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
-    worker_config: WorkerConfig = field(default_factory=WorkerConfig)
-    n_kv_blocks: int = 512
-    n_image_blocks: int = 16
+    enode_config: NodeConfig = field(default_factory=NodeConfig)
+    pnode_config: NodeConfig = field(default_factory=NodeConfig)
+
+    def __post_init__(self):
+        self.enode_config.enable_encode = True
+        self.enode_config.enable_prefill = False
+        self.enode_config.enable_decode = False
+
+        self.pnode_config.enable_encode = False
+        self.pnode_config.enable_prefill = True
+        self.pnode_config.enable_decode = True
+        self.pnode_config.zmq_send_url = self.zmq_url
+        self.enode_config.request_processor_config.ep_migrate = True
+
+        self.pnode_config.update_config_value()
+        self.enode_config.update_config_value()
+
+    @staticmethod
+    def add_curr_config_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
+        return parser
 
 
 class OfflineEPDDisaggregateEntryPoint:
@@ -34,19 +49,7 @@ class OfflineEPDDisaggregateEntryPoint:
             name=f'enode',
             namespace='dxz',
             lifetime='detached'
-        )(AsyncEPDNode).remote(
-            request_processor_config = config.request_processor_config, 
-            model_factory_config = config.model_factory_config, 
-            batch_scheduler_config = config.batch_scheduler_config, 
-            executor_config = config.executor_config, 
-            worker_config = config.worker_config, 
-            n_kv_blocks = config.n_kv_blocks, 
-            n_image_blocks = config.n_image_blocks, 
-            enable_encode = True, 
-            enable_prefill = False, 
-            enable_decode = False, 
-            zmq_send_url = None, 
-        )
+        )(AsyncEPDNode).remote(self.config.enode_config)
         self.pdnode = ray.remote(
             num_cpus=0,
             num_gpus=0.1,
@@ -54,19 +57,7 @@ class OfflineEPDDisaggregateEntryPoint:
             name=f'pdnode',
             namespace='dxz',
             lifetime='detached'
-        )(AsyncEPDNode).remote(
-            request_processor_config = config.request_processor_config, 
-            model_factory_config = config.model_factory_config, 
-            batch_scheduler_config = config.batch_scheduler_config, 
-            executor_config = config.executor_config, 
-            worker_config = config.worker_config, 
-            n_kv_blocks = config.n_kv_blocks, 
-            n_image_blocks = config.n_image_blocks, 
-            enable_encode = False, 
-            enable_prefill = True, 
-            enable_decode = True, 
-            zmq_send_url = None, 
-        )
+        )(AsyncEPDNode).remote(self.config.pnode_config)
         self.nodes = [self.enode, self.pdnode]
         obj1 = self.enode.register_node.remote(self.pdnode)
         ray.get(obj1)
@@ -86,7 +77,8 @@ class OfflineEPDDisaggregateEntryPoint:
         return outputs
 
 
-async def main():
+async def main(config):
+    print(config)
     requests = [
         # Request(
         #     request_id = 0, 
@@ -103,12 +95,15 @@ async def main():
             sampling_params = SamplingParameters(max_tokens=12)
         ), 
     ]
-    config = OfflineEPDDisaggregateEntryPointConfig()
-    config.batch_scheduler_config.debug_mode = True
     entrypoint = OfflineEPDDisaggregateEntryPoint(config) 
     outputs = await entrypoint.generate(requests=requests)
     for i, output in enumerate(outputs):
         print(f'output{i}: {output.text}')
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    import argparse
+    parser = argparse.ArgumentParser(description="offlne epd disaggregate test", conflict_handler='resolve')
+    parser = OfflineEPDDisaggregateEntryPointConfig.add_cli_args(parser)
+    args = parser.parse_args()
+    config = OfflineEPDDisaggregateEntryPointConfig.from_cli_args(args)
+    asyncio.run(main(config))

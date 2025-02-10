@@ -4,34 +4,43 @@ import argparse
 from dataclasses import dataclass, field, fields
 from dxz.request import Request
 from dxz.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext
-from dxz.engine import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, ImageEmbed, Fill, EmptyInstruction, BatchScheduler, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, getWorker, WorkerContext, ExecutorContext, InstructionExecutor, Engine, BatchRequest, RequestProcessParameters, EngineComponentFactory
-from dxz.memory import TokenCacheBlockManager, TokenCacheBlockManagerContext
+from dxz.engine import RequestProcessor, RequestProcessorConfig, RequestProcessorContext, ImageEmbed, Fill, EmptyInstruction, BatchScheduler, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, getWorker, WorkerContext, ExecutorContext, InstructionExecutor, Engine, BatchRequest, RequestProcessParameters
+from dxz.memory import TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig
+from dxz.utils.config_util import CLIConfig
+from dxz.cluster.node_config import NodeConfig
 
 
 class EPDNode(Engine):
-    def __init__(self, 
-            request_processor_config: RequestProcessorConfig, 
-            model_factory_config: ModelFactoryConfig, 
-            batch_scheduler_config: BatchSchedulerConfig, 
-            executor_config: ExecutorConfig, 
-            worker_config: WorkerConfig, 
-            n_kv_blocks: int, 
-            n_image_blocks: int, 
-        ):
-        factory = EngineComponentFactory(
-            request_processor_config = request_processor_config, 
-            model_factory_config     = model_factory_config    , 
-            batch_scheduler_config   = batch_scheduler_config  , 
-            executor_config          = executor_config         , 
-            worker_config            = worker_config           , 
-            n_kv_blocks              = n_kv_blocks             , 
-            n_image_blocks           = n_image_blocks          , 
+    def __init__(self, config: NodeConfig):
+        if config.has_kv_cache:
+            self.kv_cache_block_manager = TokenCacheBlockManager(config.kv_cache_config, TokenCacheBlockManagerContext())
+        else:
+            self.kv_cache_block_manager = None
+
+        if config.has_image_cache:
+            self.image_cache_block_manager = TokenCacheBlockManager(config.image_cache_config, TokenCacheBlockManagerContext())
+        else:
+            self.image_cache_block_manager = None
+
+        self.batch_scheduler = BatchScheduler(config.batch_scheduler_config)
+        self.worker = getWorker(
+            config.worker_config, 
+            WorkerContext()
         )
-        self.kv_cache_block_manager = factory.get_kv_cache_block_manager()
-        self.image_cache_block_manager = factory.get_image_cache_block_manager()
-        self.batch_scheduler = factory.get_batch_scheduler()
-        self.executor = factory.get_executor(self.kv_cache_block_manager, self.image_cache_block_manager)
-        self.request_processor = factory.get_request_processor(self.batch_scheduler)
+        self.executor = InstructionExecutor(
+            config.executor_config, 
+            ExecutorContext(
+                kv_cache_block_manager = self.kv_cache_block_manager, 
+                image_cache_block_manager = self.image_cache_block_manager, 
+                worker = self.worker
+            )
+        )
+        self.request_processor = RequestProcessor(
+            config.request_processor_config, 
+            RequestProcessorContext(
+                batch_scheduler=self.batch_scheduler, 
+            )
+        )
 
     def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)

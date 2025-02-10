@@ -1,42 +1,27 @@
+import ray
 import torch
+import argparse
 from torch import Tensor
 from typing import Optional
 from dxz.model.model_factory import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput, ModelFactoryConfig, ModelFactoryContext, ModelFactory, getModelFactory
 from dxz.model_parallel.process_group import init_global_process_group, ParallelConfig
 from dataclasses import dataclass, field, fields
-import argparse
-import ray
+from dxz.utils.config_util import CLIConfig
 
 
 @dataclass
-class WorkerConfig:
+class WorkerConfig(CLIConfig):
     use_ray: bool = False
-    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
     init_method: str = 'tcp://localhost:9876'
-
-    @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> 'WorkerConfig':
-        attrs = [attr.name for attr in fields(cls) if attr.name not in ["model_factory_config", "parallel_config"]]
-        parallel_config = ParallelConfig.from_cli_args(args)
-        config = cls(
-            parallel_config=parallel_config, 
-            **{attr: getattr(args, attr) for attr in attrs}
-        )
-        return config
-
-    @staticmethod
-    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser = ParallelConfig.add_cli_args(parser)
-        parser.add_argument('--init-method', type=str, default='tcp://localhost:9876', help='if parallel config world size > 1, init method is used in init nccl backend, if no model parallel, it is useless.')
-        parser.add_argument('--use-ray', action='store_true', default=False, help='use ray actor run worker')
-        return parser
+    has_vision_model: bool = True
+    has_language_model: bool = True
+    parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
+    model_factory_config: ModelFactoryConfig = field(default_factory=ParallelConfig)
 
 
 @dataclass
 class WorkerContext:
-    model_factory_config: ModelFactoryConfig
-    has_vision_model: bool = True
-    has_language_model: bool = True
+    pass
 
 
 class Worker:
@@ -50,10 +35,10 @@ class Worker:
 class VanillaWorker(Worker):
     def __init__(self, config: WorkerConfig, context: WorkerContext):
         model_factory_context = ModelFactoryContext(process_group=None)
-        model_factory: ModelFactory = getModelFactory(context.model_factory_config, model_factory_context)
-        if context.has_vision_model:
+        model_factory: ModelFactory = getModelFactory(config.model_factory_config, model_factory_context)
+        if config.has_vision_model:
             self.vision_model = model_factory.getVisionModel() 
-        if context.has_language_model:
+        if config.has_language_model:
             self.language_model = model_factory.getLanguageModel() 
 
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
@@ -73,7 +58,7 @@ class RayWorker(Worker):
                 global_ranks=list(range(config.parallel_config.world_size))
             )
         )
-        model_factory: ModelFactory = getModelFactory(context.model_factory_config, model_factory_context)
+        model_factory: ModelFactory = getModelFactory(config.model_factory_config, model_factory_context)
         self.vision_model = model_factory.getVisionModel() 
         self.language_model = model_factory.getLanguageModel() 
         print('ray worker init finished')

@@ -142,7 +142,7 @@ def main(args: argparse.Namespace):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Benchmark the offline serving.")
+    parser = argparse.ArgumentParser(description="Benchmark the offline serving.", conflict_handler='resolve')
     parser.add_argument(
         "--dataset", 
         type=str,
