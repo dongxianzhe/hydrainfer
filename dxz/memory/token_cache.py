@@ -1,4 +1,5 @@
 import torch
+import argparse
 from torch import Tensor
 from dataclasses import dataclass, field
 from typing import Optional
@@ -6,6 +7,7 @@ from dxz._C.data_transfer.block_migration import get_ipc_mem_handle
 from dxz._C.data_transfer import block_migration
 from dxz.memory import BlockAllocator
 from dxz.utils.allocate import IncreaingAllocator
+from dxz.utils.config_util import CLIConfig
 
 
 class TokenCache:
@@ -50,27 +52,40 @@ class VirtualTokenCache:
 
 
 @dataclass
+class TokenCacheBlockManagerConfig(CLIConfig):
+    n_layers: int = 32
+    n_tokens: int = 2
+    n_blocks: int = 1024
+    block_size: int = 16
+    n_heads: int = 32
+    head_size: int = 128
+    dtype: torch.dtype = torch.half
+    device: torch.device = torch.device('cuda:0')
+
+    @staticmethod
+    def add_curr_config_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
+        parser.add_argument(f'{prefix}n-blocks', type=int, default=1024, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
+        parser.add_argument(f'{prefix}block-size', type=int, default=16, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
+        return parser
+
+
+@dataclass
 class TokenCacheBlockManagerContext:
-    n_layers: int
-    n_tokens: int
-    n_blocks: int
-    block_size: int
-    n_heads: int
-    head_size: int
-    dtype: torch.dtype
-    device: torch.device
+    pass
 
 
 class TokenCacheBlockManager:
-    def __init__(self, context: TokenCacheBlockManagerContext):
-        self.n_layers   = context.n_layers
-        self.n_tokens   = context.n_tokens 
-        self.n_blocks   = context.n_blocks
-        self.block_size = context.block_size
-        self.n_heads    = context.n_heads
-        self.head_size  = context.head_size
-        self.dtype      = context.dtype
-        self.device     = context.device
+    def __init__(self, config: TokenCacheBlockManagerConfig, context: TokenCacheBlockManagerContext):
+        self.config = config
+        self.context = context
+        self.n_layers   = config.n_layers
+        self.n_tokens   = config.n_tokens 
+        self.n_blocks   = config.n_blocks
+        self.block_size = config.block_size
+        self.n_heads    = config.n_heads
+        self.head_size  = config.head_size
+        self.dtype      = config.dtype
+        self.device     = config.device
 
         self.cache_tensor = torch.randn(size=(self.n_layers, self.n_tokens, self.n_blocks, self.block_size, self.n_heads, self.head_size), dtype=self.dtype, device=self.device)
         self.memory_handle: list[int] = get_ipc_mem_handle(self.cache_tensor)
@@ -101,7 +116,7 @@ class TokenCacheBlockManager:
         if len(virtual_cache.block_table) < n_blocks:
             virtual_cache.block_table += self.block_allocator.allocate(n_blocks - len(virtual_cache.block_table))
         if len(virtual_cache.block_table) < n_blocks:
-            raise Exception(f'not enough cache, total n_blocks {self.n_blocks}')
+            raise Exception(f'not enough cache, total n_blocks {self.n_blocks}, virtual cache need {n_blocks} allready has {len(virtual_cache.block_table)}')
         # 2. set vitual cache
         virtual_cache.n_cache_tokens = max(virtual_cache.n_cache_tokens, n_tokens)
 

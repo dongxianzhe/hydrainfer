@@ -5,9 +5,10 @@ from dataclasses import dataclass, fields
 from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock
 from dxz.utils.allocate import IncreaingAllocator
 import argparse
+from dxz.utils.config_util import CLIConfig
 
 @dataclass
-class BatchSchedulerConfig:
+class BatchSchedulerConfig(CLIConfig):
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
@@ -18,21 +19,15 @@ class BatchSchedulerConfig:
     debug_mode: bool = False
 
     @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> 'BatchSchedulerConfig':
-        attrs = [attr.name for attr in fields(cls)]
-        config = cls(**{attr: getattr(args, attr) for attr in attrs})
-        return config
-
-    @staticmethod
-    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser.add_argument('--batch-policy', type=str, choices=['nobatch', 'requestlevel', 'continuousbatch'], default='continuousbatch', help='Batch policy for scheduling.')
-        parser.add_argument('--priority', type=str, choices=['prefill', 'decode'], default='prefill', help='Prefill prioritize or decode prioritize')
-        parser.add_argument('--max-running-requests', type=int, default=15, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
-        parser.add_argument('--max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
-        parser.add_argument('--chunked-prefill', action='store_true', help='Enable chunk part of prefill of a request when max batch fill tokens is not enough')
-        parser.add_argument('--max-batch-embed-images', type=int, default=3, help='Maximum number of images to embed in each batch.')
-        parser.add_argument('--batch-embed-prefill', action='store_true', help='Enable batch embedding and prefill in one step.')
-        parser.add_argument('--debug-mode', action='store_true', help='Enable debug mode for more detailed logging.')
+    def add_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
+        parser.add_argument(f'{prefix}batch-policy', type=str, choices=['nobatch', 'requestlevel', 'continuousbatch'], default='continuousbatch', help='Batch policy for scheduling.')
+        parser.add_argument(f'{prefix}priority', type=str, choices=['prefill', 'decode'], default='prefill', help='Prefill prioritize or decode prioritize')
+        parser.add_argument(f'{prefix}max-running-requests', type=int, default=15, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
+        parser.add_argument(f'{prefix}chunked-prefill', action='store_true', help='Enable chunk part of prefill of a request when max batch fill tokens is not enough')
+        parser.add_argument(f'{prefix}max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
+        parser.add_argument(f'{prefix}max-batch-embed-images', type=int, default=3, help='Maximum number of images to embed in each batch.')
+        parser.add_argument(f'{prefix}batch-embed-prefill', action='store_true', help='Enable batch embedding and prefill in one step.')
+        parser.add_argument(f'{prefix}debug-mode', action='store_true', help='Enable debug mode for more detailed logging.')
         return parser
 
 

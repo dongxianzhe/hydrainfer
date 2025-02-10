@@ -13,38 +13,29 @@ from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, Visi
 from dxz.engine.worker import WorkerConfig, WorkerContext, getWorker, Worker
 from dxz.memory import TokenCacheBlockManager, KVCache
 from dxz.engine.scheduler import BatchRequest
+from dxz.utils.config_util import CLIConfig
 
 
 @dataclass
-class ExecutorConfig:
+class ExecutorConfig(CLIConfig):
     use_flash_infer: bool = False
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
+    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
 
     @classmethod
-    def from_cli_args(cls, args: argparse.Namespace) -> 'ExecutorConfig':
-        attrs = [attr.name for attr in fields(cls)]
-        config = cls(
-            **{attr: getattr(args, attr) for attr in attrs}
-        )
-        return config
-
-    @staticmethod
-    def add_cli_args(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
-        parser.add_argument('--use-flash-infer', action='store_true', help='Enable flash infer attention kernel, default kernel is flash attention')
-        parser.add_argument('--multi-streams-forward', action='store_true', help='Enable multi-stream forwarding.')
-        parser.add_argument('--multi-threads-forward', action='store_true', help='Enable multi-thread forwarding.')
+    def add_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
+        parser.add_argument(f'{prefix}use-flash-infer', action='store_true', help='Enable flash infer attention kernel, default kernel is flash attention')
+        parser.add_argument(f'{prefix}multi-streams-forward', action='store_true', help='Enable multi-stream forwarding.')
+        parser.add_argument(f'{prefix}multi-threads-forward', action='store_true', help='Enable multi-thread forwarding.')
+        cls.add_sub_configs_cli_args(cls, parser, prefix)
         return parser
 
 
 @dataclass
 class ExecutorContext:
-    model_factory_config: ModelFactoryConfig
-    block_size: int
     kv_cache_block_manager: TokenCacheBlockManager
     image_cache_block_manager: TokenCacheBlockManager
-    dtype: torch.dtype
-    device: torch.device
     worker: Worker = None
 
 
@@ -55,15 +46,16 @@ class Executor:
 
 class BatchFillExecutor(Executor):
     def __init__(self, config: ExecutorConfig, context: ExecutorContext):
-        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext(process_group=None))
+        self.config = config
+        self.context = context
+
+        model_factory = getModelFactory(config.model_factory_config, ModelFactoryContext(process_group=None))
         self.worker = context.worker
         self.vision_model_config = model_factory.getVisionModelConfig()
         self.language_model_config = model_factory.getLanguageModelConfig()
 
-        self.config = config
-        self.context = context
-        self.dtype = context.model_factory_config.dtype
-        self.device = context.model_factory_config.device
+        self.dtype = config.model_factory_config.dtype
+        self.device = config.model_factory_config.device
         self.block_mangaer = context.kv_cache_block_manager
         self.image_block_manager = context.image_cache_block_manager
 
@@ -107,7 +99,7 @@ class BatchFillExecutor(Executor):
                 slot_ids = self.image_block_manager.v2p(rcb.virtual_image_cache, inst.image_token_cache_ids)
                 image_token_cache = token_cache.get_caches()[0]
                 image_token_cache = image_token_cache.view(-1, self.language_model_config.n_qo_heads * self.language_model_config.head_dim)
-                slot_ids = torch.tensor(slot_ids, dtype=torch.int, device=self.context.device)
+                slot_ids = torch.tensor(slot_ids, dtype=torch.int, device=self.device)
                 request_image_tokens = image_token_cache[slot_ids, :]
                 image_tokens.append(request_image_tokens)
         if len(batch_image_fill) > 0 and len(image_tokens) > 0:
@@ -125,7 +117,7 @@ class BatchFillExecutor(Executor):
             num_qo_heads = self.language_model_config.n_qo_heads,
             num_kv_heads = self.language_model_config.n_kv_heads,
             head_dim = self.language_model_config.head_dim, 
-            block_size = self.context.block_size, 
+            block_size = self.context.kv_cache_block_manager.config.block_size, 
             device = self.device, 
             flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper, 
             flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper, 
@@ -178,14 +170,15 @@ class BatchFillExecutor(Executor):
 
 class BatchImageEmbedExecutor(Executor):
     def __init__(self, config: ExecutorConfig, context: ExecutorContext):
+        self.config = config
         self.context = context
         self.worker = context.worker
         self.block_manager = context.image_cache_block_manager
-        model_factory = getModelFactory(context.model_factory_config, ModelFactoryContext(process_group=None))
+        model_factory = getModelFactory(config.model_factory_config, ModelFactoryContext(process_group=None))
         self.language_model_config = model_factory.getLanguageModelConfig()
         self.n_qo_heads = self.language_model_config.n_qo_heads
         self.head_dim = self.language_model_config.head_dim
-        self.device = context.device
+        self.device = config.model_factory_config.device
 
     def execute(self, contexts: BatchRequest):
         if len(contexts) == 0:
@@ -197,7 +190,7 @@ class BatchImageEmbedExecutor(Executor):
         new_cache_slots: list[int] = []
         batch_pixel_values: list[Tensor] = []
         for rcb, inst in contexts:
-            pixel_values = inst.pixel_values.to(self.context.dtype).to(self.context.device) # (n_images, n_channels, width, height)
+            pixel_values = inst.pixel_values.to(self.config.model_factory_config.dtype).to(self.config.model_factory_config.device) # (n_images, n_channels, width, height)
             batch_pixel_values.append(pixel_values)
             slot_ids = self.block_manager.set(rcb.virtual_image_cache, inst.cache_ids) 
             new_cache_slots += slot_ids 
