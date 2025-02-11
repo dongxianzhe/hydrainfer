@@ -86,3 +86,26 @@ class OfflineOutputTokenProcessor(OutputTokenProcessor):
             self.output.text = self.tokenizer.decode(self.output.output_token_ids, skip_special_tokens=True)
             self.counter.count()
             self.bar.update(1)
+
+
+class ZmqOutputTokenProcessor(OutputTokenProcessor):
+    def __init__(self):
+        self.arrival_time = time.perf_counter()
+        self.output_token_ids: list[int] = []
+        self.token_times: list[float] = []
+        self.ttft: list[float] = []
+        self.tpot: list[float] = []
+        self.finished_time: float = 0
+
+    def append_token_id(self, token_id: int, is_last_token: bool=False):
+        self.output_token_ids.append(token_id)
+        self.token_times.append(time.perf_counter())
+
+        is_first_token: bool = len(self.output_token_ids) == 1
+        if is_first_token:
+            self.ttft = self.token_times[-1]
+        else:
+            self.tpot = self.token_times[-1] - self.token_times[-2]
+
+        if is_last_token:
+            self.finished_time = time.perf_counter()

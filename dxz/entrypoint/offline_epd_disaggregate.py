@@ -68,7 +68,7 @@ class OfflineEPDDisaggregateEntryPoint:
     async def generate(self, requests: list[Request]) -> list[OfflineInferenceOutput]:
         finished = Counter()
         for request in requests:
-            self.enode.add_request.remote(request, RequestProcessParameters(output_token_processors=[], print_output_text=True))
+            self.enode.add_request.remote(request, RequestProcessParameters(zmq_output=True))
         outputs: list[OfflineInferenceOutput] = []
         while finished.value() < len(requests):
             output = await self.zmq_recv.recv_pyobj()
@@ -80,20 +80,14 @@ class OfflineEPDDisaggregateEntryPoint:
 async def main(config):
     print(config)
     requests = [
-        # Request(
-        #     request_id = 0, 
-        #     prompt = f"<image>What is the content of this image?", 
-        #     image = Image.open('./benchmark/dataset/cherry_blossom.jpg'), 
-        #     image_base64 = None, 
-        #     sampling_params = SamplingParameters(max_tokens=10)
-        # ), 
         Request(
-            request_id = 1, 
+            request_id = i, 
             prompt = f"<image>What is the content of this image?", 
             image = Image.open('./benchmark/dataset/cherry_blossom.jpg'), 
             image_base64 = None, 
-            sampling_params = SamplingParameters(max_tokens=12)
-        ), 
+            sampling_params = SamplingParameters(max_tokens=10)
+        )
+        for i in range(8)
     ]
     entrypoint = OfflineEPDDisaggregateEntryPoint(config) 
     outputs = await entrypoint.generate(requests=requests)

@@ -1,5 +1,6 @@
 from typing import Optional
 from dxz.engine import Instruction, InstructionList, OutputTokenProcessor, RequestMetric
+from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.memory import VirtualTokenCache
 from dxz.request import SamplingParameters
 
@@ -13,6 +14,7 @@ class RequestControlBlock:
         self.sid: int = -1
 
         self.output_token_processors: list[OutputTokenProcessor] = []
+        self.zmq_output: ZmqOutputTokenProcessor
         self.sampling_params = sampling_params
         self.metric = RequestMetric()
 
