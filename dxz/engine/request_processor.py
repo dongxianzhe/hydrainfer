@@ -10,7 +10,8 @@ from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
-from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor
+from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor
+from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 from dxz.utils.config_util import CLIConfig
 
@@ -42,9 +43,10 @@ class RequestProcessorContext:
 
 @dataclass
 class RequestProcessParameters:
-    output_token_processors: list[OutputTokenProcessor]
+    output_token_processors: list[OutputTokenProcessor] = field(default_factory=list)
     print_output_text: bool = False # if true request processor will register a print output token processor to the request
     is_stream_output: bool = False
+    zmq_output: bool = False
 
 
 class RequestProcessor:
@@ -186,6 +188,10 @@ class RequestProcessor:
             instructions = instructions, 
             sampling_params = request.sampling_params, 
         )
+        if params.zmq_output:
+            zmq_output = ZmqOutputTokenProcessor()
+            rcb.zmq_output = zmq_output 
+            rcb.register_output_token_processor(zmq_output)
         for output_token_processor in params.output_token_processors:
             rcb.register_output_token_processor(output_token_processor)
 

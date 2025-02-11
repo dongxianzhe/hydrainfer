@@ -1,3 +1,4 @@
+import ray
 import time
 import asyncio
 import argparse
@@ -13,10 +14,13 @@ from dxz.utils.zmq_utils import init_zmq_send
 from dxz.cluster.node_config import NodeConfig
 from dxz.cluster.epdnode import EPDNode
 
+from dxz.request.offline_inference_output import OfflineInferenceOutput
 
 class AsyncEPDNode(AsyncEngine):
     def __init__(self, config: NodeConfig):
         self.config = config
+        model_factory = getModelFactory(self.config.model_factory_config, ModelFactoryContext())
+        self.tokenizer = model_factory.getTokenizer()
         if config.has_kv_cache:
             self.kv_cache_block_manager = TokenCacheBlockManager(config.kv_cache_config, TokenCacheBlockManagerContext())
         else:
@@ -46,9 +50,9 @@ class AsyncEPDNode(AsyncEngine):
                 batch_scheduler=self.batch_scheduler, 
             )
         )
+        self.nodes = []
         if config.zmq_send_url:
             self.zmq_send = init_zmq_send(config.zmq_send_url)
-        self.nodes = []
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
@@ -86,17 +90,26 @@ class AsyncEPDNode(AsyncEngine):
 
         # 3. scheduler requests
         t = time.perf_counter()
-        for rcb, _ in batch:
-            if rcb.is_finished():
-                rcb.metric.finished_time = t
-                if rcb.virtual_kv_cache: 
-                    self.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
-                if rcb.virtual_image_cache:
-                    self.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
-            elif isinstance(inst, MigrateRequest):
-                pass
-            else:
-                self.batch_scheduler.schedule_running(rcb)
+        for batch in [batch_image_embed, batch_fill, batch_empty]:
+            for rcb, inst in batch:
+                if rcb.is_finished():
+                    rcb.metric.finished_time = t
+                    if rcb.virtual_kv_cache: 
+                        self.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
+                    if rcb.virtual_image_cache:
+                        self.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
+                    if self.config.zmq_send_url:
+                        self.zmq_send.send_pyobj(OfflineInferenceOutput(
+                        text = self.tokenizer.decode(rcb.zmq_output.output_token_ids),
+                        output_token_ids = rcb.zmq_output.output_token_ids, 
+                        arrival_time  = rcb.zmq_output.arrival_time, 
+                        finished_time = rcb.zmq_output.finished_time, 
+                        token_times = rcb.zmq_output.token_times,
+                        ttft = rcb.zmq_output.ttft, 
+                        tpot = rcb.zmq_output.tpot, 
+                    ))
+                else:
+                    self.batch_scheduler.schedule_running(rcb)
 
     async def step_loop(self):
         while True:
@@ -125,9 +138,11 @@ class AsyncEPDNode(AsyncEngine):
         self.batch_scheduler.schedule_new(rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
+        print('_execute_batch_migrate is called')
         if len(contexts) == 0:
             return
+        print('_execute_batch_migrate is called')
         node = self.nodes[0]
         for rcb, _ in contexts:
             rcb.step()
-            node.migrate.remote(rcb)
+            obj = node.migrate.remote(rcb)
