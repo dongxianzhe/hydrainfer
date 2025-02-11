@@ -92,6 +92,8 @@ class TokenCacheBlockManager:
         self.block_allocator = BlockAllocator(self.n_blocks)
         self.vid_allocator = IncreaingAllocator(first_value=1)
 
+        self.migrate_stream:torch.cuda.Stream = torch.cuda.Stream()
+
     def allocate_virtual_cache(self) -> VirtualTokenCache:
         return VirtualTokenCache(
             vid = self.vid_allocator.allocate(), 
@@ -155,18 +157,17 @@ class TokenCacheBlockManager:
         assert src_virtual_cache.memory_handle is not None
         dev_ptr = block_migration.register_ipc_mem_handle(src_virtual_cache.memory_handle)
         # todo modify cpp code to support general layers migrate
-        # todo memory copy stream
-        for layer_id in range(self.n_layers):
-            block_migration.migrate_blocks(
-                0, # prefill_start_head: int
-                self.n_heads, # prefill_end_head: int
-                src_virtual_cache.block_table, # prefill_block_indexes: list[int]
-                0, # decoding_start_head: int
-                self.n_heads, # decoding_end_head:int
-                dst_virtual_cache.block_table, # decoding_block_indexes: list[int]
-                dev_ptr, # prefill_dev_ptr_index: int
-                self.n_heads, # num_heads: int
-                self.cache_tensor[layer_id, :, :, :, :, :], # decoding_worker_kv_cache: Tensor
-            )
-        torch.cuda.synchronize()
-        print('migrate_blocks cuda synchronize')
+        with torch.cuda.stream(self.migrate_stream):
+            for layer_id in range(self.n_layers):
+                block_migration.migrate_blocks(
+                    0, # prefill_start_head: int
+                    self.n_heads, # prefill_end_head: int
+                    src_virtual_cache.block_table, # prefill_block_indexes: list[int]
+                    0, # decoding_start_head: int
+                    self.n_heads, # decoding_end_head:int
+                    dst_virtual_cache.block_table, # decoding_block_indexes: list[int]
+                    dev_ptr, # prefill_dev_ptr_index: int
+                    self.n_heads, # num_heads: int
+                    self.cache_tensor[layer_id, :, :, :, :, :], # decoding_worker_kv_cache: Tensor
+                )
+        # torch.cuda.synchronize()

@@ -16,7 +16,7 @@ class BatchSchedulerConfig(CLIConfig):
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
     batch_embed_prefill: bool = False
-    debug_mode: bool = False
+    debug_batch: bool = False
 
     @classmethod
     def add_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
@@ -27,7 +27,7 @@ class BatchSchedulerConfig(CLIConfig):
         parser.add_argument(f'{prefix}max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
         parser.add_argument(f'{prefix}max-batch-embed-images', type=int, default=3, help='Maximum number of images to embed in each batch.')
         parser.add_argument(f'{prefix}batch-embed-prefill', action='store_true', help='Enable batch embedding and prefill in one step.')
-        parser.add_argument(f'{prefix}debug-mode', action='store_true', help='Enable debug mode for more detailed logging.')
+        parser.add_argument(f'{prefix}debug-batch', action='store_true', help='Enable debug mode for batch scheduler.')
         return parser
 
 
@@ -132,7 +132,7 @@ class BatchScheduler:
             else:
                 next_step.append(seq)
 
-        if self.config.debug_mode:
+        if self.config.debug_batch:
             print(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
             print(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
             print(f'inst: ' + ' '.join(f'{seq.instructions.curr}' for seq in this_step))
