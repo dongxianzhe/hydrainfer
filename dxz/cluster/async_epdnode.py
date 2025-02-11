@@ -138,10 +138,8 @@ class AsyncEPDNode(AsyncEngine):
         self.batch_scheduler.schedule_new(rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
-        print('_execute_batch_migrate is called')
         if len(contexts) == 0:
             return
-        print('_execute_batch_migrate is called')
         node = self.nodes[0]
         for rcb, _ in contexts:
             rcb.step()

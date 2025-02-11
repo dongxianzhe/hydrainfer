@@ -1,8 +1,6 @@
 import torch
-from dxz.engine.engine import EngineConfig
-from dxz.request.request import Request, SamplingParameters
-from dxz.entrypoint.mllm import MLLM, MLLMConfig
-from dxz.cluster.epdnode import EPDNodeConfig
+from dxz.request import Request, SamplingParameters
+from dxz.entrypoint import OfflineSingleInstanceEntryPoint, OfflineSingleInstanceEntryPointConfig
 from transformers import LlamaForCausalLM as LlamaForCausalLMRef
 from transformers import AutoTokenizer
 
@@ -32,11 +30,14 @@ def engine_generate():
         image_base64 = None, 
         sampling_params = SamplingParameters(max_tokens=20)
     )
+    config = OfflineSingleInstanceEntryPointConfig()
+    config.model_factory_config.model_name='meta-llama/Llama-2-7b-hf'
+    config.epdnode_config.kv_cache_config.n_blocks=512
+    config.epdnode_config.image_cache_config.n_blocks=16
+    config.update_config_value()
 
-    config = MLLMConfig(epdnode_config=EPDNodeConfig(engine_config=EngineConfig(model_name=model_name)))
-    mllm = MLLM(config)
-
-    outputs = mllm.generate([request])
+    entrypoint = OfflineSingleInstanceEntryPoint(config)
+    outputs = entrypoint.generate([request])
     for output in outputs:
         print(output.text)
 

@@ -16,6 +16,16 @@ class OfflineSingleInstanceEntryPointConfig(CLIConfig):
     model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
     epdnode_config: NodeConfig = field(default_factory=NodeConfig)
 
+    def update_shared_config(self):
+        self.epdnode_config.model_factory_config = self.model_factory_config
+        self.epdnode_config.update_shared_config()
+
+    def update_config_value(self):
+        self.epdnode_config.update_config_value()
+
+    def __post_init__(self):
+        self.update_shared_config()
+        self.update_config_value()
 
 class OfflineSingleInstanceEntryPoint:
     def __init__(self, config: OfflineSingleInstanceEntryPointConfig):
