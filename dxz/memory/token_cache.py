@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from dxz._C.data_transfer.block_migration import get_ipc_mem_handle
 from dxz._C.data_transfer import block_migration
+from dxz._C.kernel.cache_kernels import set_image_cache
 from dxz.memory import BlockAllocator
 from dxz.utils.allocate import IncreaingAllocator
 from dxz.utils.config_util import CLIConfig
@@ -25,6 +26,7 @@ class TokenCache:
             assert cache.dtype == caches[0].dtype, f'all dtype should be same but got {cache.dtype} and {caches[0].dtype}'
             assert cache.device == caches[0].device, f'all device should be same but got {cache.device} and {caches[0].device}'
         self.caches = caches
+        self.block_size = caches[0].shape[1]
         self.dtype = caches[0].dtype
         self.device = caches[0].device
 
@@ -38,9 +40,20 @@ class TokenCache:
             assert slot_ids.shape[0] == value.shape[0], f"{slot_ids[0].shape} {value.shape[0]}"
             assert slot_ids.device == value.device, f"{slot_ids.device} {value.device}"
 
+        if self.device.type == 'cuda' and set_image_cache:
+            for cache, value in zip(self.caches, values):
+                set_image_cache(
+                    slot_ids, 
+                    value,  
+                    cache,
+                )
+            return
+
         for cache, value in zip(self.caches, values):
             slot_view = cache.view(-1, cache.shape[-2], cache.shape[-1])
+            print(slot_view.shape, slot_ids.shape, value.shape)
             slot_view[slot_ids, :, :] = value
+            return
 
 
 @dataclass

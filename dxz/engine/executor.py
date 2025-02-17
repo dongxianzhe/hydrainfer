@@ -221,6 +221,7 @@ class BatchImageEmbedExecutor(Executor):
         for rcb, inst in contexts:
             pixel_values = inst.pixel_values.to(self.config.model_factory_config.dtype).to(self.config.model_factory_config.device) # (n_images, n_channels, width, height)
             batch_pixel_values.append(pixel_values)
+            inst.pixel_values = None
             slot_ids = self.block_manager.set(rcb.virtual_image_cache, inst.cache_ids) 
             new_cache_slots += slot_ids 
         pixel_values = torch.cat(batch_pixel_values, dim=0) # (total_images, n_channels, width, height)
