@@ -83,9 +83,12 @@ class AsyncEPDNode(AsyncEngine):
                 continue
             raise Exception(f'unsupported instrction {type(inst)}')
 
-        self.executor.execute_image_embed(batch_image_embed)
-        self.executor.execute_fill(batch_fill)
-        self.executor.execute_empty(batch_empty)
+        futures = []
+        futures.append(self.executor.execute_image_embed(batch_image_embed))
+        futures.append(self.executor.execute_fill(batch_fill))
+        futures.append(self.executor.execute_empty(batch_empty))
+        for future in futures:
+            future.get()
         await self._execute_batch_migrate(batch_migrate)
 
         # 3. scheduler requests

@@ -1,6 +1,7 @@
 import time
 import torch
 import argparse
+import concurrent
 from torch import Tensor
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,32 @@ from dxz.memory import TokenCacheBlockManager, KVCache
 from dxz.engine.scheduler import BatchRequest
 from dxz.utils.config_util import CLIConfig
 
+
+class Future:
+    def get(self):
+        raise NotImplementedError
+
+
+class EmptyFuture(Future):
+    def get(self):
+        pass
+
+
+class ThreadPoolExecutorFuture(Future):
+    def __init__(self, future: concurrent.futures._base.Future):
+        self.future = future
+
+    def get(self):
+        self.future.result()
+
+
+class ComposeFuture(Future):
+    def __init__(self, futures: list[Future]):
+        self.futures = futures
+
+    def get(self):
+        for future in self.futures:
+            future.get()
 
 @dataclass
 class ExecutorConfig(CLIConfig):
@@ -79,9 +106,9 @@ class BatchFillExecutor(Executor):
         image_features = self.worker.execute_vision_model(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
         return image_features
             
-    def execute(self, contexts: BatchRequest):
+    def execute(self, contexts: BatchRequest) -> Future:
         if len(contexts) == 0:
-            return {}
+            return EmptyFuture()
 
         # 1. allocate memory if necessary
         for rcb, _ in contexts:
@@ -166,6 +193,8 @@ class BatchFillExecutor(Executor):
 
         for rcb, _ in contexts:
             rcb.instructions.curr = rcb.instructions.curr.next
+        
+        return EmptyFuture()
 
 
 class BatchImageEmbedExecutor(Executor):
@@ -180,9 +209,9 @@ class BatchImageEmbedExecutor(Executor):
         self.head_dim = self.language_model_config.head_dim
         self.device = config.model_factory_config.device
 
-    def execute(self, contexts: BatchRequest):
+    def execute(self, contexts: BatchRequest) -> Future:
         if len(contexts) == 0:
-            return
+            return EmptyFuture()
         for rcb, _ in contexts:
             if rcb.virtual_image_cache is None:
                 rcb.virtual_image_cache = self.block_manager.allocate_virtual_cache()
@@ -207,18 +236,22 @@ class BatchImageEmbedExecutor(Executor):
         for rcb, _ in contexts:
             rcb.instructions.curr = rcb.instructions.curr.next
 
+        return EmptyFuture()
+
 
 class MultiStreamsDecorator(Executor):
     def __init__(self, stream: torch.cuda.Stream, executor: Executor):
         self.stream = stream
         self.executor = executor
 
-    def execute(self, contexts: BatchRequest):
+    def execute(self, contexts: BatchRequest) -> Future:
         if len(contexts) == 0:
-            return
+            return EmptyFuture()
+
         with torch.cuda.stream(self.stream):
             self.executor.execute(contexts)
             self.stream.synchronize()
+        return EmptyFuture()
 
 
 class MultiThreadsDecorator:
@@ -226,12 +259,13 @@ class MultiThreadsDecorator:
         self.pool = pool
         self.executor = executor
 
-    def execute(self, contexts: BatchRequest):
+    def execute(self, contexts: BatchRequest) -> Future:
         if len(contexts) == 0:
-            return
+            return EmptyFuture()
 
         future = self.pool.submit(self.executor.execute, contexts)
-        return future
+
+        return ThreadPoolExecutorFuture(future)
 
 
 class InstructionExecutor:
@@ -254,14 +288,15 @@ class InstructionExecutor:
             self.pool = ThreadPoolExecutor(max_workers=1)
             self.image_embed_executor = MultiThreadsDecorator(self.pool, self.image_embed_executor)
 
-    def execute_fill(self, contexts: BatchRequest):
+    def execute_fill(self, contexts: BatchRequest) -> Future:
         return self.fill_executor.execute(contexts)
 
-    def execute_image_embed(self, contexts: BatchRequest):
+    def execute_image_embed(self, contexts: BatchRequest) -> Future:
         return self.image_embed_executor.execute(contexts)
 
-    def execute_empty(self, contexts: BatchRequest):
+    def execute_empty(self, contexts: BatchRequest) -> Future:
         if len(contexts) == 0:
-            return
+            return EmptyFuture()
         for rcb, _ in contexts:
             rcb.instructions.curr = rcb.instructions.curr.next
+        return EmptyFuture()
