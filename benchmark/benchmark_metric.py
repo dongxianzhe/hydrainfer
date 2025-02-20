@@ -79,6 +79,13 @@ class BenchmarkMetricsBuilder:
         self.ttfts: list[float] = []
         self.tpots: list[float] = []
         self.start_time = time.perf_counter()
+        self.end_time = time.perf_counter()
+
+    def start(self):
+        self.start_time = time.perf_counter()
+
+    def end(self):
+        self.end_time = time.perf_counter()
     
     def append(self, input_len: int, success: bool, output_len: int, arrival_time: float, finished_time: float, token_times: list[float]):
         if success:
@@ -93,7 +100,6 @@ class BenchmarkMetricsBuilder:
                     self.tpots.append(token_times[i] - token_times[i - 1])
         else:
             self.input_lens.append(input_len)
-        self.end_time = time.perf_counter()
 
     def get_metrics(self) ->  BenchmarkMetrics:
         duration = self.end_time - self.start_time
