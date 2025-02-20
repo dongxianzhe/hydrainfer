@@ -36,6 +36,10 @@ class BenchmarkMetrics:
     p90_tpot_ms: float
     p99_tpot_ms: float
 
+    ttft_slo_attainment: float
+    tpot_slo_attainment: float
+    slo_attainment: float
+
     def print(self):
         print("{s:{c}^{n}}".format(s=' Serving Benchmark Result ', n=50, c='='))
         print("{:<40} {:<10}".format("Successful requests:", self.completed))
@@ -68,10 +72,15 @@ class BenchmarkMetrics:
                                         self.median_tpot_ms))
         print("{:<40} {:<10.2f}".format("P90 TPOT (ms):", self.p90_tpot_ms))
         print("{:<40} {:<10.2f}".format("P99 TPOT (ms):", self.p99_tpot_ms))
+        print("{s:{c}^{n}}".format(s='SLO Attainment', n=50, c='-'))
+        print("{:<40} {:<10.2f}".format("TTFT SLO Attainment:", self.ttft_slo_attainment))
+        print("{:<40} {:<10.2f}".format("TPOT SLO Attainment:", self.tpot_slo_attainment))
+        print("{:<40} {:<10.2f}".format("SLO Attainment:", self.slo_attainment))
         print("=" * 50)
     
 class BenchmarkMetricsBuilder:
     def __init__(self):
+        self.total_requests: int = 0
         self.completed = 0
         self.input_lens: list[int] = []
         self.output_lens: list[int] = []
@@ -80,6 +89,9 @@ class BenchmarkMetricsBuilder:
         self.tpots: list[float] = []
         self.start_time = time.perf_counter()
         self.end_time = time.perf_counter()
+        self.ttft_slo_cnt: int = 0
+        self.tpot_slo_cnt: int = 0
+        self.slo_cnt: int = 0
 
     def start(self):
         self.start_time = time.perf_counter()
@@ -87,17 +99,28 @@ class BenchmarkMetricsBuilder:
     def end(self):
         self.end_time = time.perf_counter()
     
-    def append(self, input_len: int, success: bool, output_len: int, arrival_time: float, finished_time: float, token_times: list[float]):
+    def append(self, input_len: int, success: bool, output_len: int, arrival_time: float, finished_time: float, token_times: list[float], ttft_slo: float, tpot_slo: float):
+        self.total_requests += 1
         if success:
             self.completed += 1
             self.input_lens.append(input_len)
             self.output_lens.append(output_len)
             self.latencies.append(finished_time - arrival_time)
+
+            is_ttft_satisfied: bool = True
+            is_tpot_satisfied: bool = True
             for i in range(len(token_times)):
                 if i == 0:
-                    self.ttfts.append(token_times[i] - arrival_time) 
+                    ttft = token_times[i] - arrival_time
+                    self.ttfts.append(ttft) 
+                    is_ttft_satisfied = ttft < ttft_slo
                 else:
-                    self.tpots.append(token_times[i] - token_times[i - 1])
+                    tpot = token_times[i] - token_times[i - 1]
+                    self.tpots.append(tpot)
+                    is_tpot_satisfied = is_tpot_satisfied and tpot < tpot_slo
+            self.ttft_slo_cnt += is_ttft_satisfied
+            self.tpot_slo_cnt += is_tpot_satisfied
+            self.slo_cnt += is_ttft_satisfied and is_tpot_satisfied 
         else:
             self.input_lens.append(input_len)
 
@@ -129,5 +152,8 @@ class BenchmarkMetricsBuilder:
             median_tpot_ms=np.median(self.tpots) * 1000,
             p90_tpot_ms=np.percentile(self.tpots, 90) * 1000 if len(self.tpots) > 0 else np.nan,
             p99_tpot_ms=np.percentile(self.tpots, 99) * 1000 if len(self.tpots) > 0 else np.nan,
+            ttft_slo_attainment = self.ttft_slo_cnt / self.total_requests,
+            tpot_slo_attainment = self.tpot_slo_cnt / self.total_requests,
+            slo_attainment = self.slo_cnt / self.total_requests, 
         )
         return metrics

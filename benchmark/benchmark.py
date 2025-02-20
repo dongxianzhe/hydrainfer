@@ -20,7 +20,7 @@ scenarios = [{
         'n_prompt_tokens': random.randint(500, 600), 
         'n_images': 0,
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 2, 
+        'ttft_slo': 1, 
         'tpot_slo': 0.08, 
     }, 
 }, {
@@ -31,7 +31,7 @@ scenarios = [{
         'n_prompt_tokens': random.randint(500, 600), 
         'n_images': 1, 
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 2,  
+        'ttft_slo': 1,  
         'tpot_slo': 0.08,
     }, 
 }, {
@@ -42,7 +42,7 @@ scenarios = [{
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images':0, 
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 1, 
+        'ttft_slo': 0.5, 
         'tpot_slo': 0.04, 
     }, 
 }, {
@@ -53,13 +53,14 @@ scenarios = [{
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images': 1, 
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 1,  
+        'ttft_slo': 0.5,  
         'tpot_slo': 0.04,
     }, 
 }]
 
 def prepare_requests(args: argparse.Namespace) -> SimulatedDataset:
     random.seed(args.seed)
+    np.random.seed(args.seed)
     if args.model_path is None:
         args.model_path = args.model_name
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
@@ -86,7 +87,7 @@ class BenchmarkResult:
     output_text: list[str] = field(default_factory=list)
 
 
-def log_result(args: argparse.Namespace, dataset: SimulatedDataset, result: BenchmarkResult):
+def log_result(args: argparse.Namespace, dataset: SimulatedDataset, results: list[BenchmarkResult]):
     if args.log_requests:
         from tabulate import tabulate
         headers = ["request_id", "prompt", "n_prompt_tokens", "n_images",  "n_output_tokens", "ttft_slo", "tpot_slo"]
@@ -97,14 +98,30 @@ def log_result(args: argparse.Namespace, dataset: SimulatedDataset, result: Benc
         table = tabulate(data, headers, tablefmt="grid")
         print(table)
     
-    if args.log_output:
-        for i, output_text in enumerate(result.output_text):
-            print(f'{i}: {output_text}')
 
-    result.metric.print()
+    for i, result in enumerate(results):
+        print(f'==================== benchmark result {i} ====================')
+        if args.log_output:
+            for i, output_text in enumerate(result.output_text):
+                print(f'{i}: {output_text}')
+        result.metric.print()
+
+    if len(results) > 1:
+        print(f'==================== slo analysis ====================')
+        data = [
+            ["Alice", 24, "Engineer"],
+            ["Bob", 30, "Doctor"],
+            ["Charlie", 22, "Artist"]
+        ]
+        headers = ["request_rate", "ttft_slo_attainment", "tpot_slo_attainment", "slo_attainment"]
+        data = []
+        for request_rate, result in zip(args.request_rate, results):
+            data.append((request_rate, result.metric.ttft_slo_attainment, result.metric.tpot_slo_attainment, result.metric.slo_attainment))
+        slo_table = tabulate(data, headers, tablefmt="plain")
+        print(slo_table)
 
 
-def vllm_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> BenchmarkResult:
+def vllm_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> list[BenchmarkResult]:
     from vllm import LLM, SamplingParams
     entrypoint = LLM(model=args.model_path, max_model_len=4096, enforce_eager=True)
     sampling_params: list[SamplingParams] = []
@@ -135,15 +152,17 @@ def vllm_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) 
             arrival_time = output.metrics.arrival_time, 
             finished_time = output.metrics.finished_time, 
             token_times = [output.metrics.first_token_time], 
+            ttft_slo = entry.ttft_slo,
+            tpot_slo = entry.tpot_slo,
         )
 
-    return BenchmarkResult(
+    return [BenchmarkResult(
         metric=metric_builder.get_metrics(), 
         output_text=[output.outputs[0].text for output in outputs], 
-    )
+    )]
 
 
-def dxz_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> BenchmarkResult:
+def dxz_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> list[BenchmarkResult]:
     from dxz.entrypoint import OfflineSingleInstanceEntryPointConfig, OfflineSingleInstanceEntryPoint
     from dxz.request.request import Request, SamplingParameters
     config = OfflineSingleInstanceEntryPointConfig.from_cli_args(args)
@@ -172,12 +191,14 @@ def dxz_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -
             arrival_time = output.arrival_time, 
             finished_time = output.finished_time, 
             token_times = output.token_times, 
+            ttft_slo = entry.ttft_slo,
+            tpot_slo = entry.tpot_slo,
             )
 
-    return BenchmarkResult(
+    return [BenchmarkResult(
         metric = metric_builder.get_metrics(), 
         output_text = [output.text for output in outputs],
-    )
+    )]
 
 
 async def poisson_process_request_generator(
@@ -278,20 +299,13 @@ async def dxz_server_proxy(args: argparse.Namespace, entry: SimulatedDataEntry, 
     return output
 
 
-@async_wrapper
-async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, server_proxy) -> BenchmarkResult:
+async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, server_proxy, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
     pbar = tqdm(total = len(dataset))
-    openai_api_key = "EMPTY"
-    openai_api_base = "http://localhost:8888/v1"
-    client = AsyncOpenAI(
-        api_key=openai_api_key,
-        base_url=openai_api_base,
-    )
     metric_builder = BenchmarkMetricsBuilder()
 
     metric_builder.start()
     tasks = []
-    async for (i, entry) in poisson_process_request_generator(dataset=dataset, request_rate=args.request_rate):
+    async for (i, entry) in poisson_process_request_generator(dataset=dataset, request_rate=request_rate):
         tasks.append(asyncio.create_task(server_proxy(args, entry, pbar=pbar, client=client)))
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
 
@@ -305,11 +319,28 @@ async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, 
             arrival_time = output.start_time, 
             finished_time = output.token_times[-1], 
             token_times = output.token_times, 
+            ttft_slo = entry.ttft_slo,
+            tpot_slo = entry.tpot_slo,
         )
     return BenchmarkResult(
         metric = metric_builder.get_metrics(), 
         output_text = [output.output_text for output in outputs]
     )
+
+@async_wrapper
+async def online_benchmarks(args: argparse.Namespace, dataset: SimulatedDataset, server_proxy) -> list[BenchmarkResult]:
+    openai_api_key = "EMPTY"
+    openai_api_base = "http://localhost:8888/v1"
+    client = AsyncOpenAI(
+        api_key=openai_api_key,
+        base_url=openai_api_base,
+    )
+    results: list[BenchmarkResult] = []
+    for request_rate in args.request_rate:
+        print(f'start test request rate {request_rate}')
+        result = await online_benchmark(args, dataset, server_proxy, client, request_rate)
+        results.append(result)
+    return results
 
 
 def benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> BenchmarkResult:
@@ -319,8 +350,8 @@ def benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> BenchmarkR
             'dxz': dxz_offline_benchmark,
         },
         'online': {
-            'vllm': functools.partial(online_benchmark, server_proxy=vllm_server_proxy),
-            'dxz': functools.partial(online_benchmark, server_proxy=dxz_server_proxy),
+            'vllm': functools.partial(online_benchmarks, server_proxy=vllm_server_proxy),
+            'dxz': functools.partial(online_benchmarks, server_proxy=dxz_server_proxy),
         },
     }
     try:
@@ -332,8 +363,8 @@ def benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> BenchmarkR
 
 def main(args: argparse.Namespace):
     dataset = prepare_requests(args)
-    result = benchmark(args, dataset)
-    log_result(args, dataset, result=result)
+    results = benchmark(args, dataset)
+    log_result(args, dataset, results)
 
 
 if __name__ == '__main__':
@@ -348,9 +379,11 @@ if __name__ == '__main__':
         help="Number of requests to process.",
     )
     parser.add_argument(
-        "--request-rate",
-        type=float,
-        default=float("inf"),
+        '--request-rate', 
+        type=float, 
+        nargs='*', 
+        default=[float('inf')], 
+        metavar='rate',
         help="Number of requests per second. If this is inf, "
         "then all the requests are sent at time 0. "
         "Otherwise, we use Poisson process to synthesize "
