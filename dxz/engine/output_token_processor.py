@@ -1,6 +1,7 @@
 import time
 from tqdm import tqdm
 from transformers import AutoTokenizer
+from dataclasses import dataclass
 from dxz.utils.async_stream import AsyncStream
 from dxz.utils.counter import Counter
 from dxz.request.offline_inference_output import OfflineInferenceOutput
@@ -89,7 +90,13 @@ class OfflineOutputTokenProcessor(OutputTokenProcessor):
 
 
 class ZmqOutputTokenProcessor(OutputTokenProcessor):
-    def __init__(self):
+    def __init__(self, request_id: int, stream: bool, offline: bool, zmq_send, tokenizer: AutoTokenizer):
+        self.request_id = request_id
+        self.stream = stream
+        self.offline = offline
+        self.zmq_send = zmq_send
+        self.tokenizer = tokenizer
+
         self.arrival_time = time.perf_counter()
         self.output_token_ids: list[int] = []
         self.token_times: list[float] = []
@@ -109,3 +116,30 @@ class ZmqOutputTokenProcessor(OutputTokenProcessor):
 
         if is_last_token:
             self.finished_time = time.perf_counter()
+
+        if self.offline:
+            if self.stream:
+                raise Exception('offline inference is not support stream output')
+            else:
+                if is_last_token:
+                    self.zmq_send.send_pyobj(OfflineInferenceOutput(
+                        text = self.tokenizer.decode(self.output_token_ids),
+                        output_token_ids = self.output_token_ids, 
+                        arrival_time  = self.arrival_time, 
+                        finished_time = self.finished_time, 
+                        token_times = self.token_times,
+                        ttft = self.ttft, 
+                        tpot = self.tpot, 
+                    ))
+        else:
+            if self.stream:
+                self.zmq_send.send_pyobj((self.request_id, [token_id]))
+            else:
+                if is_last_token:
+                    self.zmq_send.send_pyobj((self.request_id, [token_id]))
+
+@dataclass
+class OutputTokenParams:
+    print_output_text: bool = False
+    is_stream_output: bool = False
+    is_offline_output: bool = False

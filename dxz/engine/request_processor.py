@@ -1,3 +1,4 @@
+import zmq
 import threading
 import io
 import base64
@@ -10,7 +11,7 @@ from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
-from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor
+from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams
 from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 from dxz.utils.config_util import CLIConfig
@@ -44,9 +45,7 @@ class RequestProcessorContext:
 @dataclass
 class RequestProcessParameters:
     output_token_processors: list[OutputTokenProcessor] = field(default_factory=list)
-    print_output_text: bool = False # if true request processor will register a print output token processor to the request
-    is_stream_output: bool = False
-    zmq_output: bool = False
+    outout_token_parmas: OutputTokenParams = field(default_factory=OutputTokenParams)
 
 
 class RequestProcessor:
@@ -72,13 +71,16 @@ class RequestProcessor:
 
     def process(self, request: Request, params: RequestProcessParameters):
         if self.config.multi_thread_request_process:
-            self.executor.map(self._request_process_lock_wrapper, [(request, params)])
+            self.executor.submit(self._request_process_lock_wrapper, request, params)
         else:
             self._request_process(request, params)
 
     def _request_process_lock_wrapper(self, request: Request, params: RequestProcessParameters):
-        with self.lock:
-            self._request_process(request, params)
+        try:
+            with self.lock:
+                self._request_process(request, params)
+        except Exception as e:
+            print(e)
     
     def _insert_image_tokens(self, token_ids: list[int], num_image_tokens):
         # replace each image_token_id with num_image_tokens image_token_id
@@ -185,18 +187,14 @@ class RequestProcessor:
             print(f'{request.prompt[:10]} {instructions}')
         # 7. output tokenizer
         rcb = RequestControlBlock(
+            request_id = request.request_id, 
             instructions = instructions, 
             sampling_params = request.sampling_params, 
+            output_token_params = params.outout_token_parmas,
         )
-        if params.zmq_output:
-            zmq_output = ZmqOutputTokenProcessor()
-            rcb.zmq_output = zmq_output 
-            rcb.register_output_token_processor(zmq_output)
+
         for output_token_processor in params.output_token_processors:
             rcb.register_output_token_processor(output_token_processor)
-
-        if params.print_output_text:
-            rcb.register_output_token_processor(PrintTextOutputTokenProcessor(self.tokenizer))
 
         if self.batch_scheduler:
             self.batch_scheduler.schedule_new(rcb)

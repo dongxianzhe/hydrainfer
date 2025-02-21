@@ -18,8 +18,14 @@ class OfflineEPDDisaggregateEntryPointConfig(CLIConfig):
     zmq_url: str = f"tcp://{get_ip_address()}:40832"
     enode_config: NodeConfig = field(default_factory=NodeConfig)
     pnode_config: NodeConfig = field(default_factory=NodeConfig)
+    epdnode_config: NodeConfig = field(default_factory=NodeConfig)
 
     def __post_init__(self):
+        self.epdnode_config.enable_encode = True
+        self.epdnode_config.enable_prefill = True
+        self.epdnode_config.enable_decode = True
+        self.epdnode_config.zmq_send_url = self.zmq_url
+
         self.enode_config.enable_encode = True
         self.enode_config.enable_prefill = False
         self.enode_config.enable_decode = False
@@ -28,7 +34,7 @@ class OfflineEPDDisaggregateEntryPointConfig(CLIConfig):
         self.pnode_config.enable_prefill = True
         self.pnode_config.enable_decode = True
         self.pnode_config.zmq_send_url = self.zmq_url
-        self.enode_config.request_processor_config.ep_migrate = True
+        self.enode_config.request_processor_config.ep_migrate = False
 
         self.pnode_config.update_config_value()
         self.enode_config.update_config_value()
@@ -42,9 +48,17 @@ class OfflineEPDDisaggregateEntryPoint:
     def __init__(self, config: OfflineEPDDisaggregateEntryPointConfig):
         self.config = config
         self.zmq_recv = init_zmq_recv(zmq_url=config.zmq_url)
+        self.epdnode = ray.remote(
+            num_cpus=0,
+            num_gpus=1,
+            max_restarts=1,
+            name=f'epdnode',
+            namespace='dxz',
+            lifetime='detached'
+        )(AsyncEPDNode).remote(self.config.epdnode_config)
         self.enode = ray.remote(
             num_cpus=0,
-            num_gpus=0.1,
+            num_gpus=1,
             max_restarts=1,
             name=f'enode',
             namespace='dxz',
@@ -52,15 +66,16 @@ class OfflineEPDDisaggregateEntryPoint:
         )(AsyncEPDNode).remote(self.config.enode_config)
         self.pdnode = ray.remote(
             num_cpus=0,
-            num_gpus=0.1,
+            num_gpus=1,
             max_restarts=1,
             name=f'pdnode',
             namespace='dxz',
             lifetime='detached'
         )(AsyncEPDNode).remote(self.config.pnode_config)
-        self.nodes = [self.enode, self.pdnode]
-        obj1 = self.enode.register_node.remote(self.pdnode)
-        ray.get(obj1)
+        self.nodes = [self.epdnode]
+        # self.nodes = [self.enode, self.pdnode]
+        # obj1 = self.enode.register_node.remote(self.pdnode)
+        # ray.get(obj1)
         for node in self.nodes:
             node.step_loop.remote()
             
@@ -68,7 +83,7 @@ class OfflineEPDDisaggregateEntryPoint:
     async def generate(self, requests: list[Request]) -> list[OfflineInferenceOutput]:
         finished = Counter()
         for request in requests:
-            self.enode.add_request.remote(request, RequestProcessParameters(zmq_output=True))
+            self.epdnode.add_request.remote(request, RequestProcessParameters(zmq_output=True))
         outputs: list[OfflineInferenceOutput] = []
         while finished.value() < len(requests):
             output = await self.zmq_recv.recv_pyobj()

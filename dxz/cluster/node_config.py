@@ -67,7 +67,7 @@ class NodeConfig(CLIConfig):
 
 
     @staticmethod
-    def sub_configs_from_cli_args(cls, args: argparse.Namespace, prefix: str="") -> dict[str, 'CLIConfig']:
+    def sub_configs_from_cli_args(cls, args: argparse.Namespace, prefix: str="--") -> dict[str, 'CLIConfig']:
         return {
             'request_processor_config': RequestProcessorConfig.from_cli_args(args, prefix=prefix), 
             'model_factory_config': ModelFactoryConfig.from_cli_args(args, prefix), 

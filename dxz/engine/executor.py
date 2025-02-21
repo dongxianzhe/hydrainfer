@@ -1,3 +1,4 @@
+import zmq
 import time
 import torch
 import argparse
@@ -7,6 +8,7 @@ from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, field
 from dxz.engine import RequestControlBlock, Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction
+from dxz.engine import PrintTextOutputTokenProcessor
 from dxz.layer.causal_attention import AttentionParametersBuilder, AttentionParameters
 from dxz.model.parameters import LanguageModelParameters, VisionModelParameters
 from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryConfig, ModelFactoryContext
@@ -15,6 +17,7 @@ from dxz.engine.worker import WorkerConfig, WorkerContext, getWorker, Worker
 from dxz.memory import TokenCacheBlockManager, KVCache
 from dxz.engine.scheduler import BatchRequest
 from dxz.utils.config_util import CLIConfig
+from dxz.request import OfflineInferenceOutput
 
 
 class Future:
@@ -64,6 +67,7 @@ class ExecutorContext:
     kv_cache_block_manager: TokenCacheBlockManager
     image_cache_block_manager: TokenCacheBlockManager
     worker: Worker = None
+    zmq_send: Optional[zmq.sugar.socket.Socket] = None
 
 
 class Executor:
@@ -80,6 +84,7 @@ class BatchFillExecutor(Executor):
         self.worker = context.worker
         self.vision_model_config = model_factory.getVisionModelConfig()
         self.language_model_config = model_factory.getLanguageModelConfig()
+        self.tokenizer = model_factory.getTokenizer()
 
         self.dtype = config.model_factory_config.dtype
         self.device = config.model_factory_config.device
@@ -94,6 +99,7 @@ class BatchFillExecutor(Executor):
             self.workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.device)
             self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
             self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
+        self.print_text_output_token_processor = PrintTextOutputTokenProcessor(self.tokenizer)
 
     def _execute_image_embed(self, contexts: BatchRequest) -> Tensor:
         if len(contexts) == 0:
@@ -186,9 +192,39 @@ class BatchFillExecutor(Executor):
                     is_last_token =  instruction.sample_dst is None
                     if not is_last_token:
                         instruction.sample_dst.token_ids = [next_token_id]
-                    rcb.metric.tokens_time.append(t)
+                    rcb.metric.token_times.append(t)
+                    # process output tokens
+                    rcb.output_token_ids.append(next_token_id)
                     for output_token_processor in rcb.output_token_processors:
                         output_token_processor.append_token_id(next_token_id, is_last_token)
+                    if rcb.output_token_params.print_output_text:
+                        self.print_text_output_token_processor.append_token_id(next_token_id, is_last_token)
+                    if self.context.zmq_send:
+                        if rcb.output_token_params.is_offline_output:
+                            if rcb.output_token_params.is_stream_output:
+                                raise Exception('offline inference is not support stream output')
+                            else:
+                                if is_last_token:
+                                    self.context.zmq_send.send_pyobj(OfflineInferenceOutput(
+                                        text = self.tokenizer.decode(rcb.output_token_ids),
+                                        output_token_ids = rcb.output_token_ids, 
+                                        arrival_time  = rcb.metric.arrival_time, 
+                                        finished_time = rcb.metric.finished_time, 
+                                        token_times = rcb.metric.token_times,
+
+                                        ttft = rcb.metric.token_times[0] - rcb.metric.arrival_time, 
+                                        tpot = [
+                                            rcb.metric.token_times[i] - rcb.metric.token_times[i-1]
+                                            for i in range(1, len(rcb.metric.token_times))
+                                        ], 
+                                    ))
+                        else:
+                            if rcb.output_token_params.is_stream_output:
+                                self.context.zmq_send.send_pyobj((rcb.request_id, [next_token_id]))
+                            else:
+                                if is_last_token:
+                                    self.context.zmq_send.send_pyobj((rcb.request_id, rcb.output_token_ids))
+
                     i += 1
 
         for rcb, _ in contexts:

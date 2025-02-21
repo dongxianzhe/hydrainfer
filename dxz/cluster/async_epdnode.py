@@ -1,5 +1,6 @@
 import ray
 import time
+import torch
 import asyncio
 import argparse
 from typing import Optional
@@ -10,6 +11,7 @@ from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBloc
 from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest
 from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig
 from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerConfig, TokenCacheBlockManagerContext
+from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.utils.zmq_utils import init_zmq_send
 from dxz.cluster.node_config import NodeConfig
 from dxz.cluster.epdnode import EPDNode
@@ -19,6 +21,11 @@ from dxz.request.offline_inference_output import OfflineInferenceOutput
 class AsyncEPDNode(AsyncEngine):
     def __init__(self, config: NodeConfig):
         self.config = config
+        if config.zmq_send_url:
+            self.zmq_send = init_zmq_send(config.zmq_send_url)
+        else:
+            self.zmq_send = None
+
         model_factory = getModelFactory(self.config.model_factory_config, ModelFactoryContext())
         self.tokenizer = model_factory.getTokenizer()
         if config.has_kv_cache:
@@ -41,7 +48,8 @@ class AsyncEPDNode(AsyncEngine):
             ExecutorContext(
                 kv_cache_block_manager = self.kv_cache_block_manager, 
                 image_cache_block_manager = self.image_cache_block_manager, 
-                worker = self.worker
+                worker = self.worker, 
+                zmq_send = self.zmq_send
             )
         )
         self.request_processor = RequestProcessor(
@@ -51,8 +59,6 @@ class AsyncEPDNode(AsyncEngine):
             )
         )
         self.nodes = []
-        if config.zmq_send_url:
-            self.zmq_send = init_zmq_send(config.zmq_send_url)
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
@@ -101,16 +107,6 @@ class AsyncEPDNode(AsyncEngine):
                         self.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
                     if rcb.virtual_image_cache:
                         self.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
-                    if self.config.zmq_send_url:
-                        self.zmq_send.send_pyobj(OfflineInferenceOutput(
-                        text = self.tokenizer.decode(rcb.zmq_output.output_token_ids),
-                        output_token_ids = rcb.zmq_output.output_token_ids, 
-                        arrival_time  = rcb.zmq_output.arrival_time, 
-                        finished_time = rcb.zmq_output.finished_time, 
-                        token_times = rcb.zmq_output.token_times,
-                        ttft = rcb.zmq_output.ttft, 
-                        tpot = rcb.zmq_output.tpot, 
-                    ))
                 else:
                     self.batch_scheduler.schedule_running(rcb)
 
@@ -130,14 +126,15 @@ class AsyncEPDNode(AsyncEngine):
 
     async def migrate(self, rcb: RequestControlBlock):
         print('migrate is called')
-        print(f'rcb.instructions {rcb.instructions}')
         if rcb.virtual_kv_cache:
             rcb.virtual_kv_cache = await self._migrate_virtual_cache(rcb.virtual_kv_cache, self.kv_cache_block_manager) 
         if rcb.virtual_image_cache:
             rcb.virtual_image_cache = await self._migrate_virtual_cache(rcb.virtual_image_cache, self.image_cache_block_manager) 
         print('migrate finished')
-        print(f'rcb.virtual_image_cache {rcb.virtual_image_cache.block_table}')
+        print(f'rcb.instructions {rcb.instructions}')
+        print(f'rcb.virtual_image_cache {rcb.virtual_image_cache}')
         print(f'rcb.virtual_kv_cache {rcb.virtual_kv_cache}')
+        time.sleep(5)
         self.batch_scheduler.schedule_new(rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
