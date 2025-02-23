@@ -164,23 +164,11 @@ class TokenCacheBlockManager:
 
     def migrate_blocks(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache):
         assert src_virtual_cache.n_cache_tokens == dst_virtual_cache.n_cache_tokens, f'{src_virtual_cache.n_cache_tokens} {dst_virtual_cache.n_cache_tokens}'
-        # if src_memory_handle not in self.src_memory_handle_dict:
-        #     block_migration.register_ipc_mem_handle(src_memory_handle)
-        #     src_memory_handle_dict[]
         assert src_virtual_cache.memory_handle is not None
-        dev_ptr = block_migration.register_ipc_mem_handle(src_virtual_cache.memory_handle)
-        # todo modify cpp code to support general layers migrate
-        with torch.cuda.stream(self.migrate_stream):
-            for layer_id in range(self.n_layers):
-                block_migration.migrate_blocks(
-                    0, # prefill_start_head: int
-                    self.n_heads, # prefill_end_head: int
-                    src_virtual_cache.block_table, # prefill_block_indexes: list[int]
-                    0, # decoding_start_head: int
-                    self.n_heads, # decoding_end_head:int
-                    dst_virtual_cache.block_table, # decoding_block_indexes: list[int]
-                    dev_ptr, # prefill_dev_ptr_index: int
-                    self.n_heads, # num_heads: int
-                    self.cache_tensor[layer_id, :, :, :, :, :], # decoding_worker_kv_cache: Tensor
-                )
-        # torch.cuda.synchronize()
+
+        block_migration.migrate_blocks(
+            src_virtual_cache.block_table, 
+            dst_virtual_cache.block_table, 
+            src_virtual_cache.memory_handle, 
+            self.cache_tensor,
+        )

@@ -23,6 +23,8 @@ namespace mllm::migration{
     (((int64_t)index1) * (dim2) * (dim3) * (dim4) + ((int64_t)index2) * (dim3) * (dim4) + ((int64_t)index3) * (dim4) + (index4))
 #define INDEX_5D(dim1, dim2, dim3, dim4, dim5, index1, index2, index3, index4, index5) \
     (((int64_t)index1) * (dim2) * (dim3) * (dim4) * (dim5) + ((int64_t)index2) * (dim3) * (dim4) * (dim5) + ((int64_t)index3) * (dim4) * (dim5) + (index4) * (dim5) + (index5))
+#define INDEX_6D(dim1, dim2, dim3, dim4, dim5, dim6, index1, index2, index3, index4, index5, index6) \
+    (((int64_t)index1) * (dim2) * (dim3) * (dim4) * (dim5) * (dim6) + ((int64_t)index2) * (dim3) * (dim4) * (dim5) * (dim6) + ((int64_t)index3) * (dim4) * (dim5) * (dim6) + ((int64_t)index4) * (dim5) * (dim6) + ((int64_t)index5) * (dim6) + ((int64_t)index6))
 
 /*
 The following two functions convert cudaIpcMemHandle_t to/from bytes
@@ -94,96 +96,148 @@ stream indicated by at::cuda::getCurrentCUDAStream(). So it is python's
 responsibility to set the current stream before calling this function.
 */
 
-void migrate_blocks(
-	const int64_t prefill_start_head,
-	const int64_t prefill_end_head,
+// void migrate_blocks(
+// 	const int64_t prefill_start_head,
+// 	const int64_t prefill_end_head,
 	
-	// Block indexes of the prefill stage engine
-	const std::vector<int64_t> &prefill_block_indexes,
+// 	// Block indexes of the prefill stage engine
+// 	const std::vector<int64_t> &prefill_block_indexes,
 
-	const int64_t decoding_start_head,
-	const int64_t decoding_end_head,
+// 	const int64_t decoding_start_head,
+// 	const int64_t decoding_end_head,
 
-	// Block indexes of the decoding stage engine
-	const std::vector<int64_t> &decoding_block_indexes,
+// 	// Block indexes of the decoding stage engine
+// 	const std::vector<int64_t> &decoding_block_indexes,
 
-	const int64_t prefill_dev_ptr_index,
-	const int64_t num_heads,
+// 	const int64_t prefill_dev_ptr_index,
+// 	const int64_t num_heads,
 
-	// The decoding stage [worker, ve, layer]'s KV cache
-	// [2, num_blocks, block_size, num_kv_heads, head_size]
-	torch::Tensor decoding_worker_kv_cache
-) {
+// 	// The decoding stage [worker, ve, layer]'s KV cache
+// 	// [2, num_blocks, block_size, num_kv_heads, head_size]
+// 	torch::Tensor decoding_worker_kv_cache
+// ) {
+// 	cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+// 	CHECK(decoding_worker_kv_cache.is_contiguous());
+
+// 	// for kv cache block migration num_cache_pool is 2 because each token has key cache and value cache
+// 	// for image cache block migration num_cache_pool is 1
+// 	const int64_t num_cache_pool = decoding_worker_kv_cache.size(0);
+// 	// Calculate some misc stuff
+// 	const int64_t num_blocks = decoding_worker_kv_cache.size(1);
+// 	const int64_t block_size = decoding_worker_kv_cache.size(2);
+// 	const int64_t heads_per_decoding_worker = decoding_worker_kv_cache.size(3);
+// 	const int64_t head_size = decoding_worker_kv_cache.size(4);
+
+// 	const int64_t heads_per_prefill_worker = prefill_end_head - prefill_start_head;
+// 	const int64_t num_blocks_to_copy = decoding_block_indexes.size();
+// 	const int64_t dtype_size = decoding_worker_kv_cache.dtype().itemsize();
+
+// 	const int64_t overlap_start_head = std::max(prefill_start_head, decoding_start_head);
+// 	const int64_t overlap_end_head = std::min(prefill_end_head, decoding_end_head);
+// 	CHECK(overlap_start_head < overlap_end_head);
+
+// 	// kv cache shape: [2, num_blocks, block_size, num_kv_heads, head_size]
+// 	for (int64_t block_id = 0; block_id < num_blocks_to_copy; ++block_id) {
+// 		const int64_t prefill_block_index = prefill_block_indexes[block_id];
+// 		const int64_t decoding_block_index = decoding_block_indexes[block_id];
+// 		for (int64_t is_value = 0; is_value < num_cache_pool; ++is_value) {
+// 			char* prefill_worker_base_ptr = (char*)(prefill_dev_ptr_vec.at(prefill_dev_ptr_index));
+// 			if (!prefill_worker_base_ptr) {
+// 				fprintf(stderr, "Error: registered prefill_worker_base_ptr is null\n");
+// 				exit(1);
+// 			}
+// 			const int64_t decode_bias = INDEX_5D(
+// 						0, num_blocks, block_size, heads_per_decoding_worker, head_size,
+// 						is_value,
+// 						decoding_block_index,
+// 						0,
+// 						overlap_start_head - decoding_start_head,
+// 						0);
+// 			const int64_t prefill_bias = INDEX_5D(
+// 						0, num_blocks, block_size, heads_per_prefill_worker, head_size,
+// 						is_value,
+// 						prefill_block_index,
+// 						0,
+// 						overlap_start_head - prefill_start_head,
+// 						0);
+
+// 			if (heads_per_prefill_worker == heads_per_decoding_worker) {
+// 				CUDA_CHECK(cudaMemcpyAsync(
+// 					(char*) (decoding_worker_kv_cache.data_ptr())
+// 						+ decode_bias * dtype_size,
+// 					prefill_worker_base_ptr
+// 						+ prefill_bias * dtype_size,
+// 					(size_t) (block_size * heads_per_prefill_worker * head_size * dtype_size),
+// 					cudaMemcpyDeviceToDevice,
+// 					stream	
+// 					)
+// 				);
+// 			} else {
+// 				CUDA_CHECK(cudaMemcpy2DAsync(
+// 					(char*) (decoding_worker_kv_cache.data_ptr())
+// 						+ decode_bias * dtype_size,
+// 					(size_t) (heads_per_decoding_worker * head_size * dtype_size),
+// 					prefill_worker_base_ptr
+// 						+ prefill_bias * dtype_size,
+// 					(size_t) (heads_per_prefill_worker * head_size * dtype_size),
+// 					(size_t) ((overlap_end_head - overlap_start_head) * head_size * dtype_size),
+// 					(size_t) (block_size),
+// 					cudaMemcpyDeviceToDevice,
+// 					stream
+// 					)
+// 				);
+// 			}
+// 		}
+// 	}
+// }
+
+void migrate_blocks(
+	const std::vector<int64_t>& src_block_table, 
+	const std::vector<int64_t>& dst_block_table, 
+	const std::vector<int64_t>& src_cache, // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
+	torch::Tensor dst_cache               // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
+){
 	cudaStream_t stream = at::cuda::getCurrentCUDAStream();
-	CHECK(decoding_worker_kv_cache.is_contiguous());
+	CHECK(dst_cache.is_contiguous());
+	CHECK(src_block_table.size() == dst_block_table.size());
+	const int64_t dtype_size = dst_cache.dtype().itemsize();
 
-	// for kv cache block migration num_cache_pool is 2 because each token has key cache and value cache
-	// for image cache block migration num_cache_pool is 1
-	const int64_t num_cache_pool = decoding_worker_kv_cache.size(0);
-	// Calculate some misc stuff
-	const int64_t num_blocks = decoding_worker_kv_cache.size(1);
-	const int64_t block_size = decoding_worker_kv_cache.size(2);
-	const int64_t heads_per_decoding_worker = decoding_worker_kv_cache.size(3);
-	const int64_t head_size = decoding_worker_kv_cache.size(4);
+	const int64_t n_layers = dst_cache.size(0);
+	const int64_t n_tokens = dst_cache.size(1);
+	const int64_t n_blocks = dst_cache.size(2);
+	const int64_t block_size = dst_cache.size(3);
+	const int64_t n_heads = dst_cache.size(4);
+	const int64_t head_size = dst_cache.size(5);
 
-	const int64_t heads_per_prefill_worker = prefill_end_head - prefill_start_head;
-	const int64_t num_blocks_to_copy = decoding_block_indexes.size();
-	const int64_t dtype_size = decoding_worker_kv_cache.dtype().itemsize();
+	const cudaIpcMemHandle_t src_cache_handle = bytes2CudaIpcMemHandle(src_cache);
+	void* devPtr = nullptr;
+	cudaError_t err = cudaIpcOpenMemHandle(&devPtr, src_cache_handle, cudaIpcMemLazyEnablePeerAccess);
+	if (err == cudaErrorPeerAccessUnsupported) {
+		printf("Error: Peer-to-peer access is unsupported on this platform.\n");
+		exit(1);
+	} 
+	char* src_cache_ptr = (char*)(devPtr);
 
-	const int64_t overlap_start_head = std::max(prefill_start_head, decoding_start_head);
-	const int64_t overlap_end_head = std::min(prefill_end_head, decoding_end_head);
-	CHECK(overlap_start_head < overlap_end_head);
-
-	// kv cache shape: [2, num_blocks, block_size, num_kv_heads, head_size]
-	for (int64_t block_id = 0; block_id < num_blocks_to_copy; ++block_id) {
-		const int64_t prefill_block_index = prefill_block_indexes[block_id];
-		const int64_t decoding_block_index = decoding_block_indexes[block_id];
-		for (int64_t is_value = 0; is_value < num_cache_pool; ++is_value) {
-			char* prefill_worker_base_ptr = (char*)(prefill_dev_ptr_vec.at(prefill_dev_ptr_index));
-			if (!prefill_worker_base_ptr) {
-				fprintf(stderr, "Error: registered prefill_worker_base_ptr is null\n");
-				exit(1);
-			}
-			const int64_t decode_bias = INDEX_5D(
-						0, num_blocks, block_size, heads_per_decoding_worker, head_size,
-						is_value,
-						decoding_block_index,
-						0,
-						overlap_start_head - decoding_start_head,
-						0);
-			const int64_t prefill_bias = INDEX_5D(
-						0, num_blocks, block_size, heads_per_prefill_worker, head_size,
-						is_value,
-						prefill_block_index,
-						0,
-						overlap_start_head - prefill_start_head,
-						0);
-
-			if (heads_per_prefill_worker == heads_per_decoding_worker) {
+	for(int layer_id = 0;layer_id < n_layers;layer_id ++){
+		for(int token_id = 0;token_id < n_tokens;token_id ++){
+			for(int i = 0;i < dst_block_table.size();i ++){
+				int src_block_id = src_block_table[i];
+				int dst_block_id = dst_block_table[i];
+				const int64_t dst_bias = INDEX_6D(
+					n_layers, n_tokens, n_blocks, block_size, n_heads, head_size, 
+					layer_id, token_id, dst_block_id, 0, 0, 0
+				);
+				const int64_t src_bias = INDEX_6D(
+					n_layers, n_tokens, n_blocks, block_size, n_heads, head_size, 
+					layer_id, token_id, src_block_id, 0, 0, 0
+				);
 				CUDA_CHECK(cudaMemcpyAsync(
-					(char*) (decoding_worker_kv_cache.data_ptr())
-						+ decode_bias * dtype_size,
-					prefill_worker_base_ptr
-						+ prefill_bias * dtype_size,
-					(size_t) (block_size * heads_per_prefill_worker * head_size * dtype_size),
+					(char*)(dst_cache.data_ptr()) + dst_bias * dtype_size, 
+					src_cache_ptr + src_bias * dtype_size, 
+					(size_t) (block_size * n_heads * head_size * dtype_size),
 					cudaMemcpyDeviceToDevice,
 					stream	
-					)
-				);
-			} else {
-				CUDA_CHECK(cudaMemcpy2DAsync(
-					(char*) (decoding_worker_kv_cache.data_ptr())
-						+ decode_bias * dtype_size,
-					(size_t) (heads_per_decoding_worker * head_size * dtype_size),
-					prefill_worker_base_ptr
-						+ prefill_bias * dtype_size,
-					(size_t) (heads_per_prefill_worker * head_size * dtype_size),
-					(size_t) ((overlap_end_head - overlap_start_head) * head_size * dtype_size),
-					(size_t) (block_size),
-					cudaMemcpyDeviceToDevice,
-					stream
-					)
-				);
+				));
 			}
 		}
 	}
