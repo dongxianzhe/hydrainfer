@@ -166,9 +166,10 @@ class TokenCacheBlockManager:
         assert src_virtual_cache.n_cache_tokens == dst_virtual_cache.n_cache_tokens, f'{src_virtual_cache.n_cache_tokens} {dst_virtual_cache.n_cache_tokens}'
         assert src_virtual_cache.memory_handle is not None
 
-        block_migration.migrate_blocks(
-            src_virtual_cache.block_table, 
-            dst_virtual_cache.block_table, 
-            src_virtual_cache.memory_handle, 
-            self.cache_tensor,
-        )
+        with torch.cuda.stream(self.migrate_stream):
+            block_migration.migrate_blocks(
+                src_virtual_cache.block_table, 
+                dst_virtual_cache.block_table, 
+                src_virtual_cache.memory_handle, 
+                self.cache_tensor,
+            )

@@ -64,9 +64,10 @@ class ClusterConfig(CLIConfig):
     @staticmethod
     def add_sub_configs_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
         parser = ModelFactoryConfig.add_cli_args(parser, prefix=prefix)
-        parser = NodeConfig.add_cli_args(parser, prefix=prefix+'ed-')
-        parser = NodeConfig.add_cli_args(parser, prefix=prefix+'pd-')
-        parser = NodeConfig.add_cli_args(parser, prefix=prefix+'d-')
+        parser = NodeConfig.add_cli_args(parser, prefix=prefix)
+        # parser = NodeConfig.add_cli_args(parser, prefix=prefix+'ed-')
+        # parser = NodeConfig.add_cli_args(parser, prefix=prefix+'pd-')
+        # parser = NodeConfig.add_cli_args(parser, prefix=prefix+'d-')
         return parser
 
     @staticmethod

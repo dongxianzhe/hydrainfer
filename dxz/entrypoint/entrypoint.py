@@ -87,11 +87,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="entrypoint", conflict_handler='resolve')
     parser = EntryPointConfig.add_cli_args(parser)
     args = parser.parse_args()
-    print(f'args {args}')
     config = EntryPointConfig.from_cli_args(args)
     print(f'config {config}')
     entrypoint = EntryPoint(config) 
     entrypoint.run()
-    # outputs = entrypoint.generate(requests=requests)
-    # for i, output in enumerate(outputs):
-    #     print(f'output{i}: {output.text}')

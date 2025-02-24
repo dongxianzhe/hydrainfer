@@ -15,6 +15,7 @@ from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.utils.zmq_utils import init_zmq_send
 from dxz.cluster.node_config import NodeConfig
 from dxz.cluster.epdnode import EPDNode
+from dxz.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig
 
 from dxz.request.offline_inference_output import OfflineInferenceOutput
 
@@ -59,6 +60,16 @@ class AsyncEPDNode(AsyncEngine):
             )
         )
         self.nodes = []
+        self.migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.nodes)
+
+        self.name = ""
+        if self.config.enable_encode:
+            self.name += "E"
+        if self.config.enable_prefill:
+            self.name += "P"
+        if self.config.enable_decode:
+            self.name += "D"
+        self.name += "Node"
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
@@ -93,9 +104,9 @@ class AsyncEPDNode(AsyncEngine):
         futures.append(self.executor.execute_image_embed(batch_image_embed))
         futures.append(self.executor.execute_fill(batch_fill))
         futures.append(self.executor.execute_empty(batch_empty))
+        await self._execute_batch_migrate(batch_migrate)
         for future in futures:
             future.get()
-        await self._execute_batch_migrate(batch_migrate)
 
         # 3. scheduler requests
         t = time.perf_counter()
@@ -103,10 +114,7 @@ class AsyncEPDNode(AsyncEngine):
             for rcb, inst in batch:
                 if rcb.is_finished():
                     rcb.metric.finished_time = t
-                    if rcb.virtual_kv_cache: 
-                        self.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
-                    if rcb.virtual_image_cache:
-                        self.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
+                    await self._free_cache(rcb)
                 else:
                     self.batch_scheduler.schedule_running(rcb)
 
@@ -116,7 +124,7 @@ class AsyncEPDNode(AsyncEngine):
             await asyncio.sleep(0.001)
 
     async def register_node(self, node: "AsyncEngine"): 
-        self.nodes.append(node)
+        self.migrate_scheduler.register_worker(node)
 
     async def _migrate_virtual_cache(self, virtual_cache: VirtualTokenCache, block_manager: TokenCacheBlockManager) -> VirtualTokenCache:
         new_virtual_cache = block_manager.allocate_virtual_cache()
@@ -127,16 +135,34 @@ class AsyncEPDNode(AsyncEngine):
     async def migrate(self, rcb: RequestControlBlock):
         if self.config.debug_migrate:
             print(f' migrate request {rcb.request_id} {rcb.instructions}')
-        if rcb.virtual_kv_cache:
+        if rcb.virtual_kv_cache and self.config.has_kv_cache:
             rcb.virtual_kv_cache = await self._migrate_virtual_cache(rcb.virtual_kv_cache, self.kv_cache_block_manager) 
-        if rcb.virtual_image_cache:
+        else:
+            rcb.virtual_kv_cache = None
+        if rcb.virtual_image_cache and self.config.has_image_cache:
             rcb.virtual_image_cache = await self._migrate_virtual_cache(rcb.virtual_image_cache, self.image_cache_block_manager) 
+        else:
+            rcb.virtual_image_cache = None
         self.batch_scheduler.schedule_new(rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return
-        node = self.nodes[0]
+        node = self.migrate_scheduler.choice()
         for rcb, _ in contexts:
             rcb.step()
             obj = node.migrate.remote(rcb)
+            asyncio.create_task(self._free_migrate_request(rcb))
+
+    async def _free_migrate_request(self, rcb: RequestControlBlock):
+        await asyncio.sleep(1)
+        await self._free_cache(rcb)
+
+    async def _free_cache(self, rcb: RequestControlBlock):
+        if rcb.virtual_kv_cache: 
+            self.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
+        if rcb.virtual_image_cache:
+            self.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
+
+    def __repr__(self):
+        return self.name

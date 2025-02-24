@@ -221,16 +221,16 @@ def async_wrapper(func):
 
 @dataclass
 class OnlineRequestOutput:
+    entry: SimulatedDataEntry
     prompt: str = ""
     success: bool = False
-    input_len: int = 0
     output_text: str = ""
     start_time: float = 0.
     token_times: list[float] = field(default_factory=list)
 
 
 async def vllm_server_proxy(args: argparse.Namespace, entry: SimulatedDataEntry, pbar: tqdm, client: AsyncOpenAI) -> OnlineRequestOutput:
-    output = OnlineRequestOutput()
+    output = OnlineRequestOutput(entry=entry)
     response = await client.chat.completions.create(
         messages = [{
             "role":"user",
@@ -286,13 +286,12 @@ async def dxz_server_proxy(args: argparse.Namespace, entry: SimulatedDataEntry, 
         max_tokens = entry.n_output_tokens, 
         stream = True, 
     )
-    output = OnlineRequestOutput()
+    output = OnlineRequestOutput(entry=entry)
     output.success = True
     output.start_time = time.perf_counter()
     async for chunk in response:
         content = chunk.choices[0].delta.content
         output.output_text += content + " "
-        print(f'received content {content}')
         output.token_times.append(time.perf_counter())
     output.prompt = entry.prompt
     if pbar:
@@ -314,15 +313,22 @@ async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, 
     pbar.close()
     for output in outputs:
         metric_builder.append(
-            input_len = entry.n_prompt_tokens, 
+            input_len = output.entry.n_prompt_tokens, 
             success = output.success, 
             output_len = len(output.token_times), 
             arrival_time = output.start_time, 
             finished_time = output.token_times[-1], 
             token_times = output.token_times, 
-            ttft_slo = entry.ttft_slo,
-            tpot_slo = entry.tpot_slo,
+            ttft_slo = output.entry.ttft_slo,
+            tpot_slo = output.entry.tpot_slo,
         )
+        tpot = [output.token_times[i] - output.token_times[i-1] for i in range(1, len(output.token_times))]
+        def find_second_largest(nums):
+            if len(nums) < 2:
+                return 0
+            sorted_nums = sorted(nums, reverse=True)
+            return sorted_nums[1]
+        print(f'n_prompt_tok {output.entry.n_prompt_tokens} tpot slo {output.entry.tpot_slo}  max tpot {max(tpot)} second tpot {find_second_largest(tpot)} tpot {tpot}')
     return BenchmarkResult(
         metric = metric_builder.get_metrics(), 
         output_text = [output.output_text for output in outputs]

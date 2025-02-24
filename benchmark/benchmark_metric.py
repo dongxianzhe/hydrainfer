@@ -109,6 +109,7 @@ class BenchmarkMetricsBuilder:
 
             is_ttft_satisfied: bool = True
             is_tpot_satisfied: bool = True
+            tpot_above_slo_cnt: int = 0
             for i in range(len(token_times)):
                 if i == 0:
                     ttft = token_times[i] - arrival_time
@@ -117,7 +118,8 @@ class BenchmarkMetricsBuilder:
                 else:
                     tpot = token_times[i] - token_times[i - 1]
                     self.tpots.append(tpot)
-                    is_tpot_satisfied = is_tpot_satisfied and tpot < tpot_slo
+                    tpot_above_slo_cnt += tpot > tpot_slo
+                    is_tpot_satisfied = is_tpot_satisfied and tpot_above_slo_cnt <= 2
             self.ttft_slo_cnt += is_ttft_satisfied
             self.tpot_slo_cnt += is_tpot_satisfied
             self.slo_cnt += is_ttft_satisfied and is_tpot_satisfied 

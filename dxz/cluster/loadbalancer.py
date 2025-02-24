@@ -14,7 +14,6 @@ class LoadBalancerConfig(CLIConfig):
 class LoadBalancer:
     def __init__(self, config: LoadBalancerConfig, workers: list[Worker]):
         self.config = config
-        assert len(workers) > 0, f'number of workers {len(workers)} should be greater than 0'
         self.workers = workers
         self.num_workers = len(self.workers)
         self.next_worker = 0
@@ -24,6 +23,7 @@ class LoadBalancer:
         self.num_workers += 1
 
     def choice(self) -> Worker:
+        assert len(self.workers) > 0, f'number of workers {len(self.workers)} should be greater than 0'
         worker = self.workers[self.next_worker]
         self.next_worker = (self.next_worker + 1) % self.num_workers
         return worker
