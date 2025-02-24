@@ -85,9 +85,9 @@ class Cluster:
         self.ednodes = self._create_ray_nodes(config.n_ednode, 'ednode', config.ednode_config)
         self.pdnodes = self._create_ray_nodes(config.n_pdnode, 'pdnode', config.pdnode_config)
         self.dnodes = self._create_ray_nodes(config.n_dnode, 'dnode', config.dnode_config)
-        self._register_migrate(self.ednodes, self.pdnodes)
-        self._register_migrate(self.pdnodes, self.ednodes)
-        self._register_migrate(self.pdnodes, self.dnodes)
+        self._register_migrate(self.ednodes, self.pdnodes, fast=True, slow=True)
+        self._register_migrate(self.pdnodes, self.ednodes, fast=True, slow=True)
+        self._register_migrate(self.pdnodes, self.dnodes, fast=True, slow=True)
         self.ebalancer = LoadBalancer(LoadBalancerConfig(), self.ednodes)
         self.pbalancer = LoadBalancer(LoadBalancerConfig(), self.pdnodes)
         self._start(self.ednodes + self.pdnodes + self.dnodes)
@@ -107,11 +107,11 @@ class Cluster:
         for node in nodes:
             node.step_loop.remote()
 
-    def _register_migrate(self, src: list[AsyncEPDNode], dst: list[AsyncEPDNode]):
+    def _register_migrate(self, src: list[AsyncEPDNode], dst: list[AsyncEPDNode], fast: bool=True, slow: bool=True):
         objs = []
         for i in src:
             for j in dst:
-                obj = i.register_node.remote(j)
+                obj = i.register_node.remote(j, fast=fast, slow=slow)
                 objs.append(obj)
         ray.get(objs)
 

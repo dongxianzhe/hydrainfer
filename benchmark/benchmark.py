@@ -20,7 +20,7 @@ scenarios = [{
         'n_prompt_tokens': random.randint(500, 600), 
         'n_images': 0,
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 1, 
+        'ttft_slo': 2, 
         'tpot_slo': 0.08, 
     }, 
 }, {
@@ -31,7 +31,7 @@ scenarios = [{
         'n_prompt_tokens': random.randint(500, 600), 
         'n_images': 1, 
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 1,  
+        'ttft_slo': 2,  
         'tpot_slo': 0.08,
     }, 
 }, {
@@ -42,7 +42,7 @@ scenarios = [{
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images':0, 
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 0.5, 
+        'ttft_slo': 1, 
         'tpot_slo': 0.04, 
     }, 
 }, {
@@ -53,7 +53,7 @@ scenarios = [{
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images': 1, 
         'n_output_tokens': random.randint(1, 20), 
-        'ttft_slo': 0.5,  
+        'ttft_slo': 1,  
         'tpot_slo': 0.04,
     }, 
 }]
@@ -328,7 +328,9 @@ async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, 
                 return 0
             sorted_nums = sorted(nums, reverse=True)
             return sorted_nums[1]
-        print(f'n_prompt_tok {output.entry.n_prompt_tokens} tpot slo {output.entry.tpot_slo}  max tpot {max(tpot)} second tpot {find_second_largest(tpot)} tpot {tpot}')
+        ttft = output.token_times[0] - output.start_time
+        print(f'n_prompt_tok {output.entry.n_prompt_tokens} tpot slo {output.entry.tpot_slo} ttft slo {output.entry.ttft_slo} ttft {ttft} max tpot {max(tpot)} second tpot {find_second_largest(tpot)} tpot {tpot}')
+        
     return BenchmarkResult(
         metric = metric_builder.get_metrics(), 
         output_text = [output.output_text for output in outputs]

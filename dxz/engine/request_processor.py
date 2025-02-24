@@ -110,6 +110,7 @@ class RequestProcessor:
         token_ids = self.tokenizer.encode(request.prompt)
         n_token_ids_images = token_ids.count(self.image_token_id)
         assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
+        n_prompt_tokens_without_image = len(token_ids)
         token_ids = self._insert_image_tokens(token_ids, self.num_image_tokens)
         n_prompt_tokens = len(token_ids)
         n_image_tokens = n_pixel_values_images * self.num_image_tokens
@@ -185,12 +186,16 @@ class RequestProcessor:
         instructions = builder.build_instruction_list()
         if self.config.debug_request_process:
             print(f'{request.prompt[:10]} {instructions}')
-        # 7. output tokenizer
+        # 7. slo_stringent
+        slo_stringent = n_prompt_tokens_without_image < 100 and request.sampling_params.max_tokens < 100
+
+        # 8. output tokenizer
         rcb = RequestControlBlock(
             request_id = request.request_id, 
             instructions = instructions, 
             sampling_params = request.sampling_params, 
             output_token_params = params.outout_token_parmas,
+            slo_stringent = slo_stringent, 
         )
 
         for output_token_processor in params.output_token_processors:

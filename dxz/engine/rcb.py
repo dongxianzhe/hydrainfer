@@ -6,7 +6,7 @@ from dxz.request import SamplingParameters
 
 
 class RequestControlBlock:
-    def __init__(self, request_id: int, instructions: InstructionList, sampling_params: SamplingParameters, output_token_params: OutputTokenParams):
+    def __init__(self, request_id: int, instructions: InstructionList, sampling_params: SamplingParameters, output_token_params: OutputTokenParams, slo_stringent: bool=False):
         self.request_id = request_id
         self.instructions: InstructionList = instructions
         self.virtual_kv_cache: VirtualTokenCache = None
@@ -19,6 +19,8 @@ class RequestControlBlock:
         self.output_token_ids: list[int] = []
         self.sampling_params = sampling_params
         self.metric = RequestMetric()
+
+        self.slo_stringent = slo_stringent
 
     def current_instruction(self) -> Instruction:
         return self.instructions.curr

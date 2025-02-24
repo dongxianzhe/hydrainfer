@@ -59,8 +59,11 @@ class AsyncEPDNode(AsyncEngine):
                 batch_scheduler=self.batch_scheduler, 
             )
         )
-        self.nodes = []
-        self.migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.nodes)
+
+        self.slow_nodes = []
+        self.fast_nodes = []
+        self.slow_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.slow_nodes)
+        self.fast_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.fast_nodes)
 
         self.name = ""
         if self.config.enable_encode:
@@ -123,8 +126,11 @@ class AsyncEPDNode(AsyncEngine):
             await self.step()
             await asyncio.sleep(0.001)
 
-    async def register_node(self, node: "AsyncEngine"): 
-        self.migrate_scheduler.register_worker(node)
+    async def register_node(self, node: "AsyncEngine", fast: bool=True, slow: bool=True): 
+        if fast:
+            self.fast_slo_migrate_scheduler.register_worker(node)
+        if slow:
+            self.slow_slo_migrate_scheduler.register_worker(node)
 
     async def _migrate_virtual_cache(self, virtual_cache: VirtualTokenCache, block_manager: TokenCacheBlockManager) -> VirtualTokenCache:
         new_virtual_cache = block_manager.allocate_virtual_cache()
@@ -148,9 +154,12 @@ class AsyncEPDNode(AsyncEngine):
     async def _execute_batch_migrate(self, contexts: BatchRequest):
         if len(contexts) == 0:
             return
-        node = self.migrate_scheduler.choice()
         for rcb, _ in contexts:
             rcb.step()
+            if rcb.slo_stringent:
+                node = self.fast_slo_migrate_scheduler.choice()
+            else:
+                node = self.slow_slo_migrate_scheduler.choice()
             obj = node.migrate.remote(rcb)
             asyncio.create_task(self._free_migrate_request(rcb))
 
