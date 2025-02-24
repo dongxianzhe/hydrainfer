@@ -19,6 +19,7 @@ class NodeConfig(CLIConfig):
     enable_prefill: bool = True, 
     enable_decode: bool = True, 
     zmq_send_url: Optional[str] = None
+    debug_migrate: bool = True
 
     def update_shared_config(self):
         self.request_processor_config.model_factory_config = self.model_factory_config
@@ -84,4 +85,9 @@ class NodeConfig(CLIConfig):
             parser = sub_cls.add_cli_args(parser, prefix=prefix)
         parser = TokenCacheBlockManagerConfig.add_cli_args(parser, prefix=prefix+'kv-')
         parser = TokenCacheBlockManagerConfig.add_cli_args(parser, prefix=prefix+'image-')
+        return parser
+
+    @staticmethod
+    def add_curr_config_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
+        parser.add_argument(f'{prefix}debug-migrate', action='store_true', help='Enable debug mode for request migrate.')
         return parser

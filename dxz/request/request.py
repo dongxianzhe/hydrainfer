@@ -1,5 +1,5 @@
 from PIL import Image
-from typing import Optional, Literal
+from typing import Optional, Literal, Union
 from dataclasses import dataclass, field
 
 
@@ -19,7 +19,7 @@ class TokenParameters:
 
 @dataclass
 class Request:
-    request_id: int = 0
+    request_id: Union[int, str] = 0
     prompt: str = ""
     image: Optional[Image.Image] = None
     image_base64: str = ""

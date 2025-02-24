@@ -1,122 +1,169 @@
+import zmq
 import argparse
 import torch
 import time
 import shortuuid
 import json
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
 from contextlib import asynccontextmanager
 import asyncio
 from typing import AsyncGenerator
 from dxz.entrypoint.api_protocol import CompletionRequest, CompletionResponse, CompletionResponseChoice, CompletionResponseStreamChoice, CompletionStreamResponse, ChatCompletionRequest, ChatCompletionResponseStreamChoice, ChatCompletionStreamResponse, DeltaMessage
-from dxz.engine.engine import EngineConfig
-from dxz.engine.async_engine import AsyncEngine, AsyncEngineConfig
-
-parser = argparse.ArgumentParser()
-parser = AsyncEngineConfig.add_cli_args(parser)
-args = parser.parse_args()
-config = AsyncEngineConfig.from_cli_args(args)
-async_engine = AsyncEngine(config)
-
-@asynccontextmanager
-async def lifespan(fastapi_app: FastAPI):
-    asyncio.create_task(async_engine.loop())
-    yield
-app = FastAPI(lifespan=lifespan)
+from dxz.utils.async_stream import AsyncStream
+from dxz.request import Request, SamplingParameters
+from dxz.engine import RequestProcessParameters, OutputTokenParams
 
 
-@app.get('/health')
-async def health() -> Response:
-    return Response(status_code=200)
+class RequestObserver:
+    def add_request(self, request: Request, params: RequestProcessParameters):
+        raise NotImplementedError
 
-@app.post('/v1/chat/completions')
-async def create_chat_completion(request: ChatCompletionRequest) -> Response:
-    request_id = f"chatcmpl-{shortuuid.random()}"
-    created_time = int(time.time())
-    chunk_object_type = "chat.completion.chunk"
 
-    result_generator = async_engine.message_generate(request.messages, request.max_tokens, request.stream)
-    if request.stream:
-        async def stream_results() -> AsyncGenerator:
-            first_message_sent = set()
-            async for output_text in result_generator:
-                index = 0
-                if index not in first_message_sent:
-                    response = ChatCompletionStreamResponse(
-                        id = request_id, 
-                        object = chunk_object_type, 
-                        created=created_time,
-                        model=request.model,
-                        choices = [
-                            ChatCompletionResponseStreamChoice(
-                                index = index, 
-                                delta = DeltaMessage(
-                                    role = "assistant", 
-                                    content = ""
+class APIServer:
+    def __init__(self, zmq_recv: zmq.asyncio.Socket):
+        self.zmq_recv = zmq_recv
+        @asynccontextmanager
+        async def lifespan(fastapi_app: FastAPI):
+            asyncio.create_task(self._zmq_recv_loop())
+            yield
+        self.app = FastAPI(lifespan=lifespan)
+        self._register_routes()
+        self.async_streams: dict[str, AsyncStream] = {}
+        self.observers :list[RequestObserver] = []
+
+    async def _zmq_recv_loop(self):
+        while True:
+            request_id, output_text = await self.zmq_recv.recv_pyobj()
+            # print(f'zmq recv {request_id} {output_text}')
+            output_stream = self.async_streams[request_id]
+            output_stream.put(output_text)
+            if output_text is None:
+                del self.async_streams[request_id]
+                output_stream.finish()
+                print(f'request {request_id} finished')
+            await asyncio.sleep(0.001)
+
+    def register(self, observer: RequestObserver):
+        self.observers.append(observer)
+
+    def _register_routes(self):
+        @self.app.get('/health')
+        async def health() -> Response:
+            return Response(status_code=200)
+
+        @self.app.post('/v1/chat/completions')
+        async def create_chat_completion(request: ChatCompletionRequest) -> Response:
+            request_id = f"chatcmpl-{shortuuid.random()}"
+            created_time = int(time.time())
+            chunk_object_type = "chat.completion.chunk"
+
+            assert len(request.messages) == 1, 'only support one round chat'
+            
+            async_stream = AsyncStream()
+            self.async_streams[request_id] = async_stream
+            for observer in self.observers:
+                observer.add_request(Request(
+                    request_id = request_id, 
+                    prompt = request.messages[0].content, 
+                    image = None, 
+                    image_base64 = request.messages[0].image, 
+                    sampling_params = SamplingParameters(max_tokens=request.max_tokens)
+                ), RequestProcessParameters(
+                    outout_token_parmas = OutputTokenParams(
+                        print_output_text = False, 
+                        is_stream_output = True, 
+                        is_offline_output = False, 
+                    )
+                ))
+
+            if request.stream:
+                async def stream_results() -> AsyncGenerator:
+                    first_message_sent = set()
+                    async for output_text in async_stream:
+                        index = 0
+                        if index not in first_message_sent:
+                            response = ChatCompletionStreamResponse(
+                                id = request_id, 
+                                object = chunk_object_type, 
+                                created=created_time,
+                                model=request.model,
+                                choices = [
+                                    ChatCompletionResponseStreamChoice(
+                                        index = index, 
+                                        delta = DeltaMessage(
+                                            role = "assistant", 
+                                            content = ""
+                                        )
+                                    )]
                                 )
-                            )]
-                        )
-                    first_message_sent.add(index)
-                    yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
-                if output_text:
-                    response = ChatCompletionStreamResponse(
-                        id = request_id, 
-                        object = chunk_object_type, 
-                        created=created_time,
-                        model=request.model,
-                        choices = [ChatCompletionResponseStreamChoice(
-                            index = index, 
-                            delta = DeltaMessage(content = output_text)
-                        )]
-                    )
-                    yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(stream_results())
-    else:
-        raise Exception('not support non stream chat completion')
+                            first_message_sent.add(index)
+                            yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
+                        if output_text:
+                            response = ChatCompletionStreamResponse(
+                                id = request_id, 
+                                object = chunk_object_type, 
+                                created=created_time,
+                                model=request.model,
+                                choices = [ChatCompletionResponseStreamChoice(
+                                    index = index, 
+                                    delta = DeltaMessage(content = output_text)
+                                )]
+                            )
+                            yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
 
-@app.post('/v1/completions')
-async def create_completion(request: CompletionRequest) -> Response:
-    request_id = f"cmpl-{shortuuid.random()}"
-    created_time = int(time.time())
-    result_generator = async_engine.generate(request.prompt, request.stream)
+                    yield "data: [DONE]\n\n"
+                return StreamingResponse(stream_results())
+            else:
+                raise Exception('not support non stream chat completion')
 
-    if request.stream:
-        async def stream_results() -> AsyncGenerator:
-            async for output_text in result_generator:
-                response = CompletionStreamResponse(
-                    id = request_id, 
-                    object = "text_completion", 
-                    created=created_time,
-                    model=request.model,
-                    choices = [
-                        CompletionResponseStreamChoice(
-                            index = 0, 
-                            text = output_text
-                        )]
-                    )
-                yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
-            yield "data: [DONE]\n\n"
-        return StreamingResponse(stream_results())
-    else:
-        output_text = await result_generator.__anext__()
-        choices = [CompletionResponseChoice(
-            index=0, 
-            text=output_text,
-        )] # todo now only support one output
-        return  CompletionResponse(
-            id=request_id,
-            object="text_completion",
-            created=created_time,
-            model=request.model,
-            choices=choices,
-        )
+    def run(self, host: str="127.0.0.1", port: int=8000):
+        print('api server is running')
+        uvicorn.run(self.app, host=host, port=port, log_level='info')
 
-if __name__ == '__main__':
-    uvicorn.run(
-        app,
-        host='127.0.0.1', 
-        port=8888, 
-        log_level='info'
-    )
+# @app.post('/v1/chat/completions')
+# async def create_chat_completion(request: ChatCompletionRequest) -> Response:
+#     request_id = f"chatcmpl-{shortuuid.random()}"
+#     created_time = int(time.time())
+#     chunk_object_type = "chat.completion.chunk"
+
+#     result_generator = async_engine.message_generate(request.messages, request.max_tokens, request.stream)
+#     if request.stream:
+#         async def stream_results() -> AsyncGenerator:
+#             first_message_sent = set()
+#             async for output_text in result_generator:
+#                 index = 0
+#                 if index not in first_message_sent:
+#                     response = ChatCompletionStreamResponse(
+#                         id = request_id, 
+#                         object = chunk_object_type, 
+#                         created=created_time,
+#                         model=request.model,
+#                         choices = [
+#                             ChatCompletionResponseStreamChoice(
+#                                 index = index, 
+#                                 delta = DeltaMessage(
+#                                     role = "assistant", 
+#                                     content = ""
+#                                 )
+#                             )]
+#                         )
+#                     first_message_sent.add(index)
+#                     yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
+#                 if output_text:
+#                     response = ChatCompletionStreamResponse(
+#                         id = request_id, 
+#                         object = chunk_object_type, 
+#                         created=created_time,
+#                         model=request.model,
+#                         choices = [ChatCompletionResponseStreamChoice(
+#                             index = index, 
+#                             delta = DeltaMessage(content = output_text)
+#                         )]
+#                     )
+#                     yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"
+#             yield "data: [DONE]\n\n"
+#         return StreamingResponse(stream_results())
+#     else:
+#         raise Exception('not support non stream chat completion')

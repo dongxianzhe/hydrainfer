@@ -220,10 +220,13 @@ class BatchFillExecutor(Executor):
                                     ))
                         else:
                             if rcb.output_token_params.is_stream_output:
-                                self.context.zmq_send.send_pyobj((rcb.request_id, [next_token_id]))
+                                self.context.zmq_send.send_pyobj((rcb.request_id, self.tokenizer.decode([next_token_id])))
+                                if is_last_token:
+                                    self.context.zmq_send.send_pyobj((rcb.request_id, None))
                             else:
                                 if is_last_token:
-                                    self.context.zmq_send.send_pyobj((rcb.request_id, rcb.output_token_ids))
+                                    self.context.zmq_send.send_pyobj((rcb.request_id, self.tokenizer.decode(rcb.output_token_ids)))
+                                    self.context.zmq_send.send_pyobj((rcb.request_id, None))
 
                     i += 1
 

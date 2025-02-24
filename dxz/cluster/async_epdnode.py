@@ -125,16 +125,12 @@ class AsyncEPDNode(AsyncEngine):
         return new_virtual_cache
 
     async def migrate(self, rcb: RequestControlBlock):
-        print('migrate is called')
+        if self.config.debug_migrate:
+            print(f' migrate request {rcb.request_id} {rcb.instructions}')
         if rcb.virtual_kv_cache:
             rcb.virtual_kv_cache = await self._migrate_virtual_cache(rcb.virtual_kv_cache, self.kv_cache_block_manager) 
         if rcb.virtual_image_cache:
             rcb.virtual_image_cache = await self._migrate_virtual_cache(rcb.virtual_image_cache, self.image_cache_block_manager) 
-        print('migrate finished')
-        print(f'rcb.instructions {rcb.instructions}')
-        print(f'rcb.virtual_image_cache {rcb.virtual_image_cache}')
-        print(f'rcb.virtual_kv_cache {rcb.virtual_kv_cache}')
-        time.sleep(5)
         self.batch_scheduler.schedule_new(rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):

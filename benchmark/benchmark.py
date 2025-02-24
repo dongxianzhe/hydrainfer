@@ -292,6 +292,7 @@ async def dxz_server_proxy(args: argparse.Namespace, entry: SimulatedDataEntry, 
     async for chunk in response:
         content = chunk.choices[0].delta.content
         output.output_text += content + " "
+        print(f'received content {content}')
         output.token_times.append(time.perf_counter())
     output.prompt = entry.prompt
     if pbar:
