@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, fields
 from dxz.utils.config_util import CLIConfig
 from dxz.model import ModelFactoryConfig, getModelFactory, ModelFactoryContext
 from dxz.memory import TokenCacheBlockManagerConfig
-from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig
+from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, BatchSchedulerProfilerConfig
 
 @dataclass
 class NodeConfig(CLIConfig):
@@ -15,6 +15,7 @@ class NodeConfig(CLIConfig):
     image_cache_config: TokenCacheBlockManagerConfig = field(default_factory=TokenCacheBlockManagerConfig)
     executor_config: ExecutorConfig = field(default_factory=ExecutorConfig)
     worker_config: WorkerConfig = field(default_factory=WorkerConfig)
+    batch_scheduler_profiler_config: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)
     enable_encode: bool = True, 
     enable_prefill: bool = True, 
     enable_decode: bool = True, 
@@ -77,11 +78,12 @@ class NodeConfig(CLIConfig):
             'image_cache_config': TokenCacheBlockManagerConfig.from_cli_args(args, prefix=prefix+'image_'), 
             'executor_config': ExecutorConfig.from_cli_args(args, prefix=prefix), 
             'worker_config': WorkerConfig.from_cli_args(args, prefix=prefix), 
+            'batch_scheduler_profiler_config': BatchSchedulerProfilerConfig.from_cli_args(args, prefix=prefix), 
         }
 
     @staticmethod
     def add_sub_configs_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
-        for sub_cls in [RequestProcessorConfig, ModelFactoryConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig]:
+        for sub_cls in [RequestProcessorConfig, ModelFactoryConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, BatchSchedulerProfilerConfig]:
             parser = sub_cls.add_cli_args(parser, prefix=prefix)
         parser = TokenCacheBlockManagerConfig.add_cli_args(parser, prefix=prefix+'kv-')
         parser = TokenCacheBlockManagerConfig.add_cli_args(parser, prefix=prefix+'image-')

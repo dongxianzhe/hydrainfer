@@ -5,5 +5,6 @@ from .rcb import RequestControlBlock
 from .scheduler import BatchScheduler, BatchSchedulerConfig, BatchRequest
 from .request_processor import RequestProcessorConfig, RequestProcessorContext, RequestProcessParameters, RequestProcessor
 from .worker import getWorker, WorkerConfig, WorkerContext, Worker
-from .executor import ExecutorConfig, ExecutorContext, InstructionExecutor
+from .executor import ExecutorConfig, ExecutorContext, InstructionExecutor, Future
+from .profiler import BatchSchedulerProfilerConfig, BatchSchedulerProfilerContext, BatchSchedulerProfiler
 from .engine import Engine, AsyncEngine

@@ -143,3 +143,4 @@ class OutputTokenParams:
     print_output_text: bool = False
     is_stream_output: bool = False
     is_offline_output: bool = False
+    zmq_output: bool = True # if set true send output based is_stream_output and is_offline_output flags

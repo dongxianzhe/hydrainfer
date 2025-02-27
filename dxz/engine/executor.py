@@ -199,7 +199,7 @@ class BatchFillExecutor(Executor):
                         output_token_processor.append_token_id(next_token_id, is_last_token)
                     if rcb.output_token_params.print_output_text:
                         self.print_text_output_token_processor.append_token_id(next_token_id, is_last_token)
-                    if self.context.zmq_send:
+                    if self.context.zmq_send and rcb.output_token_params.zmq_output:
                         if rcb.output_token_params.is_offline_output:
                             if rcb.output_token_params.is_stream_output:
                                 raise Exception('offline inference is not support stream output')

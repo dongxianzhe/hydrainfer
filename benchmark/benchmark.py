@@ -41,7 +41,7 @@ scenarios = [{
     'request_generator': lambda: {
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images':0, 
-        'n_output_tokens': random.randint(1, 20), 
+        'n_output_tokens': random.randint(10, 99), 
         'ttft_slo': 1, 
         'tpot_slo': 0.04, 
     }, 
@@ -52,7 +52,7 @@ scenarios = [{
     'request_generator': lambda: {
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images': 1, 
-        'n_output_tokens': random.randint(1, 20), 
+        'n_output_tokens': random.randint(10, 99), 
         'ttft_slo': 1,  
         'tpot_slo': 0.04,
     }, 

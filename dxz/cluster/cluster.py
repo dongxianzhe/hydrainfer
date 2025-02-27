@@ -35,6 +35,7 @@ class ClusterConfig(CLIConfig):
         self.ednode_config.zmq_send_url = self.zmq_url
         self.ednode_config.request_processor_config.ep_migrate = True
         self.ednode_config.request_processor_config.pd_migrate = True
+        self.ednode_config.batch_scheduler_profiler_config.tpot_slo = 0.08
 
         self.pdnode_config.enable_encode = False
         self.pdnode_config.enable_prefill = True
@@ -42,11 +43,13 @@ class ClusterConfig(CLIConfig):
         self.pdnode_config.zmq_send_url = self.zmq_url
         self.pdnode_config.request_processor_config.ep_migrate = False
         self.pdnode_config.request_processor_config.pd_migrate = True
+        self.pdnode_config.batch_scheduler_profiler_config.tpot_slo = 0.08
 
         self.dnode_config.enable_encode = False
         self.dnode_config.enable_prefill = False
         self.dnode_config.enable_decode = True
         self.dnode_config.zmq_send_url = self.zmq_url
+        self.dnode_config.batch_scheduler_profiler_config.tpot_slo = 0.04
 
         self.ednode_config.update_config_value()
         self.pdnode_config.update_config_value()
@@ -86,8 +89,8 @@ class Cluster:
         self.pdnodes = self._create_ray_nodes(config.n_pdnode, 'pdnode', config.pdnode_config)
         self.dnodes = self._create_ray_nodes(config.n_dnode, 'dnode', config.dnode_config)
         self._register_migrate(self.ednodes, self.pdnodes, fast=True, slow=True)
-        self._register_migrate(self.pdnodes, self.ednodes, fast=True, slow=True)
-        self._register_migrate(self.pdnodes, self.dnodes, fast=True, slow=True)
+        self._register_migrate(self.pdnodes, self.ednodes, fast=False, slow=True)
+        self._register_migrate(self.pdnodes, self.dnodes, fast=True, slow=False)
         self.ebalancer = LoadBalancer(LoadBalancerConfig(), self.ednodes)
         self.pbalancer = LoadBalancer(LoadBalancerConfig(), self.pdnodes)
         self._start(self.ednodes + self.pdnodes + self.dnodes)

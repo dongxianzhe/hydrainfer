@@ -12,6 +12,7 @@ from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstructi
 from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig
 from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerConfig, TokenCacheBlockManagerContext
 from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
+from dxz.engine import BatchSchedulerProfiler, BatchSchedulerConfig, BatchSchedulerProfilerContext
 from dxz.utils.zmq_utils import init_zmq_send
 from dxz.cluster.node_config import NodeConfig
 from dxz.cluster.epdnode import EPDNode
@@ -22,6 +23,17 @@ from dxz.request.offline_inference_output import OfflineInferenceOutput
 class AsyncEPDNode(AsyncEngine):
     def __init__(self, config: NodeConfig):
         self.config = config
+
+        # the name is used in __repr__ which is used to log actor names
+        self.name = ""
+        if self.config.enable_encode:
+            self.name += "E"
+        if self.config.enable_prefill:
+            self.name += "P"
+        if self.config.enable_decode:
+            self.name += "D"
+        self.name += "Node"
+
         if config.zmq_send_url:
             self.zmq_send = init_zmq_send(config.zmq_send_url)
         else:
@@ -65,14 +77,17 @@ class AsyncEPDNode(AsyncEngine):
         self.slow_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.slow_nodes)
         self.fast_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.fast_nodes)
 
-        self.name = ""
-        if self.config.enable_encode:
-            self.name += "E"
-        if self.config.enable_prefill:
-            self.name += "P"
-        if self.config.enable_decode:
-            self.name += "D"
-        self.name += "Node"
+
+        self.profiler = BatchSchedulerProfiler(config.batch_scheduler_profiler_config, BatchSchedulerProfilerContext(executor=self.executor, kv_cache_block_manager=self.kv_cache_block_manager, image_cache_block_manager=self.image_cache_block_manager))
+        if self.config.batch_scheduler_profiler_config.profile_batch_config:
+            if self.config.enable_encode:
+                image_budgets = self.profiler.profile_image_budgets()
+                self.config.batch_scheduler_config.max_batch_embed_images = image_budgets
+
+            if (self.config.enable_prefill or self.config.enable_decode):
+                token_budgets = self.profiler.profile_token_budgets()
+                self.config.batch_scheduler_config.max_batch_fill_tokens = token_budgets
+
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
