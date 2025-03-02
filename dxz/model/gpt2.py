@@ -8,6 +8,7 @@ from dxz.model.parameters import LanguageModelParameters, LanguageModelOutput, A
 from dxz.model.downloader import download_hf_model
 from dxz.layer.activation import NewGELUActivation
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
+from dxz.utils.torch_utils import str2dtype, str2device
 
 
 class GPT2Attention(nn.Module):
@@ -140,18 +141,19 @@ class GPT2LanguageModel(LanguageModel):
 
 class GPT2ModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
-        if config.model_path is None:
-            self.model_path = download_hf_model(repo_id=config.model_name)
+        if config.path is None:
+            self.path = download_hf_model(repo_id=config.name)
         else:
-            self.model_path = config.model_path
-        self.dtype = config.dtype
-        self.device = config.device
+            self.path = config.path
+        self.dtype = str2dtype(config.dtype)
+        self.device = str2device(config.device)
+
 
     def getVisionModel(self) -> VisionModel:
         return GPT2VisionModel()
 
     def getLanguageModel(self) -> LanguageModel:
-        return GPT2LanguageModel(self.model_path, self.dtype, self.device)
+        return GPT2LanguageModel(self.path, self.dtype, self.device)
 
     def getVisionModelConfig(self)-> VisionModelConfig:
         config = VisionModelConfig(image_token_id = -1, num_image_tokens = -1)
@@ -159,7 +161,7 @@ class GPT2ModelFactory(ModelFactory):
 
     def getLanguageModelConfig(self,) -> LanguageModelConfig:
         from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
-        model_ref = GPT2LMHeadModelRef.from_pretrained(self.model_path)
+        model_ref = GPT2LMHeadModelRef.from_pretrained(self.path)
         config_ref = model_ref.config
         config = LanguageModelConfig(
             n_layers = config_ref.n_layer, 
@@ -174,4 +176,4 @@ class GPT2ModelFactory(ModelFactory):
         return None
 
     def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.model_path)
+        return AutoTokenizer.from_pretrained(self.path)

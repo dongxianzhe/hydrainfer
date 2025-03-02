@@ -1,3 +1,4 @@
+import sys
 import time
 import random
 import asyncio
@@ -163,11 +164,25 @@ def vllm_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) 
 
 
 def dxz_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> list[BenchmarkResult]:
-    from dxz.entrypoint import OfflineSingleInstanceEntryPointConfig, OfflineSingleInstanceEntryPoint
-    from dxz.request.request import Request, SamplingParameters
-    config = OfflineSingleInstanceEntryPointConfig.from_cli_args(args)
-    print(config)
-    entrypoint = OfflineSingleInstanceEntryPoint(config)
+    import dxz
+    from dxz.request import Request, SamplingParameters
+    import os
+    import hydra
+    from hydra import initialize, compose
+    from omegaconf import OmegaConf, DictConfig
+
+    config_abspath = os.path.join(dxz.__path__[0], 'config')
+    cwd = os.getcwd()
+    config_refpath = os.path.relpath(config_abspath, cwd)
+    initialize(config_path=config_refpath, job_name='offline benchmark', version_base=None)
+    config = compose(config_name='entrypoint')
+    config.model.path = args.model_path
+    config.model.name = args.model_name
+    config.mode = 'offline'
+    print(OmegaConf.to_yaml(config))
+
+    from dxz.entrypoint import EntryPoint
+    entrypoint = EntryPoint(config) 
     requests = [Request(
         request_id = i, 
         prompt = entry.prompt, 
@@ -431,13 +446,9 @@ if __name__ == '__main__':
             default=scenario['default'],
             help=scenario['help'],
         )
-    try:
-        from dxz.entrypoint import OfflineSingleInstanceEntryPointConfig
-        parser = OfflineSingleInstanceEntryPointConfig.add_cli_args(parser)
-    except Exception as e:
-        print(e)
-        print('dxz engine config import failed, ignoring')
-
-    args = parser.parse_args()
+    args, remain_args = parser.parse_known_args()
+    print(f'benchmark args {args}')
+    print(f'benchmark remain_args {remain_args}')
+    sys.argv[1:] = remain_args
 
     main(args)

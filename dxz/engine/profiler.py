@@ -6,21 +6,17 @@ import argparse
 import functools
 from typing import Callable
 from dataclasses import dataclass, field
-from dxz.utils.config_util import CLIConfig
 from dxz.engine import BatchRequest, InstructionExecutor, InstructionListBuilder, ImageEmbed, RequestControlBlock, TextFill, Instruction, Future
 from dxz.memory import TokenCacheBlockManager
 from dxz.engine.output_token_processor import OutputTokenParams
 from dxz.model import ModelFactoryConfig, ModelFactoryContext, getModelFactory
+from dxz.utils.torch_utils import str2device, str2dtype
 
 @dataclass
-class BatchSchedulerProfilerConfig(CLIConfig):
-    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
+class BatchSchedulerProfilerConfig:
+    model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
     profile_batch_config: bool = False
     tpot_slo: float = 0.4
-
-    def add_curr_config_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
-        parser.add_argument(f'{prefix}profile-batch-config', action='store_true', help='profile best config with tpot slo for batch policy')
-        return parser
 
 
 @dataclass
@@ -34,9 +30,12 @@ class BatchSchedulerProfiler:
     def __init__(self, config: BatchSchedulerProfilerConfig, context: BatchSchedulerProfilerContext):
         self.config = config
         self.context = context
-        model_factory = getModelFactory(config=config.model_factory_config, context=ModelFactoryContext())
+        model_factory = getModelFactory(config=config.model, context=ModelFactoryContext())
         self.vision_config = model_factory.getVisionModelConfig()
         self.language_confeig = model_factory.getLanguageModelConfig()
+
+        self.dtype = str2dtype(config.model.dtype)
+        self.device = str2device(config.model.device)
 
         self.executor = context.executor
 
@@ -58,7 +57,7 @@ class BatchSchedulerProfiler:
     
     def _prepare_encode_batch(self, batch_size: int) -> BatchRequest:
         encode_inst = ImageEmbed(
-            pixel_values = torch.randn(size=(1, 3, 336, 336), dtype=self.config.model_factory_config.dtype, device=self.config.model_factory_config.device),
+            pixel_values = torch.randn(size=(1, 3, 336, 336), dtype=self.dtype, device=self.device),
             cache_ids = list(range(0, self.vision_config.num_image_tokens)), 
             token_pruning_params = None,
         )

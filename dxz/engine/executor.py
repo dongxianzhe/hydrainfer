@@ -16,8 +16,8 @@ from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, Visi
 from dxz.engine.worker import WorkerConfig, WorkerContext, getWorker, Worker
 from dxz.memory import TokenCacheBlockManager, KVCache
 from dxz.engine.scheduler import BatchRequest
-from dxz.utils.config_util import CLIConfig
 from dxz.request import OfflineInferenceOutput
+from dxz.utils.torch_utils import str2dtype, str2device
 
 
 class Future:
@@ -47,19 +47,11 @@ class ComposeFuture(Future):
             future.get()
 
 @dataclass
-class ExecutorConfig(CLIConfig):
+class ExecutorConfig:
     use_flash_infer: bool = False
     multi_streams_forward: bool = False
     multi_threads_forward: bool = False
-    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
-
-    @classmethod
-    def add_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
-        parser.add_argument(f'{prefix}use-flash-infer', action='store_true', help='Enable flash infer attention kernel, default kernel is flash attention')
-        parser.add_argument(f'{prefix}multi-streams-forward', action='store_true', help='Enable multi-stream forwarding.')
-        parser.add_argument(f'{prefix}multi-threads-forward', action='store_true', help='Enable multi-thread forwarding.')
-        cls.add_sub_configs_cli_args(cls, parser, prefix)
-        return parser
+    model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
 
 
 @dataclass
@@ -80,14 +72,14 @@ class BatchFillExecutor(Executor):
         self.config = config
         self.context = context
 
-        model_factory = getModelFactory(config.model_factory_config, ModelFactoryContext(process_group=None))
+        model_factory = getModelFactory(config.model, ModelFactoryContext(process_group=None))
         self.worker = context.worker
         self.vision_model_config = model_factory.getVisionModelConfig()
         self.language_model_config = model_factory.getLanguageModelConfig()
         self.tokenizer = model_factory.getTokenizer()
 
-        self.dtype = config.model_factory_config.dtype
-        self.device = config.model_factory_config.device
+        self.dtype = str2dtype(config.model.dtype)
+        self.device = str2device(config.model.device)
         self.block_mangaer = context.kv_cache_block_manager
         self.image_block_manager = context.image_cache_block_manager
 
@@ -242,11 +234,12 @@ class BatchImageEmbedExecutor(Executor):
         self.context = context
         self.worker = context.worker
         self.block_manager = context.image_cache_block_manager
-        model_factory = getModelFactory(config.model_factory_config, ModelFactoryContext(process_group=None))
+        model_factory = getModelFactory(config.model, ModelFactoryContext(process_group=None))
         self.language_model_config = model_factory.getLanguageModelConfig()
         self.n_qo_heads = self.language_model_config.n_qo_heads
         self.head_dim = self.language_model_config.head_dim
-        self.device = config.model_factory_config.device
+        self.dtype = str2dtype(config.model.dtype)
+        self.device = str2device(config.model.device)
 
     def execute(self, contexts: BatchRequest) -> Future:
         if len(contexts) == 0:
@@ -258,7 +251,7 @@ class BatchImageEmbedExecutor(Executor):
         new_cache_slots: list[int] = []
         batch_pixel_values: list[Tensor] = []
         for rcb, inst in contexts:
-            pixel_values = inst.pixel_values.to(self.config.model_factory_config.dtype).to(self.config.model_factory_config.device) # (n_images, n_channels, width, height)
+            pixel_values = inst.pixel_values.to(self.dtype).to(self.device) # (n_images, n_channels, width, height)
             batch_pixel_values.append(pixel_values)
             inst.pixel_values = None
             slot_ids = self.block_manager.set(rcb.virtual_image_cache, inst.cache_ids) 

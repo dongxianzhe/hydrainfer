@@ -8,7 +8,7 @@ from dxz._C.data_transfer import block_migration
 from dxz._C.kernel.cache_kernels import set_image_cache
 from dxz.memory import BlockAllocator
 from dxz.utils.allocate import IncreaingAllocator
-from dxz.utils.config_util import CLIConfig
+from dxz.utils.torch_utils import str2dtype, str2device
 
 
 class TokenCache:
@@ -65,21 +65,15 @@ class VirtualTokenCache:
 
 
 @dataclass
-class TokenCacheBlockManagerConfig(CLIConfig):
+class TokenCacheBlockManagerConfig:
     n_layers: int = 32
     n_tokens: int = 2
     n_blocks: int = 1024
     block_size: int = 16
     n_heads: int = 32
     head_size: int = 128
-    dtype: torch.dtype = torch.half
-    device: torch.device = torch.device('cuda:0')
-
-    @staticmethod
-    def add_curr_config_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
-        parser.add_argument(f'{prefix}n-blocks', type=int, default=1024, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
-        parser.add_argument(f'{prefix}block-size', type=int, default=16, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
-        return parser
+    dtype: str = "fp16"
+    device: str = "cuda:0"
 
 
 @dataclass
@@ -97,8 +91,8 @@ class TokenCacheBlockManager:
         self.block_size = config.block_size
         self.n_heads    = config.n_heads
         self.head_size  = config.head_size
-        self.dtype      = config.dtype
-        self.device     = config.device
+        self.dtype      = str2dtype(config.dtype)
+        self.device     = str2device(config.device)
 
         self.cache_tensor = torch.randn(size=(self.n_layers, self.n_tokens, self.n_blocks, self.block_size, self.n_heads, self.head_size), dtype=self.dtype, device=self.device)
         self.memory_handle: list[int] = get_ipc_mem_handle(self.cache_tensor)

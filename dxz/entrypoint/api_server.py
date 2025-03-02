@@ -4,6 +4,7 @@ import torch
 import time
 import shortuuid
 import json
+from dataclasses import dataclass, field
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 import uvicorn
@@ -14,6 +15,7 @@ from dxz.entrypoint.api_protocol import CompletionRequest, CompletionResponse, C
 from dxz.utils.async_stream import AsyncStream
 from dxz.request import Request, SamplingParameters
 from dxz.engine import RequestProcessParameters, OutputTokenParams
+from dxz.utils.zmq_utils import ZMQConfig, init_zmq_recv
 
 
 class RequestObserver:
@@ -21,9 +23,17 @@ class RequestObserver:
         raise NotImplementedError
 
 
+@dataclass
+class APIServerConfig:
+    host: str = "127.0.0.1"
+    port: int = 8888
+    zmq: ZMQConfig = field(default_factory=ZMQConfig)
+
+
 class APIServer:
-    def __init__(self, zmq_recv: zmq.asyncio.Socket):
-        self.zmq_recv = zmq_recv
+    def __init__(self, config: APIServerConfig):
+        self.config = config
+        self.zmq_recv = init_zmq_recv(config.zmq)
         @asynccontextmanager
         async def lifespan(fastapi_app: FastAPI):
             asyncio.create_task(self._zmq_recv_loop())
@@ -118,9 +128,9 @@ class APIServer:
             else:
                 raise Exception('not support non stream chat completion')
 
-    def run(self, host: str="127.0.0.1", port: int=8000):
+    def run(self):
         print('api server is running')
-        uvicorn.run(self.app, host=host, port=port, log_level='info')
+        uvicorn.run(self.app, host=self.config.host, port=self.config.port, log_level='info')
 
 # @app.post('/v1/chat/completions')
 # async def create_chat_completion(request: ChatCompletionRequest) -> Response:

@@ -14,27 +14,16 @@ from dxz.request.request import Request
 from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams
 from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
-from dxz.utils.config_util import CLIConfig
 
 
 @dataclass
-class RequestProcessorConfig(CLIConfig):
+class RequestProcessorConfig:
     multi_thread_request_process: bool = False
     disaggregate_embed_prefill: bool = True
     ep_migrate: bool = False
     pd_migrate: bool = False
-    model_factory_config: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
-    debug_request_process: bool = False
-
-    @classmethod
-    def add_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
-        parser.add_argument(f'{prefix}multi-thread-request-process', action='store_true', help='Enable multi-threading for request processing.')
-        parser.add_argument(f'{prefix}disaggregate-embed-prefill', action='store_true', default=True, help='Enable disaggregation of embedding prefill.')
-        parser.add_argument(f'{prefix}ep-migrate', action='store_true', default=False, help='Enable embed prefill migrate')
-        parser.add_argument(f'{prefix}pd-migrate', action='store_true', default=False, help='Enable prefill decode migrate')
-        parser.add_argument(f'{prefix}debug-request-process', action='store_true', default=False, help='debug request process output')
-        cls.add_sub_configs_cli_args(cls, parser, prefix)
-        return parser
+    model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
+    debug: bool = False
 
 
 @dataclass
@@ -54,7 +43,7 @@ class RequestProcessor:
         self.config = config
         self.context = context
 
-        model_factory = getModelFactory(self.config.model_factory_config, ModelFactoryContext())
+        model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         self.tokenizer = model_factory.getTokenizer()
         self.processor = model_factory.getProcessor()
         language_model_config = model_factory.getLanguageModelConfig()
@@ -184,7 +173,7 @@ class RequestProcessor:
             left = right
 
         instructions = builder.build_instruction_list()
-        if self.config.debug_request_process:
+        if self.config.debug:
             print(f'{request.prompt[:10]} {instructions}')
         # 7. slo_stringent
         slo_stringent = n_prompt_tokens_without_image < 100 and request.sampling_params.max_tokens < 100

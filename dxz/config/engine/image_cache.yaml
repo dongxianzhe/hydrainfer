@@ -1,0 +1,8 @@
+n_layers: 1
+n_tokens: 1
+n_blocks: 128
+block_size: ${model.vision.num_image_tokens}
+n_heads: ${model.language.n_qo_heads}
+head_size: ${model.language.head_dim}
+dtype: ${model.dtype}
+device: ${model.device}

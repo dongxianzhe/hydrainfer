@@ -1,1 +1,2 @@
 from .offline_single_instance import OfflineSingleInstanceEntryPoint, OfflineSingleInstanceEntryPointConfig
+from .entrypoint import EntryPoint

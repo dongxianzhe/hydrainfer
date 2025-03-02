@@ -7,6 +7,7 @@ from dxz.model.parameters import VisionModelOutput, VisionModelParameters, Langu
 from dxz.model.downloader import download_hf_model
 from transformers import AutoProcessor, AutoTokenizer
 from dataclasses import dataclass
+from dxz.utils.torch_utils import str2dtype, str2device
 
 
 @dataclass
@@ -48,13 +49,13 @@ class FakeLanguageModel(LanguageModel):
 
 class FakeModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
-        self.model_name = config.model_name
-        if config.model_path is None:
-            self.model_path = download_hf_model(repo_id='llava-hf/llava-1.5-7b-hf')
+        self.name = config.name
+        if config.path is None:
+            self.path = download_hf_model(repo_id='llava-hf/llava-1.5-7b-hf')
         else:
-            self.model_path = config.model_path
-        self.dtype = config.dtype
-        self.device = config.device
+            self.path = config.path
+        self.dtype = str2dtype(config.dtype)
+        self.device = str2device(config.device)
 
     def getVisionModel(self) -> VisionModel:
         model = FakeVisionModel()
@@ -84,7 +85,7 @@ class FakeModelFactory(ModelFactory):
         return config
 
     def getProcessor(self) -> AutoProcessor:
-        return AutoProcessor.from_pretrained(self.model_path)
+        return AutoProcessor.from_pretrained(self.path)
 
     def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.model_path)
+        return AutoTokenizer.from_pretrained(self.path)

@@ -1,40 +1,39 @@
-import ray
+import os
+import hydra
 import asyncio
-import uvicorn
-import argparse
+from omegaconf import DictConfig, OmegaConf
+from dataclasses import dataclass, field
 from typing import Literal
-from dataclasses import dataclass, field, fields
-from fastapi import FastAPI, Request, Response
-from contextlib import asynccontextmanager
-from dxz.model import ModelFactoryConfig
+from fastapi import Request
+import dxz
 from dxz.engine import RequestProcessParameters, OutputTokenParams
-from dxz.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, Cluster, ClusterConfig
+from dxz.cluster import Cluster, ClusterConfig
 from dxz.request import OfflineInferenceOutput
-from dxz.entrypoint.api_server import APIServer
-from dxz.utils.config_util import CLIConfig
-from dxz.utils.zmq_utils import init_zmq_recv
-from dxz.utils.ray_utils import get_ip_address
+from dxz.entrypoint.api_server import APIServer, APIServerConfig
+from dxz.utils.zmq_utils import ZMQConfig, init_zmq_recv
 from dxz.utils.counter import Counter
 
 
-
 @dataclass
-class EntryPointConfig(CLIConfig):
-    host: str = '127.0.0.1'
-    port: int = 8888
-    cluster_config: ClusterConfig = field(default_factory=ClusterConfig)
+class EntryPointConfig:
+    mode: Literal["offline", "online"] = "online"
+    zmq: ZMQConfig = field(default_factory=ZMQConfig)
+    apiserver: APIServerConfig = field(default_factory=ClusterConfig)
+    cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
 
 class EntryPoint:
     def __init__(self, config: EntryPointConfig):
         self.config = config
-        self.cluster = Cluster(config.cluster_config)
-        self.zmq_recv = self.cluster.get_zmq_recv()
-        self.api_server = APIServer(self.zmq_recv)
-        self.api_server.register(self.cluster)
-
-    def run(self):
-        self.api_server.run(self.config.host, self.config.port)
+        self.cluster = Cluster(config.cluster)
+        if self.config.mode == 'online':
+            self.api_server = APIServer(config.apiserver)
+            self.api_server.register(self.cluster)
+            self.api_server.run()
+        elif self.config.mode == 'offline':
+            self.zmq_recv = init_zmq_recv(self.config.zmq)
+        else:
+            raise Exception(f'entrypoint invalid mode {self.config.mode}')
 
     async def _generate(self, requests: list[Request]) -> list[OfflineInferenceOutput]:
         finished = Counter()
@@ -70,24 +69,12 @@ class EntryPoint:
             return False
 
 
-if __name__ == '__main__':
-    from PIL import Image
-    from dxz.request import SamplingParameters
-    from dxz.request import Request
-    requests = [
-        Request(
-            request_id = i, 
-            prompt = f"<image>What is the content of this image?", 
-            image = Image.open('./benchmark/dataset/cherry_blossom.jpg'), 
-            image_base64 = None, 
-            sampling_params = SamplingParameters(max_tokens=100)
-        )
-        for i in range(2)
-    ]
-    parser = argparse.ArgumentParser(description="entrypoint", conflict_handler='resolve')
-    parser = EntryPointConfig.add_cli_args(parser)
-    args = parser.parse_args()
-    config = EntryPointConfig.from_cli_args(args)
-    print(f'config {config}')
+@hydra.main(config_path=os.path.join(dxz.__path__[0], 'config'), config_name="entrypoint", version_base=None)
+def main(config: DictConfig):
+    print(OmegaConf.to_yaml(config))
     entrypoint = EntryPoint(config) 
     entrypoint.run()
+
+
+if __name__ == '__main__':
+    main()

@@ -6,17 +6,16 @@ from typing import Optional
 from dxz.model.model_factory import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput, ModelFactoryConfig, ModelFactoryContext, ModelFactory, getModelFactory
 from dxz.model_parallel.process_group import init_global_process_group, ParallelConfig
 from dataclasses import dataclass, field, fields
-from dxz.utils.config_util import CLIConfig
 
 
 @dataclass
-class WorkerConfig(CLIConfig):
+class WorkerConfig:
     use_ray: bool = False
     init_method: str = 'tcp://localhost:9876'
     has_vision_model: bool = True
     has_language_model: bool = True
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
-    model_factory_config: ModelFactoryConfig = field(default_factory=ParallelConfig)
+    model: ModelFactoryConfig = field(default_factory=ParallelConfig)
 
 
 @dataclass
@@ -35,7 +34,7 @@ class Worker:
 class VanillaWorker(Worker):
     def __init__(self, config: WorkerConfig, context: WorkerContext):
         model_factory_context = ModelFactoryContext(process_group=None)
-        model_factory: ModelFactory = getModelFactory(config.model_factory_config, model_factory_context)
+        model_factory: ModelFactory = getModelFactory(config.model, model_factory_context)
         if config.has_vision_model:
             self.vision_model = model_factory.getVisionModel() 
         if config.has_language_model:
@@ -104,6 +103,7 @@ class RayWorkers(Worker):
 def getWorker(config: WorkerConfig, context: WorkerContext) -> Worker:
     if config.use_ray:
         return RayWorkers(config, context)
-    if config.parallel_config.is_parallel:
-        return RayWorkers(config, context)
+    # todo the yaml config does not has property function
+    # if config.parallel_config.is_parallel:
+    #     return RayWorkers(config, context)
     return VanillaWorker(config, context)

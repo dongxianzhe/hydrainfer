@@ -9,6 +9,7 @@ from dxz.model.clip import CLIPVisionModel
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext
 from dxz.model.downloader import download_hf_model
+from dxz.utils.torch_utils import str2device, str2dtype
 
 class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: LlavaConfig):
@@ -146,24 +147,24 @@ class LlavaLanguageModel(LanguageModel):
 
 class LlavaModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
-        self.model_name = config.model_name
-        if config.model_path is None:
-            self.model_path = download_hf_model(repo_id=config.model_name)
+        self.name = config.name
+        if config.path is None:
+            self.path = download_hf_model(repo_id=config.name)
         else:
-            self.model_path = config.model_path
-        self.dtype = config.dtype
-        self.device = config.device
+            self.path = config.path
+        self.dtype = str2dtype(config.dtype)
+        self.device = str2device(config.device)
 
     def getVisionModel(self) -> VisionModel:
-        model = LlavaVisionModel(self.model_path, self.dtype, self.device)
+        model = LlavaVisionModel(self.path, self.dtype, self.device)
         return model
 
     def getLanguageModel(self) -> LanguageModel:
-        model = LlavaLanguageModel(self.model_path, self.dtype, self.device)
+        model = LlavaLanguageModel(self.path, self.dtype, self.device)
         return model
 
     def getVisionModelConfig(self) -> VisionModelConfig:
-        config_ref = LlavaConfig.from_pretrained(self.model_path)
+        config_ref = LlavaConfig.from_pretrained(self.path)
         config = VisionModelConfig(
             image_token_id = config_ref.image_token_index, 
             num_image_tokens = config_ref.image_seq_length, 
@@ -171,7 +172,7 @@ class LlavaModelFactory(ModelFactory):
         return config
 
     def getLanguageModelConfig(self) -> LanguageModelConfig:
-        config_ref = LlavaConfig.from_pretrained(self.model_path)
+        config_ref = LlavaConfig.from_pretrained(self.path)
         config = LanguageModelConfig(
             n_layers = config_ref.text_config.num_hidden_layers, 
             max_position_embeddings = config_ref.text_config.max_position_embeddings, 
@@ -182,7 +183,7 @@ class LlavaModelFactory(ModelFactory):
         return config
 
     def getProcessor(self) -> AutoProcessor:
-        return AutoProcessor.from_pretrained(self.model_path)
+        return AutoProcessor.from_pretrained(self.path)
 
     def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.model_path)
+        return AutoTokenizer.from_pretrained(self.path)

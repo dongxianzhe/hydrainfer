@@ -1,0 +1,6 @@
+multi_thread_request_process: True
+disaggregate_embed_prefill: True
+ep_migrate: False
+pd_migrate: False
+debug: False
+model: ${model}

@@ -3,11 +3,10 @@ import argparse
 from torch import Tensor
 import torch.distributed as dist
 from dataclasses import dataclass, field, fields
-from dxz.utils.config_util import CLIConfig
 
 
 @dataclass
-class ParallelConfig(CLIConfig):
+class ParallelConfig:
     """Configuration for the distributed execution.
 
     Args:

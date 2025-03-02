@@ -1,0 +1,4 @@
+use_flash_infer: True
+multi_streams_forward: True
+multi_threads_forward: True
+model: ${model}

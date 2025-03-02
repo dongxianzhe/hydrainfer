@@ -12,6 +12,7 @@ from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageMode
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from dxz.layer.norm import rmsnorm
 from dxz.layer.activation import silu
+from dxz.utils.torch_utils import str2dtype, str2device
 
 class LlamaSdpaAttention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -175,26 +176,26 @@ class LlamaLanguageModel(LanguageModel):
 
 class LlamaModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
-        self.model_name = config.model_name
-        if config.model_path is None:
-            self.model_path = download_hf_model(repo_id=config.model_name)
+        self.name = config.name
+        if config.path is None:
+            self.path = download_hf_model(repo_id=config.name)
         else:
-            self.model_path = config.model_path
-        self.dtype = config.dtype
-        self.device = config.device
+            self.path = config.path
+        self.dtype = str2dtype(config.dtype)
+        self.device = str2device(config.device)
 
     def getVisionModel(self) -> VisionModel:
         return LlamaVisionModel()
 
     def getLanguageModel(self) -> LanguageModel:
-        model = LlamaLanguageModel(self.model_path, self.dtype, self.device)
+        model = LlamaLanguageModel(self.path, self.dtype, self.device)
         return model
 
     def getVisionModelConfig(self) -> VisionModelConfig:
         return VisionModelConfig(image_token_id = -1, num_image_tokens = -1)
 
     def getLanguageModelConfig(self) -> LanguageModelConfig:
-        config_ref = LlamaConfig.from_pretrained(self.model_path)
+        config_ref = LlamaConfig.from_pretrained(self.path)
         config = LanguageModelConfig(
             n_layers = config_ref.num_hidden_layers, 
             max_position_embeddings = config_ref.max_position_embeddings, 
@@ -208,4 +209,4 @@ class LlamaModelFactory(ModelFactory):
         return None
 
     def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.model_path)
+        return AutoTokenizer.from_pretrained(self.path)

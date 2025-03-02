@@ -23,3 +23,5 @@ benchmark/mme/*.parquet
 benchmark/*/*.parquet
 **/*.pkl
 !benchmark/dataset/cherry_blossom.jpg
+config/outputs/
+outputs/

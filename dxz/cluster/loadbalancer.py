@@ -1,13 +1,11 @@
 from dataclasses import dataclass
-from dxz.utils.config_util import CLIConfig
-
 
 class Worker:
     pass
 
 
 @dataclass
-class LoadBalancerConfig(CLIConfig):
+class LoadBalancerConfig:
     pass
 
 

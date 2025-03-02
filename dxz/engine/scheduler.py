@@ -5,10 +5,9 @@ from dataclasses import dataclass, fields
 from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock
 from dxz.utils.allocate import IncreaingAllocator
 import argparse
-from dxz.utils.config_util import CLIConfig
 
 @dataclass
-class BatchSchedulerConfig(CLIConfig):
+class BatchSchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
@@ -16,19 +15,7 @@ class BatchSchedulerConfig(CLIConfig):
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
     batch_embed_prefill: bool = False
-    debug_batch: bool = False
-
-    @classmethod
-    def add_cli_args(cls, parser: argparse.ArgumentParser, prefix: str="--") -> argparse.ArgumentParser:
-        parser.add_argument(f'{prefix}batch-policy', type=str, choices=['nobatch', 'requestlevel', 'continuousbatch'], default='continuousbatch', help='Batch policy for scheduling.')
-        parser.add_argument(f'{prefix}priority', type=str, choices=['prefill', 'decode'], default='prefill', help='Prefill prioritize or decode prioritize')
-        parser.add_argument(f'{prefix}max-running-requests', type=int, default=15, help='Maximum number of requests running concurrently. other requests will waiting in queue.')
-        parser.add_argument(f'{prefix}chunked-prefill', action='store_true', help='Enable chunk part of prefill of a request when max batch fill tokens is not enough')
-        parser.add_argument(f'{prefix}max-batch-fill-tokens', type=int, default=1024, help='Maximum number of tokens in each batch fill.')
-        parser.add_argument(f'{prefix}max-batch-embed-images', type=int, default=3, help='Maximum number of images to embed in each batch.')
-        parser.add_argument(f'{prefix}batch-embed-prefill', action='store_true', help='Enable batch embedding and prefill in one step.')
-        parser.add_argument(f'{prefix}debug-batch', action='store_true', help='Enable debug mode for batch scheduler.')
-        return parser
+    debug: bool = False
 
 
 class BatchRequest:
@@ -132,7 +119,7 @@ class BatchScheduler:
             else:
                 next_step.append(seq)
 
-        if self.config.debug_batch:
+        if self.config.debug:
             print(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
             print(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
             print(f'inst: ' + ' '.join(f'{seq.instructions.curr}' for seq in this_step))
