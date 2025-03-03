@@ -40,3 +40,17 @@ class RequestControlBlock:
         for instruction in self.instructions:
             print(f"{instruction}")
         print(f'-----------------------------------------------------------------------------------')
+
+
+class BatchRequest:
+    def __init__(self, rcbs: Optional[list[RequestControlBlock]] = None):
+        self.rcbs = rcbs if rcbs is not None else []
+
+    def __len__(self):
+        return len(self.rcbs)
+    
+    def __getitem__(self, idx: int) -> tuple[RequestControlBlock, Instruction]:
+        return self.rcbs[idx], self.rcbs[idx].instructions.curr
+
+    def append(self, rcb: RequestControlBlock):
+        self.rcbs.append(rcb)

@@ -26,6 +26,9 @@ cluster:
       pd_migrate: True
     batch_scheduler_profiler:
       tpot_slo: 0.08
+      profile_image_budgets: True
+      profile_token_budgets: True
+      profile_interference_encode_decode: True
   pdnode:
     enable_encode: False
     enable_prefill: True
@@ -33,6 +36,9 @@ cluster:
     request_processor:
       ep_migrate: False
       pd_migrate: True
+      profile_image_budgets: False
+      profile_token_budgets: True
+      profile_interference_encode_decode: False
     batch_scheduler_profiler:
       tpot_slo: 0.08
   dnode:
@@ -41,6 +47,9 @@ cluster:
     enable_decode: True
     batch_scheduler_profiler:
       tpot_slo: 0.04
+      profile_image_budgets: False
+      profile_token_budgets: True
+      profile_interference_encode_decode: False
     worker:
       has_vision_model: False
       has_language_model: True

@@ -2,7 +2,7 @@ import time
 from queue import Queue
 from typing import Literal, Optional
 from dataclasses import dataclass, fields
-from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock
+from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest
 from dxz.utils.allocate import IncreaingAllocator
 import argparse
 
@@ -18,23 +18,28 @@ class BatchSchedulerConfig:
     debug: bool = False
 
 
-class BatchRequest:
-    def __init__(self, rcbs: Optional[list[RequestControlBlock]] = None):
-        self.rcbs = rcbs if rcbs is not None else []
-
-    def __len__(self):
-        return len(self.rcbs)
-    
-    def __getitem__(self, idx: int) -> tuple[RequestControlBlock, Instruction]:
-        return self.rcbs[idx], self.rcbs[idx].instructions.curr
-
-    def append(self, rcb: RequestControlBlock):
-        self.rcbs.append(rcb)
+@dataclass
+class BatchSchedulerContext:
+    profiler: BatchSchedulerProfiler
 
 
 class BatchScheduler:
-    def __init__(self, config: BatchSchedulerConfig):
+    def __init__(self, config: BatchSchedulerConfig, context: BatchSchedulerContext):
         self.config = config
+        self.profiler = context.profiler
+        output = self.profiler.profile()
+        if output.image_budgets is not None:
+            self.image_budgets = output.image_budgets
+        else:
+            self.image_budgets = self.config.max_batch_embed_images
+
+        if output.token_budgets is not None:
+            self.token_budgets = output.token_budgets
+        else:
+            self.token_budgets = self.config.max_batch_fill_tokens
+
+
+
         self.waiting = Queue()
         self.running: list[RequestControlBlock] = []
         self.step_cnt = 0
@@ -93,7 +98,7 @@ class BatchScheduler:
             next_step += embed_seqs
         else:
             for seq in embed_seqs:
-                if batch_embed_images < self.config.max_batch_embed_images:
+                if batch_embed_images < self.image_budgets:
                     this_step.append(seq)
                     batch_embed_images += 1 # todo cope with multi image
                 else:
@@ -105,15 +110,15 @@ class BatchScheduler:
         for seq in fill_seqs:
             inst = seq.instructions.curr
             n_tokens = len(inst.token_ids)
-            if batch_fill_tokens + n_tokens <= self.config.max_batch_fill_tokens:
+            if batch_fill_tokens + n_tokens <= self.token_budgets:
                 this_step.append(seq)
                 batch_fill_tokens += n_tokens
-            elif batch_fill_tokens < self.config.max_batch_fill_tokens and n_tokens > 1 and self.config.chunked_prefill and isinstance(inst, TextFill): # if it is prefill and we can chunk part of it
-                chunk_size = self.config.max_batch_fill_tokens - batch_fill_tokens
+            elif batch_fill_tokens < self.token_budgets and n_tokens > 1 and self.config.chunked_prefill and isinstance(inst, TextFill): # if it is prefill and we can chunk part of it
+                chunk_size = self.token_budgets - batch_fill_tokens
                 inst.chunk_prefill(chunk_size)
                 this_step.append(seq)
                 batch_fill_tokens += chunk_size
-            elif batch_fill_tokens == 0: # avoid the prefill larger than max_batch_fill_tokens block
+            elif batch_fill_tokens == 0: # avoid the prefill larger than token_budgets block
                 this_step.append(seq)
                 batch_fill_tokens += n_tokens
             else:

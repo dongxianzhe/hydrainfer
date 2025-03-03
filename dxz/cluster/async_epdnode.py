@@ -12,7 +12,7 @@ from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstructi
 from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig
 from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerConfig, TokenCacheBlockManagerContext
 from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
-from dxz.engine import BatchSchedulerProfiler, BatchSchedulerConfig, BatchSchedulerProfilerContext
+from dxz.engine import BatchSchedulerProfiler, BatchSchedulerConfig, BatchSchedulerProfilerContext, BatchSchedulerContext
 from dxz.utils.zmq_utils import init_zmq_send
 from dxz.cluster.node_config import NodeConfig
 from dxz.cluster.epdnode import EPDNode
@@ -43,9 +43,10 @@ class AsyncEPDNode(AsyncEngine):
 
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         self.tokenizer = model_factory.getTokenizer()
+
         self.kv_cache_block_manager = TokenCacheBlockManager(config.kv_cache, TokenCacheBlockManagerContext()) if self.has_kv_cache else None
         self.image_cache_block_manager = TokenCacheBlockManager(config.image_cache, TokenCacheBlockManagerContext()) if self.has_image_cache else None
-        self.batch_scheduler = BatchScheduler(config.batch_scheduler)
+
         self.worker = getWorker(config.worker, WorkerContext())
         self.executor = InstructionExecutor(
             config.executor, 
@@ -56,6 +57,11 @@ class AsyncEPDNode(AsyncEngine):
                 zmq_send = self.zmq_send
             )
         )
+
+        self.profiler = BatchSchedulerProfiler(config.batch_scheduler_profiler, BatchSchedulerProfilerContext(executor=self.executor, kv_cache_block_manager=self.kv_cache_block_manager, image_cache_block_manager=self.image_cache_block_manager))
+        self.batch_scheduler = BatchScheduler(config.batch_scheduler, BatchSchedulerContext(
+            profiler = self.profiler, 
+        ))
         self.request_processor = RequestProcessor(
             config.request_processor, 
             RequestProcessorContext(
@@ -67,16 +73,6 @@ class AsyncEPDNode(AsyncEngine):
         self.fast_nodes = []
         self.slow_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.slow_nodes)
         self.fast_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.fast_nodes)
-
-        self.profiler = BatchSchedulerProfiler(config.batch_scheduler_profiler, BatchSchedulerProfilerContext(executor=self.executor, kv_cache_block_manager=self.kv_cache_block_manager, image_cache_block_manager=self.image_cache_block_manager))
-        if self.config.batch_scheduler_profiler.profile_batch_config:
-            if self.config.enable_encode:
-                image_budgets = self.profiler.profile_image_budgets()
-                self.config.batch_scheduler.max_batch_embed_images = image_budgets
-
-            if (self.config.enable_prefill or self.config.enable_decode):
-                token_budgets = self.profiler.profile_token_budgets()
-                self.config.batch_scheduler.max_batch_fill_tokens = token_budgets
 
 
     async def add_request(self, request: Request, params: RequestProcessParameters):

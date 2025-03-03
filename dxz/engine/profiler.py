@@ -4,7 +4,7 @@ import time
 import torch
 import argparse
 import functools
-from typing import Callable
+from typing import Callable, Optional
 from dataclasses import dataclass, field
 from dxz.engine import BatchRequest, InstructionExecutor, InstructionListBuilder, ImageEmbed, RequestControlBlock, TextFill, Instruction, Future
 from dxz.memory import TokenCacheBlockManager
@@ -24,6 +24,11 @@ class BatchSchedulerProfilerContext:
     executor: InstructionExecutor
     kv_cache_block_manager: TokenCacheBlockManager
     image_cache_block_manager: TokenCacheBlockManager
+
+@dataclass
+class ProfileOutput:
+    image_budgets: Optional[int] = None
+    token_budgets: Optional[int] = None
 
 
 class BatchSchedulerProfiler:
@@ -68,17 +73,34 @@ class BatchSchedulerProfiler:
         return batch
 
     def _prepare_prefill_batch(self, batch_size: int) -> BatchRequest:
-        n_prompt_tokens = 16
+        n_prompt_tokens_per_requests = 16
         prefill_inst = TextFill(
-            token_ids = list(range(n_prompt_tokens)), 
-            position_ids = list(range(n_prompt_tokens)), 
-            cache_ids = list(range(n_prompt_tokens)), 
+            token_ids = list(range(n_prompt_tokens_per_requests)), 
+            position_ids = list(range(n_prompt_tokens_per_requests)), 
+            cache_ids = list(range(n_prompt_tokens_per_requests)), 
             sample=True, 
             sample_dst=None
         )
         batch = BatchRequest()
-        for _ in range(batch_size // n_prompt_tokens):
+        for _ in range(batch_size // n_prompt_tokens_per_requests):
             batch.append(self._prepare_rcb(prefill_inst))
+        return batch
+
+    def _prepare_decode_batch(self, batch_size: int, n_cache: int = 512) -> BatchRequest:
+        decode_inst = TextFill(
+            token_ids = [1], 
+            position_ids = [n_cache], 
+            cache_ids = [n_cache], 
+            sample=True, 
+            sample_dst=None
+        )
+        batch = BatchRequest()
+
+        shared_virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache()
+        for _ in range(batch_size):
+            rcb = self._prepare_rcb(decode_inst)
+            rcb.virtual_kv_cache = shared_virtual_kv_cache # use shared kv cache to avoid OOM
+            batch.append(rcb)
         return batch
 
     def _binary_search_max_batch_size(self, left: int, right: int, criterion: Callable[[int], bool]):
@@ -90,6 +112,13 @@ class BatchSchedulerProfiler:
             else:
                 right = mid - 1
         return left
+
+    def _free_cache(self, batch: BatchRequest):
+        for rcb, _ in batch:
+            if rcb.virtual_image_cache:
+                self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
+            if rcb.virtual_kv_cache:
+                self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
 
     def _criterion(self, mid: int, prepare_batch: Callable[[int], BatchRequest], execute: Callable[[BatchRequest], Future], name: str = "criterion") -> bool:
         batch = prepare_batch(mid)
@@ -106,11 +135,7 @@ class BatchSchedulerProfiler:
             dur = end - start
             total_dur += dur
         avg_dur = total_dur / self.n_profile_iter
-        for rcb, _ in batch:
-            if rcb.virtual_image_cache:
-                self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
-            if rcb.virtual_kv_cache:
-                self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
+        self._free_cache(batch)
         print(f'{name} binary search [{mid}] avg_dur: {avg_dur} tpot_slo {self.config.tpot_slo}')
         return avg_dur < self.config.tpot_slo - 0.01
 
@@ -118,7 +143,7 @@ class BatchSchedulerProfiler:
         print(f'start profile_image_budgets')
         image_budgets = self._binary_search_max_batch_size(
             left=1, 
-            right=10, 
+            right=12, 
             criterion=functools.partial(
                 self._criterion, 
                 prepare_batch=self._prepare_encode_batch, 
@@ -143,3 +168,74 @@ class BatchSchedulerProfiler:
         )
         print(f'finish profile_token_budgets {token_budgets}')
         return token_budgets
+
+    def interference_analysis(self, mode='ep'):
+        print(f'start analysis interference {mode}')
+        # loop image number
+        for n_encode in range(10):
+        # loop prefill number
+            if mode == 'ep':
+                n_tokens_list = range(512, 512 * 8 + 1, 512)
+            elif mode == 'ed':
+                n_tokens_list = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
+            for n_tokens in n_tokens_list:
+        # prepare image batch
+                encode_batch = self._prepare_encode_batch(n_encode)
+        # prepare prefill batch
+                if mode == 'ep':
+                    fill_batch = self._prepare_prefill_batch(n_tokens)
+        # prepare decode batch
+                elif mode == 'ed':
+                    fill_batch = self._prepare_decode_batch(n_tokens, n_cache = 512)
+
+                def execute():
+                    futures = []
+                    futures.append(self.executor.execute_image_embed(encode_batch))
+                    futures.append(self.executor.execute_fill(fill_batch))
+                    for future in futures:
+                        future.get()
+
+        # warm up
+                for _ in range(self.n_warmup_iter):
+                    execute()
+
+        # forward
+                total_dur = 0.
+                for _ in range(self.n_profile_iter):
+                    start = time.perf_counter()
+                    execute()
+                    end = time.perf_counter()
+                    dur = end - start
+                    total_dur += dur
+                self._free_cache(encode_batch)
+                self._free_cache(fill_batch)
+        # caculate time
+                avg_dur = total_dur / self.n_profile_iter
+        # caculate throughput
+                throughput = n_tokens / avg_dur
+                print('encode, n_tokens, latency, throughput:', n_encode, n_tokens, avg_dur, throughput)
+
+    def profile(self) -> ProfileOutput:
+        if self.config.interference_encode_decode_analysis:
+            self.interference_analysis('ed')
+
+        if self.config.interference_encode_prefill_analysis:
+            self.interference_analysis('ep')
+
+        if not self.config.profile_batch_config:
+            return ProfileOutput()
+
+        if self.config.profile_image_budgets:
+            image_budgets = self.profile_image_budgets()
+        else:
+            image_budgets = None
+
+        if self.config.profile_token_budgets:
+            token_budgets = self.profile_token_budgets()
+        else:
+            token_budgets = None
+
+        return ProfileOutput(
+            image_budgets = image_budgets, 
+            token_budgets = token_budgets, 
+        )

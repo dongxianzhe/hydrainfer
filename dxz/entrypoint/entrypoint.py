@@ -73,7 +73,6 @@ class EntryPoint:
 def main(config: DictConfig):
     print(OmegaConf.to_yaml(config))
     entrypoint = EntryPoint(config) 
-    entrypoint.run()
 
 
 if __name__ == '__main__':

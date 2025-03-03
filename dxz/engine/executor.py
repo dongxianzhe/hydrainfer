@@ -15,7 +15,7 @@ from dxz.model.model_factory import ModelFactory, getModelFactory, ModelFactoryC
 from dxz.model.model_factory import VisionModelConfig, LanguageModelConfig, VisionModel, LanguageModel, ModelFactory
 from dxz.engine.worker import WorkerConfig, WorkerContext, getWorker, Worker
 from dxz.memory import TokenCacheBlockManager, KVCache
-from dxz.engine.scheduler import BatchRequest
+from dxz.engine import BatchRequest
 from dxz.request import OfflineInferenceOutput
 from dxz.utils.torch_utils import str2dtype, str2device
 
