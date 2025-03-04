@@ -1,5 +1,5 @@
 from torch import Tensor
-from typing import Optional
+from typing import Optional, Literal
 
 
 class Instruction:
@@ -46,8 +46,8 @@ class TextFill(Fill):
         self.token_ids = self.token_ids[:chunk_size]
         self.position_ids = self.position_ids[:chunk_size]
         self.cache_ids = self.cache_ids[:chunk_size]
-        self.sample = False
-        self.sample_dst = None
+        self.sample = True # todo remove the unnecessary sample. when a batch has no sample request because of chunked prefill, do not know why model forward will crash?.
+        self.sample_dst = EmptyInstruction()
 
     def __repr__(self):
         return "TF"
@@ -78,11 +78,9 @@ class ImageEmbedFill(Fill):
         rest_fill = ImageEmbedFill(
             image_token_cache_ids = self.image_token_cache_ids[num_image_token:], 
             image_token_mask = self.image_token_mask[chunk_size:], 
-            image_features = self.image_features[chunk_size:, ...], 
             token_ids = self.token_ids[chunk_size:], 
             position_ids = self.position_ids[chunk_size:], 
             cache_ids = self.cache_ids[chunk_size:], 
-            kv_cache_ids = self.kv_cache_ids, 
             sample = self.sample, 
             sample_dst = self.sample_dst, 
         )
@@ -92,8 +90,8 @@ class ImageEmbedFill(Fill):
         self.token_ids = self.token_ids[:chunk_size]
         self.position_ids = self.position_ids[:chunk_size]
         self.cache_ids = self.cache_ids[:chunk_size]
-        self.sample = False
-        self.sample_dst = None
+        self.sample = True # todo remove the unnecessary sample. when a batch has no sample request because of chunked prefill, do not know why model forward will crash?.
+        self.sample_dst = EmptyInstruction()
 
 
 class EmptyInstruction(Instruction):
@@ -113,8 +111,12 @@ class ImageEmbed(Instruction):
 
 
 class MigrateRequest(Instruction):
+    def __init__(self, ty: Literal['ep', 'pd']):
+        self.ty = ty
+        super().__init__()
+
     def __repr__(self):
-        return "MR"
+        return f"{self.ty}MR"
 
 
 class InstructionList:

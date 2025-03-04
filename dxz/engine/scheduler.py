@@ -113,7 +113,7 @@ class BatchScheduler:
             if batch_fill_tokens + n_tokens <= self.token_budgets:
                 this_step.append(seq)
                 batch_fill_tokens += n_tokens
-            elif batch_fill_tokens < self.token_budgets and n_tokens > 1 and self.config.chunked_prefill and isinstance(inst, TextFill): # if it is prefill and we can chunk part of it
+            elif batch_fill_tokens < self.token_budgets and n_tokens > 1 and self.config.chunked_prefill and (isinstance(inst, TextFill) or isinstance(inst, ImageEmbedFill)): # if it is prefill and we can chunk part of it
                 chunk_size = self.token_budgets - batch_fill_tokens
                 inst.chunk_prefill(chunk_size)
                 this_step.append(seq)
