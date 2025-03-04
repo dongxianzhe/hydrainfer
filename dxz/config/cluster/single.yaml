@@ -1,0 +1,5 @@
+defaults:
+  - ../node/epd@epdnode
+
+cluster_type: "single"
+n_epdnode: 1

@@ -1,8 +1,6 @@
 defaults:
   - model: llava7b
-  - node@cluster.ednode
-  - node@cluster.pdnode
-  - node@cluster.dnode
+  - cluster: hybrid
   - _self_
 
 mode: "online"
@@ -16,43 +14,8 @@ apiserver:
   port: 8888
   zmq: ${zmq}
 
-cluster:
-  ednode:
-    enable_encode: True
-    enable_prefill: False
-    enable_decode: True
-    request_processor:
-      ep_migrate: True
-      pd_migrate: True
-    batch_scheduler_profiler:
-      tpot_slo: 0.08
-      profile_image_budgets: True
-      profile_token_budgets: True
-      profile_interference_encode_decode: True
-  pdnode:
-    enable_encode: False
-    enable_prefill: True
-    enable_decode: True
-    request_processor:
-      ep_migrate: False
-      pd_migrate: True
-      profile_image_budgets: False
-      profile_token_budgets: True
-      profile_interference_encode_decode: False
-    batch_scheduler_profiler:
-      tpot_slo: 0.08
-  dnode:
-    enable_encode: False
-    enable_prefill: False
-    enable_decode: True
-    batch_scheduler_profiler:
-      tpot_slo: 0.04
-      profile_image_budgets: False
-      profile_token_budgets: True
-      profile_interference_encode_decode: False
-    worker:
-      has_vision_model: False
-      has_language_model: True
-  n_ednode: 1
-  n_pdnode: 1
-  n_dnode: 1
+cluster: 
+  ebalancer:
+    policy: "round"
+  pbalancer:
+    policy: "round"

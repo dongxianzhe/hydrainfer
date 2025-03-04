@@ -1,0 +1,14 @@
+defaults:
+  - node
+
+enable_encode: True
+enable_prefill: True
+enable_decode: False
+request_processor:
+  ep_migrate: False
+  pd_migrate: True
+batch_scheduler_profiler:
+  tpot_slo: 0.08
+  profile_image_budgets: True
+  profile_token_budgets: True
+  profile_interference_encode_decode: False
