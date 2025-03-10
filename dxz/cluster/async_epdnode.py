@@ -1,28 +1,22 @@
 import ray
 import time
-import torch
 import asyncio
-import argparse
 from typing import Optional
-from dataclasses import dataclass, field, fields
 from dxz.request import Request
-from dxz.model import ModelFactoryConfig, getModelFactory, ModelFactoryContext
+from dxz.model import getModelFactory, ModelFactoryContext
 from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, RequestProcessorContext
+from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext
 from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest
-from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig
-from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerConfig, TokenCacheBlockManagerContext
-from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
-from dxz.engine import BatchSchedulerProfiler, BatchSchedulerConfig, BatchSchedulerProfilerContext, BatchSchedulerContext
+from dxz.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType
 from dxz.utils.zmq_utils import init_zmq_send
+from dxz.cluster import MigrateGraph, MigrateNode
 from dxz.cluster.node_config import NodeConfig
-from dxz.cluster.epdnode import EPDNode
-from dxz.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig
-
-from dxz.request.offline_inference_output import OfflineInferenceOutput
+from dxz.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig, CompositeLoadBlancer
 
 class AsyncEPDNode(AsyncEngine):
     def __init__(self, config: NodeConfig):
         self.config = config
+        self.actor_id = ray.get_runtime_context().get_actor_id()
 
         # the name is used in __repr__ which is used to log actor names
         self.name = ""
@@ -33,6 +27,7 @@ class AsyncEPDNode(AsyncEngine):
         if self.config.enable_decode:
             self.name += "D"
         self.name += "Node"
+        print(f'start {self.name} actor id {self.actor_id}')
 
         self.has_vision_model = self.config.enable_encode
         self.has_language_model = self.config.enable_prefill or self.config.enable_decode
@@ -55,25 +50,34 @@ class AsyncEPDNode(AsyncEngine):
                 image_cache_block_manager = self.image_cache_block_manager, 
                 worker = self.worker, 
                 zmq_send = self.zmq_send
-            )
-        )
+            ))
 
-        self.profiler = BatchSchedulerProfiler(config.batch_scheduler_profiler, BatchSchedulerProfilerContext(executor=self.executor, kv_cache_block_manager=self.kv_cache_block_manager, image_cache_block_manager=self.image_cache_block_manager))
-        self.batch_scheduler = BatchScheduler(config.batch_scheduler, BatchSchedulerContext(
-            profiler = self.profiler, 
-        ))
+        self.profiler = BatchSchedulerProfiler(
+            config.batch_scheduler_profiler, 
+            BatchSchedulerProfilerContext(
+                executor=self.executor, 
+                kv_cache_block_manager=self.kv_cache_block_manager, 
+                image_cache_block_manager=self.image_cache_block_manager
+            ))
+
+        self.batch_scheduler = BatchScheduler(
+            config.batch_scheduler, 
+            BatchSchedulerContext(
+                profiler = self.profiler, 
+            ))
+
         self.request_processor = RequestProcessor(
             config.request_processor, 
             RequestProcessorContext(
                 batch_scheduler=self.batch_scheduler, 
-            )
-        )
+            ))
 
-        self.slow_nodes = []
-        self.fast_nodes = []
-        self.slow_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.slow_nodes)
-        self.fast_slo_migrate_scheduler: LoadBalancer = LoadBalancer(LoadBalancerConfig(), self.fast_nodes)
-
+        self.migrate_graph: Optional[MigrateGraph] = None
+        self.ep_loadbalancer = CompositeLoadBlancer()
+        self.pd_loadbalancer = CompositeLoadBlancer()
+        for scenario_type in range(len(ScenarioType)):
+            self.ep_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
+            self.pd_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
@@ -127,11 +131,21 @@ class AsyncEPDNode(AsyncEngine):
             await self.step()
             await asyncio.sleep(0.001)
 
-    async def register_node(self, node: "AsyncEngine", fast: bool=True, slow: bool=True): 
-        if fast:
-            self.fast_slo_migrate_scheduler.register_worker(node)
-        if slow:
-            self.slow_slo_migrate_scheduler.register_worker(node)
+    async def register_migrate_graph(self, graph: MigrateGraph):
+        assert self.migrate_graph is None
+        self.migrate_graph = graph
+        for table, loadbalancer in [
+            (graph.ep_table.get(self.actor_id, []), self.ep_loadbalancer), 
+            (graph.pd_table.get(self.actor_id, []), self.pd_loadbalancer), 
+        ]:
+            for migrate_node in table:
+                if migrate_node.tpot_slo < 0.05:
+                    loadbalancer.register_worker(key=ScenarioType.Strict, worker=migrate_node)
+                else:
+                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
+        print(f'self.ep_loadbalancer {self.ep_loadbalancer}')
+        print(f'self.pd_loadbalancer {self.pd_loadbalancer}')
+
 
     async def _migrate_virtual_cache(self, virtual_cache: VirtualTokenCache, block_manager: TokenCacheBlockManager) -> VirtualTokenCache:
         new_virtual_cache = block_manager.allocate_virtual_cache()
@@ -140,8 +154,9 @@ class AsyncEPDNode(AsyncEngine):
         return new_virtual_cache
 
     async def migrate(self, rcb: RequestControlBlock):
+        """ 2. receiver allocate new cache and migrate blocks and called sender's free method to free blocks"""
         if self.config.debug_migrate:
-            print(f' migrate request {rcb.request_id} {rcb.instructions}')
+            print(f'recv migrate {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
         if rcb.virtual_kv_cache and self.has_kv_cache:
             rcb.virtual_kv_cache = await self._migrate_virtual_cache(rcb.virtual_kv_cache, self.kv_cache_block_manager) 
         else:
@@ -153,19 +168,27 @@ class AsyncEPDNode(AsyncEngine):
         self.batch_scheduler.schedule_new(rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
+        """ 1. sender called _execute_batch_migrate to call receiver's migrate method"""
         if len(contexts) == 0:
             return
-        for rcb, _ in contexts:
+        for rcb, inst in contexts:
             rcb.step()
-            if rcb.slo_stringent:
-                node = self.fast_slo_migrate_scheduler.choice()
-            else:
-                node = self.slow_slo_migrate_scheduler.choice()
-            obj = node.migrate.remote(rcb)
-            asyncio.create_task(self._free_migrate_request(rcb))
+            loadbalancer = self.ep_loadbalancer if inst.ty == 'ep' else self.pd_loadbalancer
+            node = loadbalancer.choice(key=rcb.scenario_type)
+            if node.id == self.actor_id:
+                # if migrate to self, skip migrate and schedule running
+                self.batch_scheduler.schedule_running(rcb)
+                continue
+            if self.config.debug_migrate:
+                print(f'1. sender {inst.ty} migrate to {node.id}, {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
+            obj = node.actor.migrate.remote(rcb)
 
-    async def _free_migrate_request(self, rcb: RequestControlBlock):
-        await asyncio.sleep(1)
+            # todo receiver call sender _free_migrate_request to free migrate request
+            asyncio.create_task(self.free_migrate_request(rcb))
+
+    async def free_migrate_request(self, rcb: RequestControlBlock):
+        if self.config.debug_migrate:
+            print(f'3. sender free request {rcb.request_id}')
         await self._free_cache(rcb)
 
     async def _free_cache(self, rcb: RequestControlBlock):

@@ -134,7 +134,7 @@ class RequestProcessor:
                 )
                 builder.append(embed)
                 if self.config.ep_migrate:
-                    builder.append(MigrateRequest(dst='ep'))
+                    builder.append(MigrateRequest('ep'))
                 builder.append(prefill)
             else:
                 prefill = ImageFill(

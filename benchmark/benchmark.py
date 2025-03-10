@@ -354,7 +354,7 @@ async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, 
 @async_wrapper
 async def online_benchmarks(args: argparse.Namespace, dataset: SimulatedDataset, server_proxy) -> list[BenchmarkResult]:
     openai_api_key = "EMPTY"
-    openai_api_base = "http://localhost:8888/v1"
+    openai_api_base = f"http://{args.host}:{args.port}/v1"
     client = AsyncOpenAI(
         api_key=openai_api_key,
         base_url=openai_api_base,

@@ -1,9 +1,8 @@
-from enum import Enum, auto
-from dxz.request import Request
+from enum import IntEnum, auto
 
-class ScenarioType(Enum):
-    Relaxed = auto()
-    Strict = auto()
+class ScenarioType(IntEnum):
+    Relaxed = 0
+    Strict = 1
 
     def __str__(self):
         return self.name
