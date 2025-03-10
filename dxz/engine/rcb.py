@@ -1,12 +1,12 @@
 from typing import Optional
-from dxz.engine import Instruction, InstructionList, OutputTokenProcessor, RequestMetric
+from dxz.engine import Instruction, InstructionList, OutputTokenProcessor, RequestMetric, ScenarioType
 from dxz.engine.output_token_processor import OutputTokenParams
 from dxz.memory import VirtualTokenCache
 from dxz.request import SamplingParameters
 
 
 class RequestControlBlock:
-    def __init__(self, request_id: int, instructions: InstructionList, sampling_params: SamplingParameters, output_token_params: OutputTokenParams, slo_stringent: bool=False):
+    def __init__(self, request_id: int, instructions: InstructionList, sampling_params: SamplingParameters, output_token_params: OutputTokenParams, scenario_type: ScenarioType=ScenarioType.Relaxed):
         self.request_id = request_id
         self.instructions: InstructionList = instructions
         self.virtual_kv_cache: VirtualTokenCache = None
@@ -20,7 +20,7 @@ class RequestControlBlock:
         self.sampling_params = sampling_params
         self.metric = RequestMetric()
 
-        self.slo_stringent = slo_stringent
+        self.scenario_type = scenario_type
 
     def current_instruction(self) -> Instruction:
         return self.instructions.curr

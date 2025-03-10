@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
-from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams
+from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier
 from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 
@@ -42,6 +42,8 @@ class RequestProcessor:
         super().__init__()
         self.config = config
         self.context = context
+        self.scenario_classifier = ScenarioClassifier()
+        
 
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         self.tokenizer = model_factory.getTokenizer()
@@ -132,7 +134,7 @@ class RequestProcessor:
                 )
                 builder.append(embed)
                 if self.config.ep_migrate:
-                    builder.append(MigrateRequest())
+                    builder.append(MigrateRequest(dst='ep'))
                 builder.append(prefill)
             else:
                 prefill = ImageFill(
@@ -154,7 +156,7 @@ class RequestProcessor:
             )
             builder.append(prefill)
         if self.config.pd_migrate:
-            builder.append(MigrateRequest())
+            builder.append(MigrateRequest('pd'))
 
         last_inst = prefill
         left = n_prompt_tokens     
@@ -175,8 +177,11 @@ class RequestProcessor:
         instructions = builder.build_instruction_list()
         if self.config.debug:
             print(f'{request.prompt[:10]} {instructions}')
-        # 7. slo_stringent
-        slo_stringent = n_prompt_tokens_without_image < 100 and request.sampling_params.max_tokens < 100
+        # 7. scenario predictor
+        scenario_type = self.scenario_classifier.classify(
+            n_prompt_tokens_without_image = n_prompt_tokens_without_image, 
+            max_tokens = request.sampling_params.max_tokens, 
+        )
 
         # 8. output tokenizer
         rcb = RequestControlBlock(
@@ -184,7 +189,7 @@ class RequestProcessor:
             instructions = instructions, 
             sampling_params = request.sampling_params, 
             output_token_params = params.outout_token_parmas,
-            slo_stringent = slo_stringent, 
+            scenario_type = scenario_type, 
         )
 
         for output_token_processor in params.output_token_processors:
