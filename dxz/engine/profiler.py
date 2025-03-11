@@ -143,7 +143,7 @@ class BatchSchedulerProfiler:
         print(f'start profile_image_budgets')
         image_budgets = self._binary_search_max_batch_size(
             left=1, 
-            right=12, 
+            right=8, 
             criterion=functools.partial(
                 self._criterion, 
                 prepare_batch=self._prepare_encode_batch, 
@@ -158,7 +158,7 @@ class BatchSchedulerProfiler:
         print(f'start profile_token_budgets')
         token_budgets = self._binary_search_max_batch_size(
             left=1, 
-            right=4096, 
+            right=2048, 
             criterion=functools.partial(
                 self._criterion, 
                 prepare_batch=self._prepare_prefill_batch, 

@@ -1,11 +1,14 @@
 import ray
 import copy
 import time
+import torch
 import asyncio
-from typing import Optional
 import ray.actor
+from typing import Optional
 import torch.distributed as dist
+from torch.distributed import P2POp, batch_isend_irecv
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 from dxz.request import Request
 from dxz.model import getModelFactory, ModelFactoryContext
 from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, RequestProcessorContext
@@ -49,6 +52,18 @@ class AsyncEPDNode(AsyncEngine):
                 world_size=self.context.world_size, 
                 init_method=f"tcp://{self.config.nccl_communicator.host}:{self.config.nccl_communicator.port}", 
             )
+            print('warm up p2p operaetion')
+            p2p_op_list = []
+            if self.context.rank == 0:
+                for i in range(1, self.context.world_size):
+                    tensor = torch.ones(size=(1, ), dtype=torch.int, device=torch.device('cuda:0'))
+                    p2p_op_list.append(P2POp(dist.isend, tensor, i))
+            else:
+                tensor = torch.zeros(size=(1, ), dtype=torch.int, device=torch.device('cuda:0'))
+                p2p_op_list.append(P2POp(dist.irecv, tensor, 0))
+            reqs = batch_isend_irecv(p2p_op_list)
+            for req in reqs:
+                req.wait()
 
         self.has_vision_model = self.config.enable_encode
         self.has_language_model = self.config.enable_prefill or self.config.enable_decode
@@ -101,6 +116,7 @@ class AsyncEPDNode(AsyncEngine):
             self.pd_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
 
         self.migrate_lock = asyncio.Lock()
+        self.migrate_pool = ThreadPoolExecutor(max_workers=1)
 
     async def register_migrate_graph(self, graph: MigrateGraph):
         assert self.migrate_graph is None
@@ -175,7 +191,7 @@ class AsyncEPDNode(AsyncEngine):
             print(f"3.1 sender response {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
         block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True, backend='nccl')
 
-    async def _migrate_virtual_cache(self, src_node_actor_handle: ray.actor.ActorHandle, src_virtual_cache: VirtualTokenCache, is_kv_cache: bool) -> VirtualTokenCache:
+    def _migrate_virtual_cache(self, src_node_actor_handle: ray.actor.ActorHandle, src_virtual_cache: VirtualTokenCache, is_kv_cache: bool) -> VirtualTokenCache:
         """3. after receiver allocate memory and get ready, tell sender to send cache and receiver wait to receive cache"""
         block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
 
@@ -188,37 +204,39 @@ class AsyncEPDNode(AsyncEngine):
         elif self.config.intranode_migrate_backend == 'nccl':
             if self.config.debug_migrate:
                 print(f"3. receiver pull sender {'kv' if is_kv_cache else 'image'} cache via nccl")
+            if self.config.debug_migrate:
+                print(f"3.2 reciver recv {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
             src_node_actor_handle.pull_virtual_cache.remote(
                 src_virtual_cache=src_virtual_cache, 
                 dst_virtual_cache=dst_virtual_cache, 
                 is_kv_cache=is_kv_cache, 
             )
-            # 2.2 receiver recv blocks
-            if self.config.debug_migrate:
-                print(f"3.2 reciver recv {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
             block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=False, backend='nccl')
         else:
             raise Exception(f'invalid intranode migrate backend {self.config.intranode_migrate_backend}')
 
         return new_virtual_cache
 
+    def _migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
+        old_rcb = copy.deepcopy(rcb)
+        if rcb.virtual_kv_cache and self.has_kv_cache:
+            rcb.virtual_kv_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
+        else:
+            rcb.virtual_kv_cache = None
+        if rcb.virtual_image_cache and self.has_image_cache:
+            rcb.virtual_image_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
+        else:
+            rcb.virtual_image_cache = None
+        
+        self.batch_scheduler.schedule_new(rcb)
+        src_node_actor_handle.free_migrate_request.remote(old_rcb)
+
     async def migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
         """ 2. receiver allocate new cache and migrate blocks and called sender's free method to free blocks"""
-        async with self.migrate_lock:
-            if self.config.debug_migrate:
-                print(f'2. recv migrate {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
-            old_rcb = copy.deepcopy(rcb)
-            if rcb.virtual_kv_cache and self.has_kv_cache:
-                rcb.virtual_kv_cache = await self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
-            else:
-                rcb.virtual_kv_cache = None
-            if rcb.virtual_image_cache and self.has_image_cache:
-                rcb.virtual_image_cache = await self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
-            else:
-                rcb.virtual_image_cache = None
-            
-            self.batch_scheduler.schedule_new(rcb)
-            src_node_actor_handle.free_migrate_request.remote(old_rcb)
+        if self.config.debug_migrate:
+            print(f'2. recv migrate {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
+        self._migrate(src_node_actor_handle, rcb)
+        # self.migrate_pool.submit(self._migrate, src_node_actor_handle, rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
         """ 1. sender send block table to receiver"""

@@ -8,6 +8,7 @@ class BlockAllocator:
         if n_blocks == 0:
             return []
         if n_blocks > len(self.free_blocks):
+            raise Exception(f'not enough blocks, need {n_blocks}')
             # not enough block to allocate
             return []
 

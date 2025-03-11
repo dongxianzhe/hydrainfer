@@ -1,6 +1,7 @@
 import torch
 from torch import Tensor
 import torch.distributed as dist
+from torch.distributed import P2POp, batch_isend_irecv
 from dataclasses import dataclass, field
 from typing import Optional, Literal
 from dxz._C.data_transfer.block_migration import get_ipc_mem_handle
@@ -164,6 +165,8 @@ class TokenCacheBlockManager:
         if backend == 'ipc':
             assert is_send == False
             assert src_virtual_cache.memory_handle is not None
+            import time
+            start = time.time()
             with torch.cuda.stream(self.migrate_stream):
                 block_migration.migrate_blocks(
                     src_virtual_cache.block_table, 
@@ -171,15 +174,33 @@ class TokenCacheBlockManager:
                     src_virtual_cache.memory_handle, 
                     self.cache_tensor,
                 )
+                self.migrate_stream.synchronize()
+            end = time.time()
+            dur = end - start
+            print(f"{'send' if is_send else 'recv'} dur {dur}")
         elif backend == 'nccl':
             block_table = src_virtual_cache.block_table if is_send else dst_virtual_cache.block_table
+            op = dist.isend if is_send else dist.irecv
+            rank = dst_virtual_cache.rank if is_send else src_virtual_cache.rank
+
+            if len(dst_virtual_cache.block_table) == 0:
+                print(f'len(self.block_allocator.free_blocks) {len(self.block_allocator.free_blocks)}')
+
+            import time
+            start = time.time()
+
+            p2p_op_list: list[P2POp] = []
             for layer_id in range(self.config.n_layers):
                 for token_id in range(self.config.n_tokens):
                     for block_id in block_table:
-                        # nccl must send continuous tensor
-                        if is_send:
-                            dist.send(self.cache_tensor[layer_id, token_id, block_id], dst=dst_virtual_cache.rank)
-                        else:
-                            dist.recv(self.cache_tensor[layer_id, token_id, block_id], src=src_virtual_cache.rank)
+                        p2p_op_list.append(P2POp(op, self.cache_tensor[layer_id, token_id, block_id, :, :, :], rank))
+            torch.cuda.set_device(torch.device('cuda:0'))
+            reqs = batch_isend_irecv(p2p_op_list)
+            for idx, req in enumerate(reqs):
+                req.wait()
+
+            end = time.time()
+            dur = end - start
+            print(f"{'send' if is_send else 'recv'} dur {dur}")
         else:
             raise Exception(f'invalid block migrate backend {backend}')
