@@ -4,9 +4,9 @@ from dataclasses import dataclass
 
 @dataclass
 class MigrateNode:
-    id: str
-    tpot_slo: float
-    actor: Any
+    id: str # ray actor id
+    tpot_slo: float # the TPOT SLO of the node expected
+    actor: Any # the ray actor object
 
 
 @dataclass

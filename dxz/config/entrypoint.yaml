@@ -14,8 +14,15 @@ apiserver:
   port: 8888
   zmq: ${zmq}
 
+nccl_communicator:
+  host: "127.0.0.1"
+  port: 8889
+
 cluster: 
   ebalancer:
     policy: "round"
   pbalancer:
     policy: "round"
+
+intranode_migrate_backend: "ipc"
+internode_migrate_backend: "nccl"

@@ -3,8 +3,9 @@ from dataclasses import dataclass, field
 from typing import Optional, Literal
 from dxz.request import Request
 from dxz.engine import RequestProcessParameters
-from dxz.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph
+from dxz.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph, NodeContext
 from dxz.utils.zmq_utils import ZMQConfig
+from dxz.utils.allocate import IncreaingAllocator
 
 
 @dataclass
@@ -45,6 +46,9 @@ class Cluster:
         self.ebalancer = LoadBalancer(config.ebalancer)
         self.pbalancer = LoadBalancer(config.pbalancer)
         graph_builder = MigrateGraphBuilder()
+
+        world_size = sum([n_node for n_node, _, _ in nodes_list])
+        rank_allocator = IncreaingAllocator()
         for replicas, node_config, node_type in nodes_list:
             for i in range(replicas):
                 node = ray.remote(
@@ -54,7 +58,10 @@ class Cluster:
                     name=f"{node_type}{i}",
                     namespace='dxz',
                     lifetime='detached'
-                )(AsyncEPDNode).remote(node_config)
+                )(AsyncEPDNode).remote(node_config, NodeContext(
+                    rank = rank_allocator.allocate(), 
+                    world_size = world_size
+                ))
                 self.nodes.append(node)
                 for ty in node_type:
                     graph_builder.add_node(

@@ -1,8 +1,8 @@
 import torch
-import argparse
 from torch import Tensor
+import torch.distributed as dist
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Literal
 from dxz._C.data_transfer.block_migration import get_ipc_mem_handle
 from dxz._C.data_transfer import block_migration
 from dxz._C.kernel.cache_kernels import set_image_cache
@@ -61,7 +61,8 @@ class VirtualTokenCache:
     vid: int
     n_cache_tokens: int = 0
     block_table: list[int] = field(default_factory=list)
-    memory_handle: Optional[list[int]] = None
+    memory_handle: Optional[list[int]] = None # used in cuda ipc memory handle
+    rank: int = -1 # used in nccl
 
 
 @dataclass
@@ -78,7 +79,7 @@ class TokenCacheBlockManagerConfig:
 
 @dataclass
 class TokenCacheBlockManagerContext:
-    pass
+    rank: int
 
 
 class TokenCacheBlockManager:
@@ -93,6 +94,7 @@ class TokenCacheBlockManager:
         self.head_size  = config.head_size
         self.dtype      = str2dtype(config.dtype)
         self.device     = str2device(config.device)
+        self.rank = context.rank
 
         self.cache_tensor = torch.randn(size=(self.n_layers, self.n_tokens, self.n_blocks, self.block_size, self.n_heads, self.head_size), dtype=self.dtype, device=self.device)
         self.memory_handle: list[int] = get_ipc_mem_handle(self.cache_tensor)
@@ -107,6 +109,7 @@ class TokenCacheBlockManager:
             n_cache_tokens = 0, 
             block_table = [], 
             memory_handle = self.memory_handle,
+            rank=self.rank,
         )
 
     def v2p(self, virtual_cache: VirtualTokenCache, virtual_cache_ids: list[int]) -> list[int]:
@@ -156,14 +159,27 @@ class TokenCacheBlockManager:
     def get_layer_cache(self, layer_id: int) -> TokenCache:
         return TokenCache([self.cache_tensor[layer_id, token_id, :, :, :, :] for token_id in range(self.n_tokens)])
 
-    def migrate_blocks(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache):
+    def migrate_blocks(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_send: bool=False, backend: Literal["nccl", "ipc"]="ipc"):
         assert src_virtual_cache.n_cache_tokens == dst_virtual_cache.n_cache_tokens, f'{src_virtual_cache.n_cache_tokens} {dst_virtual_cache.n_cache_tokens}'
-        assert src_virtual_cache.memory_handle is not None
-
-        with torch.cuda.stream(self.migrate_stream):
-            block_migration.migrate_blocks(
-                src_virtual_cache.block_table, 
-                dst_virtual_cache.block_table, 
-                src_virtual_cache.memory_handle, 
-                self.cache_tensor,
-            )
+        if backend == 'ipc':
+            assert is_send == False
+            assert src_virtual_cache.memory_handle is not None
+            with torch.cuda.stream(self.migrate_stream):
+                block_migration.migrate_blocks(
+                    src_virtual_cache.block_table, 
+                    dst_virtual_cache.block_table, 
+                    src_virtual_cache.memory_handle, 
+                    self.cache_tensor,
+                )
+        elif backend == 'nccl':
+            block_table = src_virtual_cache.block_table if is_send else dst_virtual_cache.block_table
+            for layer_id in range(self.config.n_layers):
+                for token_id in range(self.config.n_tokens):
+                    for block_id in block_table:
+                        # nccl must send continuous tensor
+                        if is_send:
+                            dist.send(self.cache_tensor[layer_id, token_id, block_id], dst=dst_virtual_cache.rank)
+                        else:
+                            dist.recv(self.cache_tensor[layer_id, token_id, block_id], src=src_virtual_cache.rank)
+        else:
+            raise Exception(f'invalid block migrate backend {backend}')

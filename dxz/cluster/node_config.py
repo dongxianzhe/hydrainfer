@@ -1,10 +1,15 @@
 import argparse
-from typing import Optional
+from typing import Optional, Literal
 from dataclasses import dataclass, field, fields
 from dxz.model import ModelFactoryConfig, getModelFactory, ModelFactoryContext
 from dxz.memory import TokenCacheBlockManagerConfig
 from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, BatchSchedulerProfilerConfig
 from dxz.utils.zmq_utils import ZMQConfig
+
+@dataclass
+class NCCLMigrateCommunicator:
+    host: str
+    port: int
 
 @dataclass
 class NodeConfig:
@@ -21,4 +26,6 @@ class NodeConfig:
     enable_decode: bool = True, 
     zmq: Optional[ZMQConfig] = None
     debug_migrate: bool = True
-
+    nccl_communicator: Optional[NCCLMigrateCommunicator] = None
+    intranode_migrate_backend: Literal['ipc', 'nccl'] = 'ipc'
+    internode_migrate_backend: Literal['nccl'] = 'nccl'

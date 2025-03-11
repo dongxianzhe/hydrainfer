@@ -1,7 +1,11 @@
 import ray
+import copy
 import time
 import asyncio
 from typing import Optional
+import ray.actor
+import torch.distributed as dist
+from dataclasses import dataclass
 from dxz.request import Request
 from dxz.model import getModelFactory, ModelFactoryContext
 from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, RequestProcessorContext
@@ -13,10 +17,19 @@ from dxz.cluster import MigrateGraph, MigrateNode
 from dxz.cluster.node_config import NodeConfig
 from dxz.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig, CompositeLoadBlancer
 
+
+@dataclass
+class NodeContext:
+    rank: int # each engine has a rank
+    world_size: int # number of engines
+
+
 class AsyncEPDNode(AsyncEngine):
-    def __init__(self, config: NodeConfig):
+    def __init__(self, config: NodeConfig, context: NodeContext):
         self.config = config
+        self.context = context
         self.actor_id = ray.get_runtime_context().get_actor_id()
+        self.actor_handle = ray.get_runtime_context().current_actor
 
         # the name is used in __repr__ which is used to log actor names
         self.name = ""
@@ -27,7 +40,15 @@ class AsyncEPDNode(AsyncEngine):
         if self.config.enable_decode:
             self.name += "D"
         self.name += "Node"
-        print(f'start {self.name} actor id {self.actor_id}')
+        print(f'start {self.name} actor id {self.actor_id} rank {context.rank} world_size {context.world_size}')
+
+        if self.config.nccl_communicator:
+            dist.init_process_group(
+                backend="nccl", 
+                rank=self.context.rank, 
+                world_size=self.context.world_size, 
+                init_method=f"tcp://{self.config.nccl_communicator.host}:{self.config.nccl_communicator.port}", 
+            )
 
         self.has_vision_model = self.config.enable_encode
         self.has_language_model = self.config.enable_prefill or self.config.enable_decode
@@ -39,8 +60,8 @@ class AsyncEPDNode(AsyncEngine):
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         self.tokenizer = model_factory.getTokenizer()
 
-        self.kv_cache_block_manager = TokenCacheBlockManager(config.kv_cache, TokenCacheBlockManagerContext()) if self.has_kv_cache else None
-        self.image_cache_block_manager = TokenCacheBlockManager(config.image_cache, TokenCacheBlockManagerContext()) if self.has_image_cache else None
+        self.kv_cache_block_manager = TokenCacheBlockManager(config.kv_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
+        self.image_cache_block_manager = TokenCacheBlockManager(config.image_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None
 
         self.worker = getWorker(config.worker, WorkerContext())
         self.executor = InstructionExecutor(
@@ -78,6 +99,23 @@ class AsyncEPDNode(AsyncEngine):
         for scenario_type in range(len(ScenarioType)):
             self.ep_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
             self.pd_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
+
+        self.migrate_lock = asyncio.Lock()
+
+    async def register_migrate_graph(self, graph: MigrateGraph):
+        assert self.migrate_graph is None
+        self.migrate_graph = graph
+        for table, loadbalancer in [
+            (graph.ep_table.get(self.actor_id, []), self.ep_loadbalancer), 
+            (graph.pd_table.get(self.actor_id, []), self.pd_loadbalancer), 
+        ]:
+            for migrate_node in table:
+                if migrate_node.tpot_slo < 0.05:
+                    loadbalancer.register_worker(key=ScenarioType.Strict, worker=migrate_node)
+                else:
+                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
+        print(f'self.ep_loadbalancer {self.ep_loadbalancer}')
+        print(f'self.pd_loadbalancer {self.pd_loadbalancer}')
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
@@ -131,44 +169,59 @@ class AsyncEPDNode(AsyncEngine):
             await self.step()
             await asyncio.sleep(0.001)
 
-    async def register_migrate_graph(self, graph: MigrateGraph):
-        assert self.migrate_graph is None
-        self.migrate_graph = graph
-        for table, loadbalancer in [
-            (graph.ep_table.get(self.actor_id, []), self.ep_loadbalancer), 
-            (graph.pd_table.get(self.actor_id, []), self.pd_loadbalancer), 
-        ]:
-            for migrate_node in table:
-                if migrate_node.tpot_slo < 0.05:
-                    loadbalancer.register_worker(key=ScenarioType.Strict, worker=migrate_node)
-                else:
-                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
-        print(f'self.ep_loadbalancer {self.ep_loadbalancer}')
-        print(f'self.pd_loadbalancer {self.pd_loadbalancer}')
+    async def pull_virtual_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
+        block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
+        if self.config.debug_migrate:
+            print(f"3.1 sender response {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
+        block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True, backend='nccl')
 
+    async def _migrate_virtual_cache(self, src_node_actor_handle: ray.actor.ActorHandle, src_virtual_cache: VirtualTokenCache, is_kv_cache: bool) -> VirtualTokenCache:
+        """3. after receiver allocate memory and get ready, tell sender to send cache and receiver wait to receive cache"""
+        block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
 
-    async def _migrate_virtual_cache(self, virtual_cache: VirtualTokenCache, block_manager: TokenCacheBlockManager) -> VirtualTokenCache:
-        new_virtual_cache = block_manager.allocate_virtual_cache()
-        block_manager.realloc(new_virtual_cache, virtual_cache.n_cache_tokens)
-        block_manager.migrate_blocks(src_virtual_cache=virtual_cache, dst_virtual_cache=new_virtual_cache)
+        dst_virtual_cache = new_virtual_cache = block_manager.allocate_virtual_cache()
+        block_manager.realloc(dst_virtual_cache, src_virtual_cache.n_cache_tokens)
+        if self.config.intranode_migrate_backend == 'ipc':
+            if self.config.debug_migrate:
+                print(f"3. receiver pull sender {'kv' if is_kv_cache else 'image'} cache via cuda ipc memory handle")
+            block_manager.migrate_blocks(src_virtual_cache=src_virtual_cache, dst_virtual_cache=new_virtual_cache, is_send=False, backend='ipc')
+        elif self.config.intranode_migrate_backend == 'nccl':
+            if self.config.debug_migrate:
+                print(f"3. receiver pull sender {'kv' if is_kv_cache else 'image'} cache via nccl")
+            src_node_actor_handle.pull_virtual_cache.remote(
+                src_virtual_cache=src_virtual_cache, 
+                dst_virtual_cache=dst_virtual_cache, 
+                is_kv_cache=is_kv_cache, 
+            )
+            # 2.2 receiver recv blocks
+            if self.config.debug_migrate:
+                print(f"3.2 reciver recv {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
+            block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=False, backend='nccl')
+        else:
+            raise Exception(f'invalid intranode migrate backend {self.config.intranode_migrate_backend}')
+
         return new_virtual_cache
 
-    async def migrate(self, rcb: RequestControlBlock):
+    async def migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
         """ 2. receiver allocate new cache and migrate blocks and called sender's free method to free blocks"""
-        if self.config.debug_migrate:
-            print(f'recv migrate {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
-        if rcb.virtual_kv_cache and self.has_kv_cache:
-            rcb.virtual_kv_cache = await self._migrate_virtual_cache(rcb.virtual_kv_cache, self.kv_cache_block_manager) 
-        else:
-            rcb.virtual_kv_cache = None
-        if rcb.virtual_image_cache and self.has_image_cache:
-            rcb.virtual_image_cache = await self._migrate_virtual_cache(rcb.virtual_image_cache, self.image_cache_block_manager) 
-        else:
-            rcb.virtual_image_cache = None
-        self.batch_scheduler.schedule_new(rcb)
+        async with self.migrate_lock:
+            if self.config.debug_migrate:
+                print(f'2. recv migrate {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
+            old_rcb = copy.deepcopy(rcb)
+            if rcb.virtual_kv_cache and self.has_kv_cache:
+                rcb.virtual_kv_cache = await self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
+            else:
+                rcb.virtual_kv_cache = None
+            if rcb.virtual_image_cache and self.has_image_cache:
+                rcb.virtual_image_cache = await self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
+            else:
+                rcb.virtual_image_cache = None
+            
+            self.batch_scheduler.schedule_new(rcb)
+            src_node_actor_handle.free_migrate_request.remote(old_rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
-        """ 1. sender called _execute_batch_migrate to call receiver's migrate method"""
+        """ 1. sender send block table to receiver"""
         if len(contexts) == 0:
             return
         for rcb, inst in contexts:
@@ -181,14 +234,15 @@ class AsyncEPDNode(AsyncEngine):
                 continue
             if self.config.debug_migrate:
                 print(f'1. sender {inst.ty} migrate to {node.id}, {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
-            obj = node.actor.migrate.remote(rcb)
+            obj = node.actor.migrate.remote(self.actor_handle, rcb)
 
             # todo receiver call sender _free_migrate_request to free migrate request
-            asyncio.create_task(self.free_migrate_request(rcb))
+            # asyncio.create_task(self.free_migrate_request(rcb))
 
     async def free_migrate_request(self, rcb: RequestControlBlock):
+        """ 4. sender free request"""
         if self.config.debug_migrate:
-            print(f'3. sender free request {rcb.request_id}')
+            print(f'4. sender free request {rcb.request_id}')
         await self._free_cache(rcb)
 
     async def _free_cache(self, rcb: RequestControlBlock):

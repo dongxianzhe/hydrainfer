@@ -12,3 +12,6 @@ enable_prefill: True
 enable_decode: True
 zmq: ${zmq}
 debug_migrate: False
+nccl_communicator: ${nccl_communicator}
+intranode_migrate_backend: ${intranode_migrate_backend}
+internode_migrate_backend: ${internode_migrate_backend}
