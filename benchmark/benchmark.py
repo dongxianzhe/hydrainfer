@@ -49,11 +49,22 @@ scenarios = [{
 }, {
     'argument' : '--mchat', 
     'help' : "whether add multi-modal chat scenario and it's proportion weight in dataset", 
-    'default' : 1, 
+    'default' : 0, 
     'request_generator': lambda: {
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images': 1, 
         'n_output_tokens': random.randint(10, 99), 
+        'ttft_slo': 1,  
+        'tpot_slo': 0.04,
+    }, 
+}, {
+    'argument' : '--mtest', 
+    'help' : "whether add test request scenario", 
+    'default' : 1, 
+    'request_generator': lambda: {
+        'n_prompt_tokens': 9, 
+        'n_images': 1, 
+        'n_output_tokens': 50, 
         'ttft_slo': 1,  
         'tpot_slo': 0.04,
     }, 
