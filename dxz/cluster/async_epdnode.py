@@ -33,7 +33,6 @@ class AsyncEPDNode(AsyncEngine):
         self.context = context
         self.actor_id = ray.get_runtime_context().get_actor_id()
         self.actor_handle = ray.get_runtime_context().current_actor
-
         # the name is used in __repr__ which is used to log actor names
         self.name = ""
         if self.config.enable_encode:
@@ -42,9 +41,9 @@ class AsyncEPDNode(AsyncEngine):
             self.name += "P"
         if self.config.enable_decode:
             self.name += "D"
-        self.name += "Node"
-        print(f'start {self.name} actor id {self.actor_id} rank {context.rank} world_size {context.world_size}')
+        self.name += f"NodeRank{self.context.rank}"
 
+    def _init_nccl(self):
         if self.config.nccl_communicator:
             dist.init_process_group(
                 backend="nccl", 
@@ -52,7 +51,7 @@ class AsyncEPDNode(AsyncEngine):
                 world_size=self.context.world_size, 
                 init_method=f"tcp://{self.config.nccl_communicator.host}:{self.config.nccl_communicator.port}", 
             )
-            print('warm up p2p operaetion')
+            print('warm up p2p operation')
             p2p_op_list = []
             if self.context.rank == 0:
                 for i in range(1, self.context.world_size):
@@ -65,22 +64,20 @@ class AsyncEPDNode(AsyncEngine):
             for req in reqs:
                 req.wait()
 
+    def _init_zmq(self):
+        self.zmq_send = init_zmq_send(self.config.zmq) if self.config.zmq else None
+
+    def _init_engine(self):
         self.has_vision_model = self.config.enable_encode
         self.has_language_model = self.config.enable_prefill or self.config.enable_decode
         self.has_kv_cache = self.config.enable_prefill or self.config.enable_decode
         self.has_image_cache = self.config.enable_encode or self.config.enable_prefill 
+        self.kv_cache_block_manager = TokenCacheBlockManager(self.config.kv_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
+        self.image_cache_block_manager = TokenCacheBlockManager(self.config.image_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None
 
-        self.zmq_send = init_zmq_send(config.zmq) if config.zmq else None
-
-        model_factory = getModelFactory(self.config.model, ModelFactoryContext())
-        self.tokenizer = model_factory.getTokenizer()
-
-        self.kv_cache_block_manager = TokenCacheBlockManager(config.kv_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
-        self.image_cache_block_manager = TokenCacheBlockManager(config.image_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None
-
-        self.worker = getWorker(config.worker, WorkerContext())
+        self.worker = getWorker(self.config.worker, WorkerContext())
         self.executor = InstructionExecutor(
-            config.executor, 
+            self.config.executor, 
             ExecutorContext(
                 kv_cache_block_manager = self.kv_cache_block_manager, 
                 image_cache_block_manager = self.image_cache_block_manager, 
@@ -89,7 +86,7 @@ class AsyncEPDNode(AsyncEngine):
             ))
 
         self.profiler = BatchSchedulerProfiler(
-            config.batch_scheduler_profiler, 
+            self.config.batch_scheduler_profiler, 
             BatchSchedulerProfilerContext(
                 executor=self.executor, 
                 kv_cache_block_manager=self.kv_cache_block_manager, 
@@ -97,17 +94,18 @@ class AsyncEPDNode(AsyncEngine):
             ))
 
         self.batch_scheduler = BatchScheduler(
-            config.batch_scheduler, 
+            self.config.batch_scheduler, 
             BatchSchedulerContext(
                 profiler = self.profiler, 
             ))
 
         self.request_processor = RequestProcessor(
-            config.request_processor, 
+            self.config.request_processor, 
             RequestProcessorContext(
                 batch_scheduler=self.batch_scheduler, 
             ))
 
+    def _init_migrate(self):
         self.migrate_graph: Optional[MigrateGraph] = None
         self.ep_loadbalancer = CompositeLoadBlancer()
         self.pd_loadbalancer = CompositeLoadBlancer()
@@ -117,6 +115,13 @@ class AsyncEPDNode(AsyncEngine):
 
         self.migrate_lock = asyncio.Lock()
         self.migrate_pool = ThreadPoolExecutor(max_workers=1)
+
+    async def init(self):
+        print(f'init {self.name} actor_id {self.actor_id} rank {self.context.rank} world_size {self.context.world_size}')
+        self._init_nccl()
+        self._init_zmq()
+        self._init_engine()
+        self._init_migrate()
 
     async def register_migrate_graph(self, graph: MigrateGraph):
         assert self.migrate_graph is None
@@ -130,8 +135,8 @@ class AsyncEPDNode(AsyncEngine):
                     loadbalancer.register_worker(key=ScenarioType.Strict, worker=migrate_node)
                 else:
                     loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
-        print(f'self.ep_loadbalancer {self.ep_loadbalancer}')
-        print(f'self.pd_loadbalancer {self.pd_loadbalancer}')
+        print(f'ep_loadbalancer {self.ep_loadbalancer}')
+        print(f'pd_loadbalancer {self.pd_loadbalancer}')
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)

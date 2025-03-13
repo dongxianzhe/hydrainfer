@@ -78,6 +78,12 @@ class Cluster:
 
         objs = []
         for node in self.nodes:
+            obj = node.init.remote()
+            objs.append(obj)
+        ray.get(objs)
+
+        objs = []
+        for node in self.nodes:
             obj = node.register_migrate_graph.remote(migrate_graph)
             objs.append(obj)
         ray.get(objs)
