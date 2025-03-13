@@ -25,3 +25,5 @@ benchmark/*/*.parquet
 !benchmark/dataset/cherry_blossom.jpg
 config/outputs/
 outputs/
+/benchmark/vega/IITC_4k_test.json
+/benchmark/vega/imgs.zip
