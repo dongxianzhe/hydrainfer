@@ -1,3 +1,4 @@
+import os
 import io
 from PIL import Image
 import pandas as pd
@@ -17,11 +18,11 @@ class POPETestPaper:
     https://huggingface.co/datasets/lmms-lab/POPE/viewer/default/test
     9000 true or false questions
     """
-    def __init__(self):
+    def __init__(self, path: str=""):
         files = [
-            "test-00000-of-00003.parquet", 
-            "test-00001-of-00003.parquet", 
-            "test-00002-of-00003.parquet", 
+            os.path.join(path, "test-00000-of-00003.parquet"), 
+            os.path.join(path, "test-00001-of-00003.parquet"), 
+            os.path.join(path, "test-00002-of-00003.parquet"), 
         ]
         self.questions: list[Question] = []
         for file in files:

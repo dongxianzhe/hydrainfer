@@ -1,3 +1,4 @@
+import os
 import io
 from PIL import Image
 import pandas as pd
@@ -54,12 +55,12 @@ class MMETestPaper:
             text_translation
             code_reasoning
     """
-    def __init__(self):
+    def __init__(self, path: str=""):
         files = [
-            "test-00000-of-00004-a25dbe3b44c4fda6.parquet", 
-            "test-00001-of-00004-7d22c7f1aba6fca4.parquet", 
-            "test-00002-of-00004-594798fd3f5b029c.parquet", 
-            "test-00003-of-00004-53ae1794f93b1e35.parquet", 
+            os.path.join(path, "test-00000-of-00004-a25dbe3b44c4fda6.parquet"), 
+            os.path.join(path, "test-00001-of-00004-7d22c7f1aba6fca4.parquet"), 
+            os.path.join(path, "test-00002-of-00004-594798fd3f5b029c.parquet"), 
+            os.path.join(path, "test-00003-of-00004-53ae1794f93b1e35.parquet"), 
         ]
         self.questions = []
         for file in files:
