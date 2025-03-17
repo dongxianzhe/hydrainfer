@@ -1,4 +1,4 @@
-from .isa import Instruction, Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, Instruction, InstructionList, InstructionListBuilder
+from .isa import Instruction, Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, Instruction, InstructionList, InstructionListBuilder, PullCache
 from .metric import RequestMetric
 from .output_token_processor import OutputTokenProcessor, PrintOutputTokenProcessor, LogOutputTokenProcessor, OnlineStreamOutputTokenProcessor, OnlineNonStreamOutputTokenProcessor, OfflineOutputTokenProcessor, PrintTextOutputTokenProcessor, OutputTokenParams
 from .scenario import ScenarioType, ScenarioClassifier

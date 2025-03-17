@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
 from typing import Literal, Optional
 from dxz.request.request import Request
-from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier
+from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache
 from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 
@@ -135,6 +135,7 @@ class RequestProcessor:
                 builder.append(embed)
                 if self.config.ep_migrate:
                     builder.append(MigrateRequest('ep'))
+                    builder.append(PullCache())
                 builder.append(prefill)
             else:
                 prefill = ImageFill(
@@ -157,6 +158,7 @@ class RequestProcessor:
             builder.append(prefill)
         if self.config.pd_migrate:
             builder.append(MigrateRequest('pd'))
+            builder.append(PullCache())
 
         last_inst = prefill
         left = n_prompt_tokens     

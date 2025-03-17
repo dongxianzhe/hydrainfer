@@ -118,6 +118,9 @@ class MigrateRequest(Instruction):
     def __repr__(self):
         return f"{self.ty}MR"
 
+class PullCache(Instruction):
+    def __repr__(self):
+        return f"PR"
 
 class InstructionList:
     def __init__(self, head: Instruction, tail: Instruction, curr: Instruction):

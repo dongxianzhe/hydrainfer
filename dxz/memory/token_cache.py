@@ -173,53 +173,30 @@ class TokenCacheBlockManager:
         if backend == 'ipc':
             assert is_send == False
             assert src_virtual_cache.memory_handle is not None
-            import time
             with torch.cuda.stream(self.migrate_stream):
-                start = time.time()
                 block_migration.migrate_blocks(
                     src_virtual_cache.block_table, 
                     dst_virtual_cache.block_table, 
                     src_virtual_cache.memory_handle, 
                     self.cache_tensor,
                 )
-                end = time.time()
-                dur1 = end - start
-
-                start = time.time()
-                self.migrate_stream.synchronize()
-                end = time.time()
-                dur2 = end - start
-            print(f"{'send' if is_send else 'recv'} dur {dur1} {dur2}")
         elif backend == 'nccl':
             block_table = src_virtual_cache.block_table if is_send else dst_virtual_cache.block_table
             op = dist.isend if is_send else dist.irecv
             rank = dst_virtual_cache.rank if is_send else src_virtual_cache.rank
 
-            import time
-            start = time.time()
             p2p_op_list: list[P2POp] = []
             for block_id in block_table:
                 for block_tensor in self.migrate_block_tensors_view[block_id]:
                     p2p_op_list.append(P2POp(op, block_tensor, rank))
-            end = time.time()
-            dur1 = end - start
 
             torch.cuda.set_device(torch.device('cuda:0'))
             with torch.cuda.stream(self.migrate_stream):
-                start = time.time()
                 reqs = batch_isend_irecv(p2p_op_list)
-                end = time.time()
-                dur2 = end - start
-
-                start = time.time()
                 for idx, req in enumerate(reqs):
                     req.wait()
-
-                self.migrate_stream.synchronize()
-                end = time.time()
-
-                dur3 = end - start
-
-            print(f"{'send' if is_send else 'recv'} dur {dur1} {dur2} {dur3}")
         else:
             raise Exception(f'invalid block migrate backend {backend}')
+
+    def synchronize(self):
+        self.migrate_stream.synchronize()

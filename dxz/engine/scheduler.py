@@ -38,13 +38,23 @@ class BatchScheduler:
         else:
             self.token_budgets = self.config.max_batch_fill_tokens
 
-
-
         self.waiting = Queue()
         self.running: list[RequestControlBlock] = []
         self.step_cnt = 0
         self.sid_allocator = IncreaingAllocator(first_value=1)
-    
+
+        self.migrating_cnt = 0
+
+    def migrating_acquire(self):
+        # migrating_acquire and migrating_release are used to count how many request need to be pulled
+        # we need this count because avoid sender OOM when there are too many waiting migrate requests and running requests
+        assert self.migrating_cnt < self.config.max_running_requests, f'invalid acquire'
+        self.migrating_cnt += 1
+
+    def migrating_release(self):
+        assert self.migrating_cnt > 0, f'invalid release'
+        self.migrating_cnt -= 1
+
     def schedule_new(self, rcb: RequestControlBlock):
         rcb.sid = self.sid_allocator.allocate()
         self.waiting.put(rcb)
@@ -63,11 +73,11 @@ class BatchScheduler:
                     self.running.append(rcb)
         elif self.config.batch_policy == 'requestlevel':
             if len(self.running) == 0:
-                while len(self.running) < self.config.max_running_requests and not self.waiting.empty():
+                while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
                     rcb = self.waiting.get()
                     self.running.append(rcb)
         elif self.config.batch_policy == 'continuousbatch':
-            while len(self.running) < self.config.max_running_requests and not self.waiting.empty():
+            while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
                 rcb = self.waiting.get()
                 self.running.append(rcb)
         if len(self.running) == 0:

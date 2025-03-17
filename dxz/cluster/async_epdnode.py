@@ -13,7 +13,7 @@ from dxz.request import Request
 from dxz.model import getModelFactory, ModelFactoryContext
 from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, RequestProcessorContext
 from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext
-from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest
+from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
 from dxz.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType
 from dxz.utils.zmq_utils import init_zmq_send
 from dxz.cluster import MigrateGraph, MigrateNode
@@ -152,6 +152,7 @@ class AsyncEPDNode(AsyncEngine):
         batch_image_embed = BatchRequest()
         batch_empty = BatchRequest()
         batch_migrate = BatchRequest()
+        batch_pull_cache = BatchRequest() 
         for rcb, inst in batch:
             if isinstance(inst, Fill):
                 batch_fill.append(rcb)
@@ -165,6 +166,9 @@ class AsyncEPDNode(AsyncEngine):
             if isinstance(inst, MigrateRequest):
                 batch_migrate.append(rcb)
                 continue
+            if isinstance(inst, PullCache):
+                batch_pull_cache.append(rcb)
+                continue
             raise Exception(f'unsupported instrction {type(inst)}')
 
         futures = []
@@ -172,12 +176,17 @@ class AsyncEPDNode(AsyncEngine):
         futures.append(self.executor.execute_fill(batch_fill))
         futures.append(self.executor.execute_empty(batch_empty))
         await self._execute_batch_migrate(batch_migrate)
+        await self._execute_pull_cache(batch_pull_cache)
         for future in futures:
             future.get()
+        if self.kv_cache_block_manager:
+            self.kv_cache_block_manager.synchronize()
+        if self.image_cache_block_manager:
+            self.image_cache_block_manager.synchronize()
 
         # 3. scheduler requests
         t = time.perf_counter()
-        for batch in [batch_image_embed, batch_fill, batch_empty]:
+        for batch in [batch_image_embed, batch_fill, batch_empty, batch_pull_cache]:
             for rcb, inst in batch:
                 if rcb.is_finished():
                     rcb.metric.finished_time = t
@@ -222,26 +231,44 @@ class AsyncEPDNode(AsyncEngine):
 
         return new_virtual_cache
 
-    def _migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
-        old_rcb = copy.deepcopy(rcb)
-        if rcb.virtual_kv_cache and self.has_kv_cache:
-            rcb.virtual_kv_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
-        else:
-            rcb.virtual_kv_cache = None
-        if rcb.virtual_image_cache and self.has_image_cache:
-            rcb.virtual_image_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
-        else:
-            rcb.virtual_image_cache = None
+    # def _migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
+    #     old_rcb = copy.deepcopy(rcb)
+    #     if rcb.virtual_kv_cache and self.has_kv_cache:
+    #         rcb.virtual_kv_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
+    #     else:
+    #         rcb.virtual_kv_cache = None
+    #     if rcb.virtual_image_cache and self.has_image_cache:
+    #         rcb.virtual_image_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
+    #     else:
+    #         rcb.virtual_image_cache = None
         
-        self.batch_scheduler.schedule_new(rcb)
-        src_node_actor_handle.free_migrate_request.remote(old_rcb)
+    #     self.batch_scheduler.schedule_new(rcb)
+    #     src_node_actor_handle.free_migrate_request.remote(old_rcb)
+
+    async def _execute_pull_cache(self, contexts: BatchRequest):
+        for rcb, inst in contexts:
+            old_rcb = copy.deepcopy(rcb)
+            if rcb.virtual_kv_cache and self.has_kv_cache:
+                rcb.virtual_kv_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
+            else:
+                rcb.virtual_kv_cache = None
+            if rcb.virtual_image_cache and self.has_image_cache:
+                rcb.virtual_image_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
+            else:
+                rcb.virtual_image_cache = None
+            inst.src_node_actor_handle.free_migrate_request.remote(old_rcb)
+            rcb.step()
+
 
     async def migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
         """ 2. receiver allocate new cache and migrate blocks and called sender's free method to free blocks"""
         if self.config.debug_migrate:
             print(f'2. recv migrate {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
-        self._migrate(src_node_actor_handle, rcb)
-        # self.migrate_pool.submit(self._migrate, src_node_actor_handle, rcb)
+
+        # set pull cache stage src_node_actor_handle, waiting schedule
+        rcb.current_instruction().src_node_actor_handle = src_node_actor_handle
+        self.batch_scheduler.schedule_new(rcb)
+        # self._migrate(src_node_actor_handle, rcb)
     
     async def _execute_batch_migrate(self, contexts: BatchRequest):
         """ 1. sender send block table to receiver"""
@@ -252,21 +279,21 @@ class AsyncEPDNode(AsyncEngine):
             loadbalancer = self.ep_loadbalancer if inst.ty == 'ep' else self.pd_loadbalancer
             node = loadbalancer.choice(key=rcb.scenario_type)
             if node.id == self.actor_id:
-                # if migrate to self, skip migrate and schedule running
+                # if migrate to self, skip migrate and pull cache stage and continue schedule running
+                rcb.step()
                 self.batch_scheduler.schedule_running(rcb)
                 continue
             if self.config.debug_migrate:
                 print(f'1. sender {inst.ty} migrate to {node.id}, {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
+            self.batch_scheduler.migrating_acquire()
             obj = node.actor.migrate.remote(self.actor_handle, rcb)
-
-            # todo receiver call sender _free_migrate_request to free migrate request
-            # asyncio.create_task(self.free_migrate_request(rcb))
 
     async def free_migrate_request(self, rcb: RequestControlBlock):
         """ 4. sender free request"""
         if self.config.debug_migrate:
             print(f'4. sender free request {rcb.request_id}')
         await self._free_cache(rcb)
+        self.batch_scheduler.migrating_release()
 
     async def _free_cache(self, rcb: RequestControlBlock):
         if rcb.virtual_kv_cache: 
