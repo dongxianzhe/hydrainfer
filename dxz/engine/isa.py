@@ -38,7 +38,6 @@ class TextFill(Fill):
             token_ids = self.token_ids[chunk_size:], 
             position_ids = self.position_ids[chunk_size:], 
             cache_ids = self.cache_ids[chunk_size:], 
-            kv_cache_ids = self.kv_cache_ids, 
             sample = self.sample, 
             sample_dst = self.sample_dst, 
         )

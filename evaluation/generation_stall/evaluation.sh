@@ -117,5 +117,7 @@ evaluate_ours() {
 }
 
 evaluate_vllm
+sleep 3
 evaluate_sarathi
+sleep 3
 evaluate_ours

@@ -44,25 +44,28 @@ class AsyncEPDNode(AsyncEngine):
         self.name += f"NodeRank{self.context.rank}"
 
     def _init_nccl(self):
-        if self.config.nccl_communicator:
-            dist.init_process_group(
-                backend="nccl", 
-                rank=self.context.rank, 
-                world_size=self.context.world_size, 
-                init_method=f"tcp://{self.config.nccl_communicator.host}:{self.config.nccl_communicator.port}", 
-            )
-            print('warm up p2p operation')
-            p2p_op_list = []
-            if self.context.rank == 0:
-                for i in range(1, self.context.world_size):
-                    tensor = torch.ones(size=(1, ), dtype=torch.int, device=torch.device('cuda:0'))
-                    p2p_op_list.append(P2POp(dist.isend, tensor, i))
-            else:
-                tensor = torch.zeros(size=(1, ), dtype=torch.int, device=torch.device('cuda:0'))
-                p2p_op_list.append(P2POp(dist.irecv, tensor, 0))
-            reqs = batch_isend_irecv(p2p_op_list)
-            for req in reqs:
-                req.wait()
+        if not self.config.nccl_communicator:
+            return
+        if self.context.world_size == 1:
+            return
+        dist.init_process_group(
+            backend="nccl", 
+            rank=self.context.rank, 
+            world_size=self.context.world_size, 
+            init_method=f"tcp://{self.config.nccl_communicator.host}:{self.config.nccl_communicator.port}", 
+        )
+        print('warm up p2p operation')
+        p2p_op_list = []
+        if self.context.rank == 0:
+            for i in range(1, self.context.world_size):
+                tensor = torch.ones(size=(1, ), dtype=torch.int, device=torch.device('cuda:0'))
+                p2p_op_list.append(P2POp(dist.isend, tensor, i))
+        else:
+            tensor = torch.zeros(size=(1, ), dtype=torch.int, device=torch.device('cuda:0'))
+            p2p_op_list.append(P2POp(dist.irecv, tensor, 0))
+        reqs = batch_isend_irecv(p2p_op_list)
+        for req in reqs:
+            req.wait()
 
     def _init_zmq(self):
         self.zmq_send = init_zmq_send(self.config.zmq) if self.config.zmq else None
