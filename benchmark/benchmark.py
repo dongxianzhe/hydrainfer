@@ -60,7 +60,7 @@ scenarios = [{
 }, {
     'argument' : '--mtest', 
     'help' : "whether add test request scenario", 
-    'default' : 1, 
+    'default' : 0, 
     'request_generator': lambda: {
         'n_prompt_tokens': 9, 
         'n_images': 1, 
@@ -68,7 +68,19 @@ scenarios = [{
         'ttft_slo': 1,  
         'tpot_slo': 0.04,
     }, 
-}]
+}, {
+    'argument' : '--stall', 
+    'help' : "whether add test request scenario", 
+    'default' : 0, 
+    'request_generator': lambda: {
+        'n_prompt_tokens': random.randint(1, 50), 
+        'n_images': random.randint(0, 1), 
+        'n_output_tokens': 10, 
+        'ttft_slo': 1,  
+        'tpot_slo': 0.04,
+    }, 
+}
+]
 
 def prepare_requests(args: argparse.Namespace) -> SimulatedDataset:
     random.seed(args.seed)
@@ -85,6 +97,7 @@ def prepare_requests(args: argparse.Namespace) -> SimulatedDataset:
         if weight > 0:
             population.append(scenario['request_generator'])
             weights.append(weight)
+    assert len(weights) > 0, "No scenario is selected"
             
     request_generators = random.choices(population=population, weights=weights, k=args.num_requests)
     for i in range(args.num_requests):
@@ -329,6 +342,7 @@ async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, 
     pbar = tqdm(total = len(dataset))
     metric_builder = BenchmarkMetricsBuilder()
 
+    start = time.perf_counter()
     metric_builder.start()
     tasks = []
     async for (i, entry) in poisson_process_request_generator(dataset=dataset, request_rate=request_rate):
@@ -355,7 +369,10 @@ async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, 
             sorted_nums = sorted(nums, reverse=True)
             return sorted_nums[1]
         ttft = output.token_times[0] - output.start_time
-        print(f'n_prompt_tok {output.entry.n_prompt_tokens} tpot slo {output.entry.tpot_slo} ttft slo {output.entry.ttft_slo} ttft {ttft} max tpot {max(tpot)} second tpot {find_second_largest(tpot)} tpot {tpot}')
+        if args.log_token_times:
+            for token_time in output.token_times:
+                print(f'output_token_time: {token_time - start}')
+        # print(f'n_prompt_tok {output.entry.n_prompt_tokens} tpot slo {output.entry.tpot_slo} ttft slo {output.entry.ttft_slo} ttft {ttft} max tpot {max(tpot)} second tpot {find_second_largest(tpot)} tpot {tpot}')
         
     return BenchmarkResult(
         metric = metric_builder.get_metrics(), 
@@ -443,6 +460,12 @@ if __name__ == '__main__':
         action='store_true',
         default=False,
         help='log request info'
+    )
+    parser.add_argument(
+        '--log-token-times',
+        action='store_true',
+        default=False,
+        help='log token output times'
     )
     parser.add_argument(
         '--log-output',
