@@ -1,11 +1,9 @@
-import sys
 import argparse
 from tqdm import tqdm
 import torch
 from transformers import LlavaForConditionalGeneration, AutoProcessor
 from mme.MMETestPaper import MMETestPaper
 from textcaps.TextCapsDataset import TextCapsDataset
-from pope.POPETestPaper import POPETestPaper
 from vega.VEGADataset import VEGADataset
 
 def get_dataset(name: str):
@@ -20,12 +18,10 @@ def get_dataset(name: str):
 
 def analysis_dataset(args: argparse.Namespace):
     device = torch.device('cuda:0')
-    model_name_or_path = "llava-hf/llava-1.5-7b-hf"
-
-    # model = LlavaForConditionalGeneration.from_pretrained(
-    #     pretrained_model_name_or_path=model_name_or_path, device_map=device, torch_dtype=torch.half
-    # )
-    processor = AutoProcessor.from_pretrained(pretrained_model_name_or_path=model_name_or_path)
+    model = LlavaForConditionalGeneration.from_pretrained(
+        pretrained_model_name_or_path=args.model, device_map=device, torch_dtype=torch.half
+    )
+    processor = AutoProcessor.from_pretrained(pretrained_model_name_or_path=args.model)
     tokenizer = processor.tokenizer
 
     dataset = get_dataset(args.dataset)
@@ -57,7 +53,7 @@ def analysis_dataset(args: argparse.Namespace):
         )
         if args.debug:
             print(f'<question> {question.question} <response> {response}')
-        print(n_tokens_without_image, n_tokens_with_image, n_output_tokens)
+        print('n_tokens_without_image, n_tokens_with_image, n_output_tokens:', n_tokens_without_image, n_tokens_with_image, n_output_tokens)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='analysis dataset workload', conflict_handler='resolve')
@@ -72,6 +68,11 @@ if __name__ == '__main__':
         action='store_true',
         default=False,
         help='debug mode'
+    )
+    parser.add_argument(
+        "--model", 
+        type=str, 
+        default="llava-hf/llava-1.5-7b-hf", 
     )
     args = parser.parse_args()
     analysis_dataset(args)
