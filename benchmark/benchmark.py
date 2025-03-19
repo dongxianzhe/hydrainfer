@@ -99,6 +99,16 @@ scenarios = [{
         'tpot_slo': 0.04,
     }, 
     'is_simulated_scenario': False, 
+}, {
+    'argument' : '--textcaps', 
+    'help' : "whether add textcaps dataset", 
+    'default' : 0, 
+    'request_metadata_generator': lambda: {
+        'n_output_tokens': 100, 
+        'ttft_slo': 1,  
+        'tpot_slo': 0.04,
+    }, 
+    'is_simulated_scenario': False, 
 }
 ]
 
@@ -156,8 +166,26 @@ def prepare_requests(args: argparse.Namespace) -> SyntheticDataset:
                             )
                     population.append(MMEDatasetGenerator(dataset=dataset, metadata_generator=scenario['request_metadata_generator']))
                 if scenario_name == 'textcaps':
-                    raise Exception()
-                    dataset_request_generator = TextCapsDataset(path='textcaps')
+                    dataset = TextCapsDataset(path='textcaps')
+                    class TextCapsDatasetGenerator:
+                        def __init__(self, dataset: TextCapsDataset, metadata_generator):
+                            self.dataset = dataset
+                            self.metadata_generator = metadata_generator
+
+                        def __call__(self) -> SimulatedDataEntry:
+                            question = random.choice(self.dataset)
+                            prompt = f"<image>\n{question.question}\n"
+                            metadata = self.metadata_generator()
+                            return SimulatedDataEntry(
+                                prompt = prompt, 
+                                images = [question.image], 
+                                image_base64 = [question.image_base64], 
+                                n_prompt_tokens = len(tokenizer.encode(prompt)), 
+                                n_output_tokens = metadata['n_output_tokens'], 
+                                ttft_slo = metadata['ttft_slo'], 
+                                tpot_slo = metadata['tpot_slo'], 
+                            )
+                    population.append(TextCapsDatasetGenerator(dataset=dataset, metadata_generator=scenario['request_metadata_generator']))
                 if scenario_name == 'vega':
                     raise Exception()
                     dataset_request_generator = VEGADataset(path='vega')
