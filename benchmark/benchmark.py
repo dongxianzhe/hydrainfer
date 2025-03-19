@@ -9,101 +9,168 @@ from tqdm import tqdm
 from openai import AsyncOpenAI
 from typing import AsyncGenerator
 from dataclasses import dataclass, field
-from dataset.simulated_dataset import SimulatedDataset, SimulatedDataEntry
+from dataset.simulated_dataset import SimulatedDataset, SimulatedDataEntry, SyntheticDataset, encode_base64_content_from_image
 from transformers import AutoTokenizer
 from benchmark_metric import BenchmarkMetrics, BenchmarkMetricsBuilder
+from mme.MMETestPaper import MMETestPaper
+from textcaps.TextCapsDataset import TextCapsDataset
+from vega.VEGADataset import VEGADataset
+
 
 scenarios = [{
     'argument' : '--summary', 
     'help' : "whether add text summary scenario and it's proportion weight in dataset", 
     'default' : 0, 
-    'request_generator': lambda: {
+    'request_metadata_generator': lambda: {
         'n_prompt_tokens': random.randint(500, 600), 
         'n_images': 0,
         'n_output_tokens': random.randint(1, 20), 
         'ttft_slo': 2, 
         'tpot_slo': 0.08, 
     }, 
+    'is_simulated_scenario': True, 
 }, {
     'argument' : '--msummary', 
     'help' : "whether add multi-modal summary scenario and it's proportion weight in dataset", 
     'default' : 0, 
-    'request_generator': lambda: {
+    'request_metadata_generator': lambda: {
         'n_prompt_tokens': random.randint(500, 600), 
         'n_images': 1, 
         'n_output_tokens': random.randint(1, 20), 
         'ttft_slo': 2,  
         'tpot_slo': 0.08,
     }, 
+    'is_simulated_scenario': True, 
 }, {
     'argument' : '--chat', 
     'help' : "whether add text chat scenario and it's proportion weight in dataset", 
     'default' : 0, 
-    'request_generator': lambda: {
+    'request_metadata_generator': lambda: {
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images':0, 
         'n_output_tokens': random.randint(10, 99), 
         'ttft_slo': 1, 
         'tpot_slo': 0.04, 
     }, 
+    'is_simulated_scenario': True, 
 }, {
     'argument' : '--mchat', 
     'help' : "whether add multi-modal chat scenario and it's proportion weight in dataset", 
     'default' : 0, 
-    'request_generator': lambda: {
+    'request_metadata_generator': lambda: {
         'n_prompt_tokens': random.randint(10, 20), 
         'n_images': 1, 
         'n_output_tokens': random.randint(10, 99), 
         'ttft_slo': 1,  
         'tpot_slo': 0.04,
     }, 
+    'is_simulated_scenario': True, 
 }, {
     'argument' : '--mtest', 
     'help' : "whether add test request scenario", 
     'default' : 0, 
-    'request_generator': lambda: {
+    'request_metadata_generator': lambda: {
         'n_prompt_tokens': 9, 
         'n_images': 1, 
         'n_output_tokens': 50, 
         'ttft_slo': 1,  
         'tpot_slo': 0.04,
     }, 
+    'is_simulated_scenario': True, 
 }, {
     'argument' : '--stall', 
     'help' : "whether add test request scenario", 
     'default' : 0, 
-    'request_generator': lambda: {
+    'request_metadata_generator': lambda: {
         'n_prompt_tokens': random.randint(1, 50), 
         'n_images': random.randint(0, 1), 
         'n_output_tokens': 10, 
         'ttft_slo': 1,  
         'tpot_slo': 0.04,
     }, 
+    'is_simulated_scenario': True, 
+}, {
+    'argument' : '--mme', 
+    'help' : "whether add mme dataset", 
+    'default' : 0, 
+    'request_metadata_generator': lambda: {
+        'n_output_tokens': 10, 
+        'ttft_slo': 1,  
+        'tpot_slo': 0.04,
+    }, 
+    'is_simulated_scenario': False, 
 }
 ]
 
-def prepare_requests(args: argparse.Namespace) -> SimulatedDataset:
+def prepare_requests(args: argparse.Namespace) -> SyntheticDataset:
     random.seed(args.seed)
     np.random.seed(args.seed)
     if args.model_path is None:
         args.model_path = args.model_name
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    dataset = SimulatedDataset(tokenizer, image_path='./dataset/cherry_blossom.jpg')
+    simulated_dataset = SimulatedDataset(tokenizer, image_path='./dataset/cherry_blossom.jpg')
 
+    class SimulatedRequestGenerator:
+        def __init__(self, simulated_dataset: SimulatedDataset, metadata_generator):
+            self.simulated_dataset = simulated_dataset
+            self.metadata_generator = metadata_generator
+
+        def __call__(self) -> SimulatedDataEntry:
+            return self.simulated_dataset.make_data_entry(**self.metadata_generator())
+
+    # sample request based simulated scenario weights
     population = []
     weights = []
     for scenario in scenarios:
-        weight = getattr(args, scenario['argument'].removeprefix('--'))
+        scenario_name = scenario['argument'].removeprefix('--')
+        weight = getattr(args, scenario_name)
         if weight > 0:
-            population.append(scenario['request_generator'])
             weights.append(weight)
+
+            is_simulated_scenario = scenario['is_simulated_scenario']
+            if is_simulated_scenario:
+                population.append(SimulatedRequestGenerator(
+                    simulated_dataset=simulated_dataset, 
+                    metadata_generator=scenario['request_metadata_generator']
+                ))
+            else:
+                if scenario_name == 'mme':
+                    dataset = MMETestPaper(path='mme')
+                    class MMEDatasetGenerator:
+                        def __init__(self, dataset: MMETestPaper, metadata_generator):
+                            self.dataset = dataset
+                            self.metadata_generator = metadata_generator
+
+                        def __call__(self) -> SimulatedDataEntry:
+                            question = random.choice(self.dataset)
+                            prompt = f"<image>\n{question.question}\n"
+                            metadata = self.metadata_generator()
+                            return SimulatedDataEntry(
+                                prompt = prompt, 
+                                images = [question.image], 
+                                image_base64 = [question.image_base64], 
+                                n_prompt_tokens = len(tokenizer.encode(prompt)), 
+                                n_output_tokens = metadata['n_output_tokens'], 
+                                ttft_slo = metadata['ttft_slo'], 
+                                tpot_slo = metadata['tpot_slo'], 
+                            )
+                    population.append(MMEDatasetGenerator(dataset=dataset, metadata_generator=scenario['request_metadata_generator']))
+                if scenario_name == 'textcaps':
+                    raise Exception()
+                    dataset_request_generator = TextCapsDataset(path='textcaps')
+                if scenario_name == 'vega':
+                    raise Exception()
+                    dataset_request_generator = VEGADataset(path='vega')
+                    population.append(dataset_request_generator[scenario_name])
     assert len(weights) > 0, "No scenario is selected"
             
     request_generators = random.choices(population=population, weights=weights, k=args.num_requests)
-    for i in range(args.num_requests):
-        dataset.append(**request_generators[i]())
 
-    return dataset
+    synthetic_dataset = SyntheticDataset()
+    for i in range(args.num_requests):
+        synthetic_dataset.append(request_generators[i]())
+
+    return synthetic_dataset
 
 
 @dataclass
@@ -112,7 +179,7 @@ class BenchmarkResult:
     output_text: list[str] = field(default_factory=list)
 
 
-def log_result(args: argparse.Namespace, dataset: SimulatedDataset, results: list[BenchmarkResult]):
+def log_result(args: argparse.Namespace, dataset: SyntheticDataset, results: list[BenchmarkResult]):
     if args.log_requests:
         from tabulate import tabulate
         headers = ["request_id", "prompt", "n_prompt_tokens", "n_images",  "n_output_tokens", "ttft_slo", "tpot_slo"]
@@ -146,7 +213,7 @@ def log_result(args: argparse.Namespace, dataset: SimulatedDataset, results: lis
         print(slo_table)
 
 
-def vllm_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> list[BenchmarkResult]:
+def vllm_offline_benchmark(args: argparse.Namespace, dataset: SyntheticDataset) -> list[BenchmarkResult]:
     from vllm import LLM, SamplingParams
     entrypoint = LLM(model=args.model_path, max_model_len=4096, enforce_eager=True)
     sampling_params: list[SamplingParams] = []
@@ -187,7 +254,7 @@ def vllm_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) 
     )]
 
 
-def dxz_offline_benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> list[BenchmarkResult]:
+def dxz_offline_benchmark(args: argparse.Namespace, dataset: SyntheticDataset) -> list[BenchmarkResult]:
     import dxz
     from dxz.request import Request, SamplingParameters
     import os
@@ -338,7 +405,7 @@ async def dxz_server_proxy(args: argparse.Namespace, entry: SimulatedDataEntry, 
     return output
 
 
-async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, server_proxy, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
+async def online_benchmark(args: argparse.Namespace, dataset: SyntheticDataset, server_proxy, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
     pbar = tqdm(total = len(dataset))
     metric_builder = BenchmarkMetricsBuilder()
 
@@ -380,7 +447,7 @@ async def online_benchmark(args: argparse.Namespace, dataset: SimulatedDataset, 
     )
 
 @async_wrapper
-async def online_benchmarks(args: argparse.Namespace, dataset: SimulatedDataset, server_proxy) -> list[BenchmarkResult]:
+async def online_benchmarks(args: argparse.Namespace, dataset: SyntheticDataset, server_proxy) -> list[BenchmarkResult]:
     openai_api_key = "EMPTY"
     openai_api_base = f"http://{args.host}:{args.port}/v1"
     client = AsyncOpenAI(
@@ -395,7 +462,7 @@ async def online_benchmarks(args: argparse.Namespace, dataset: SimulatedDataset,
     return results
 
 
-def benchmark(args: argparse.Namespace, dataset: SimulatedDataset) -> BenchmarkResult:
+def benchmark(args: argparse.Namespace, dataset: SyntheticDataset) -> BenchmarkResult:
     benchmark_backends = {
         'offline': {
             'vllm': vllm_offline_benchmark,

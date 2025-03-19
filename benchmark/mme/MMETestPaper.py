@@ -1,3 +1,4 @@
+import base64
 import os
 import io
 from PIL import Image
@@ -8,10 +9,13 @@ from dataclasses import dataclass
 class Question:
     question_id: str
     image: Image
+    image_base64: str
     question: str
     reference_answer: str
     category: str
     answer: str
+
+
 class MMETestPaper:
     """
         -----------------------------answer rules-------------------------------
@@ -69,12 +73,12 @@ class MMETestPaper:
                 self.questions.append(Question(
                     question_id = row['question_id'],
                     image = Image.open(io.BytesIO(row['image']['bytes'])),
+                    image_base64 = base64.b64encode(row['image']['bytes']).decode('utf-8'),
                     question = row['question'],
                     reference_answer = row['answer'],
                     category = row['category'], 
                     answer = "",
                 ))
-
             self.categorys = set([question.category for question in self.questions])
             self.category_count = {}
             for question in self.questions:
@@ -188,6 +192,13 @@ class MMETestPaper:
             marks['code_reasoning_accuracy++'], 
         ])
         return marks
+
+    def __getitem__(self, index: int) -> Question:
+        return self.questions[index]
+
+    def __len__(self):
+        return len(self.questions)
+
 
 def test_transformers():
     from tqdm import tqdm
