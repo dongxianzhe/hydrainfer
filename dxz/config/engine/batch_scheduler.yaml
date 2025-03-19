@@ -1,8 +1,8 @@
 batch_policy: "continuousbatch"
 priority: "decode"
-max_running_requests: 128
-chunked_prefill: False
-max_batch_fill_tokens: 4096
+max_running_requests: 24
+chunked_prefill: True
+max_batch_fill_tokens: 2048
 max_batch_embed_images: 8
 batch_embed_prefill: False
 debug: False

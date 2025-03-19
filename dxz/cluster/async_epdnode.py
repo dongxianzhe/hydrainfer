@@ -25,14 +25,16 @@ from dxz.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig, Composite
 class NodeContext:
     rank: int # each engine has a rank
     world_size: int # number of engines
+    is_ray_actor: bool = False
 
 
 class AsyncEPDNode(AsyncEngine):
     def __init__(self, config: NodeConfig, context: NodeContext):
         self.config = config
         self.context = context
-        self.actor_id = ray.get_runtime_context().get_actor_id()
-        self.actor_handle = ray.get_runtime_context().current_actor
+        if context.is_ray_actor:
+            self.actor_id = ray.get_runtime_context().get_actor_id()
+            self.actor_handle = ray.get_runtime_context().current_actor
         # the name is used in __repr__ which is used to log actor names
         self.name = ""
         if self.config.enable_encode:
@@ -120,7 +122,7 @@ class AsyncEPDNode(AsyncEngine):
         self.migrate_pool = ThreadPoolExecutor(max_workers=1)
 
     async def init(self):
-        print(f'init {self.name} actor_id {self.actor_id} rank {self.context.rank} world_size {self.context.world_size}')
+        print(f'init {self.name} actor_id {getattr(self, "actor_id", None)} rank {self.context.rank} world_size {self.context.world_size}')
         self._init_nccl()
         self._init_zmq()
         self._init_engine()

@@ -21,9 +21,9 @@ class NodeConfig:
     executor: ExecutorConfig = field(default_factory=ExecutorConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     batch_scheduler_profiler: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)
-    enable_encode: bool = True, 
-    enable_prefill: bool = True, 
-    enable_decode: bool = True, 
+    enable_encode: bool = True
+    enable_prefill: bool = True
+    enable_decode: bool = True
     zmq: Optional[ZMQConfig] = None
     debug_migrate: bool = True
     nccl_communicator: Optional[NCCLMigrateCommunicator] = None

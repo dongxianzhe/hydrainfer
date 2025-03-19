@@ -15,7 +15,7 @@ class WorkerConfig:
     has_vision_model: bool = True
     has_language_model: bool = True
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
-    model: ModelFactoryConfig = field(default_factory=ParallelConfig)
+    model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
 
 
 @dataclass

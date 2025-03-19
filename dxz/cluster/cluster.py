@@ -49,6 +49,9 @@ class Cluster:
 
         world_size = sum([n_node for n_node, _, _ in nodes_list])
         rank_allocator = IncreaingAllocator()
+        has_encode: bool = False
+        has_prefill: bool = False
+        has_decode: bool = False
         for replicas, node_config, node_type in nodes_list:
             for i in range(replicas):
                 node = ray.remote(
@@ -60,7 +63,8 @@ class Cluster:
                     lifetime='detached'
                 )(AsyncEPDNode).remote(node_config, NodeContext(
                     rank = rank_allocator.allocate(), 
-                    world_size = world_size
+                    world_size = world_size, 
+                    is_ray_actor=True,
                 ))
                 self.nodes.append(node)
                 for ty in node_type:
@@ -71,8 +75,15 @@ class Cluster:
                     )
                 if "e" in node_type:
                     self.ebalancer.register_worker(node)
+                    has_encode = True
                 if "p" in node_type:
+                    has_prefill = True
                     self.pbalancer.register_worker(node)
+                if "d" in node_type:
+                    has_decode = True
+
+        assert has_prefill and has_decode, "node type is not enough to inference"
+
         migrate_graph: MigrateGraph = graph_builder.build_graph()
         migrate_graph.print()
 
