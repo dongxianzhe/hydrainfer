@@ -29,3 +29,4 @@ class NodeConfig:
     nccl_communicator: Optional[NCCLMigrateCommunicator] = None
     intranode_migrate_backend: Literal['ipc', 'nccl'] = 'ipc'
     internode_migrate_backend: Literal['nccl'] = 'nccl'
+    log_latency_breakdown: bool = False

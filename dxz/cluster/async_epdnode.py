@@ -14,7 +14,8 @@ from dxz.model import getModelFactory, ModelFactoryContext
 from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, RequestProcessorContext
 from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext
 from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
-from dxz.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType
+from dxz.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
+
 from dxz.utils.zmq_utils import init_zmq_send
 from dxz.cluster import MigrateGraph, MigrateNode
 from dxz.cluster.node_config import NodeConfig
@@ -196,6 +197,8 @@ class AsyncEPDNode(AsyncEngine):
                 if rcb.is_finished():
                     rcb.metric.finished_time = t
                     await self._free_cache(rcb)
+                    if self.config.log_latency_breakdown:
+                        log_latency_breakdown(rcb.metric)
                 else:
                     self.batch_scheduler.schedule_running(rcb)
 

@@ -55,12 +55,23 @@ class BatchScheduler:
         assert self.migrating_cnt > 0, f'invalid release'
         self.migrating_cnt -= 1
 
+    def _stamp_queuing_time(self, rcb: RequestControlBlock):
+        if isinstance(rcb.current_instruction(), ImageEmbed):
+            rcb.metric.encode_queueing.append(time.perf_counter())
+        elif isinstance(rcb.current_instruction(), Fill):
+            if len(rcb.metric.prefill_queueing) < 2:
+                rcb.metric.prefill_queueing.append(time.perf_counter())
+            else:
+                rcb.metric.decode_queueing.append(time.perf_counter())
+
     def schedule_new(self, rcb: RequestControlBlock):
         rcb.sid = self.sid_allocator.allocate()
         self.waiting.put(rcb)
-    
+        self._stamp_queuing_time(rcb)
+
     def schedule_running(self, rcb: RequestControlBlock):
         self.running.append(rcb)
+        self._stamp_queuing_time(rcb)
 
     def step(self) -> BatchRequest:
         self.step_cnt += 1
@@ -70,16 +81,16 @@ class BatchScheduler:
             if len(self.running) == 0:
                 if not self.waiting.empty():
                     rcb = self.waiting.get()
-                    self.running.append(rcb)
+                    self.schedule_running(rcb)
         elif self.config.batch_policy == 'requestlevel':
             if len(self.running) == 0:
                 while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
                     rcb = self.waiting.get()
-                    self.running.append(rcb)
+                    self.schedule_running(rcb)
         elif self.config.batch_policy == 'continuousbatch':
             while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
                 rcb = self.waiting.get()
-                self.running.append(rcb)
+                self.schedule_running(rcb)
         if len(self.running) == 0:
             return []
 
@@ -140,10 +151,6 @@ class BatchScheduler:
             print(f'inst: ' + ' '.join(f'{seq.instructions.curr}' for seq in this_step))
             print(f'batch images {batch_embed_images}')
             print(f'batch tokens {batch_fill_tokens}')
-
-        for seq in this_step:
-            if seq.metric.first_schedule_time == 0.:
-                seq.metric.first_schedule_time = schedule_time
 
         self.running = next_step
         return BatchRequest(this_step)
