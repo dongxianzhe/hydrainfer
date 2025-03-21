@@ -255,6 +255,11 @@ class AsyncEPDNode(AsyncEngine):
 
     async def _execute_pull_cache(self, contexts: BatchRequest):
         for rcb, inst in contexts:
+            if len(rcb.metric.ep_transfer) == 0:
+                rcb.metric.ep_transfer.append(time.perf_counter())
+            else:
+                rcb.metric.pd_transfer.append(time.perf_counter())
+            
             old_rcb = copy.deepcopy(rcb)
             if rcb.virtual_kv_cache and self.has_kv_cache:
                 rcb.virtual_kv_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
@@ -266,6 +271,11 @@ class AsyncEPDNode(AsyncEngine):
                 rcb.virtual_image_cache = None
             inst.src_node_actor_handle.free_migrate_request.remote(old_rcb)
             rcb.step()
+
+            if len(rcb.metric.ep_transfer) == 1:
+                rcb.metric.ep_transfer.append(time.perf_counter())
+            else:
+                rcb.metric.pd_transfer.append(time.perf_counter())
 
 
     async def migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
