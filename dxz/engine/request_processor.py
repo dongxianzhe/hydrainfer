@@ -1,18 +1,13 @@
-import zmq
 import threading
 import io
 import base64
-import random
-import argparse
 from torch import Tensor
-from dataclasses import dataclass, fields, field
+from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
-from transformers import AutoTokenizer, AutoProcessor
 from PIL import Image
-from typing import Literal, Optional
-from dxz.request.request import Request
-from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache
-from dxz.engine.output_token_processor import ZmqOutputTokenProcessor
+from typing import Optional
+from dxz.request.request import Request, RequestMetaData
+from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache, EPMigrate, PDMigrate
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 
 
@@ -27,23 +22,28 @@ class RequestProcessorConfig:
 
 
 @dataclass
-class RequestProcessorContext:
-    batch_scheduler: BatchScheduler = None
-
-
-@dataclass
 class RequestProcessParameters:
     output_token_processors: list[OutputTokenProcessor] = field(default_factory=list)
     outout_token_parmas: OutputTokenParams = field(default_factory=OutputTokenParams)
 
 
-class RequestProcessor:
-    def __init__(self, config: RequestProcessorConfig, context: RequestProcessorContext):
+class RequestProcessorComponent:
+    def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
+        raise NotImplementedError
+
+
+class RequestProcessorObserver:
+    """
+    RequestProcessorObserver update method should be thread-safe
+    """
+    def update(self, rcb: RequestControlBlock):
+        raise NotImplementedError
+
+
+class InstructionCreator(RequestProcessorComponent):
+    def __init__(self, config: RequestProcessorConfig):
         super().__init__()
         self.config = config
-        self.context = context
-        self.scenario_classifier = ScenarioClassifier()
-        
 
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         self.tokenizer = model_factory.getTokenizer()
@@ -54,25 +54,6 @@ class RequestProcessor:
         self.num_image_tokens = vision_model_config.num_image_tokens
         self.n_layers = language_model_config.n_layers
 
-        if config.multi_thread_request_process:
-            self.lock = threading.Lock()
-            self.executor = ThreadPoolExecutor(max_workers=32)
-        self.batch_scheduler = context.batch_scheduler
-
-
-    def process(self, request: Request, params: RequestProcessParameters):
-        if self.config.multi_thread_request_process:
-            self.executor.submit(self._request_process_lock_wrapper, request, params)
-        else:
-            self._request_process(request, params)
-
-    def _request_process_lock_wrapper(self, request: Request, params: RequestProcessParameters):
-        try:
-            with self.lock:
-                self._request_process(request, params)
-        except Exception as e:
-            print(e)
-    
     def _insert_image_tokens(self, token_ids: list[int], num_image_tokens):
         # replace each image_token_id with num_image_tokens image_token_id
         inserted_token_ids: list[int] = []
@@ -82,7 +63,7 @@ class RequestProcessor:
             inserted_token_ids.append(token_id)
         return inserted_token_ids 
 
-    def _request_process(self, request: Request, params: RequestProcessParameters):
+    def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
         # 1. images
         image: Optional[Image.Image] = None
         images_tensor: Optional[Tensor] = None # (n_images, n_channels, width, height)
@@ -101,10 +82,11 @@ class RequestProcessor:
         token_ids = self.tokenizer.encode(request.prompt)
         n_token_ids_images = token_ids.count(self.image_token_id)
         assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
-        n_prompt_tokens_without_image = len(token_ids)
         token_ids = self._insert_image_tokens(token_ids, self.num_image_tokens)
+        n_images = n_token_ids_images
         n_prompt_tokens = len(token_ids)
         n_image_tokens = n_pixel_values_images * self.num_image_tokens
+        n_text_tokens = n_prompt_tokens - n_image_tokens
         token_ids = token_ids + [-1] * (request.sampling_params.max_tokens - 1) # -1 will be set when executing
         # 3. image_overwrite_mask
         image_overwrite_mask = [token_id == self.image_token_id for token_id in token_ids]
@@ -121,7 +103,6 @@ class RequestProcessor:
                 embed = ImageEmbed(
                     pixel_values = images_tensor,
                     cache_ids=image_token_cache_ids, 
-                    token_pruning_params = None, 
                 )
                 prefill = ImageEmbedFill(
                     image_token_cache_ids=image_token_cache_ids, 
@@ -134,7 +115,7 @@ class RequestProcessor:
                 )
                 builder.append(embed)
                 if self.config.ep_migrate:
-                    builder.append(MigrateRequest('ep'))
+                    builder.append(EPMigrate())
                     builder.append(PullCache())
                 builder.append(prefill)
             else:
@@ -157,7 +138,7 @@ class RequestProcessor:
             )
             builder.append(prefill)
         if self.config.pd_migrate:
-            builder.append(MigrateRequest('pd'))
+            builder.append(PDMigrate())
             builder.append(PullCache())
 
         last_inst = prefill
@@ -179,23 +160,84 @@ class RequestProcessor:
         instructions = builder.build_instruction_list()
         if self.config.debug:
             print(f'{request.prompt[:10]} {instructions}')
-        # 7. scenario predictor
+
+        rcb.instructions = instructions
+        rcb.request_metadata = RequestMetaData(
+            n_images = n_images, 
+            n_prompt_tokens = n_prompt_tokens, 
+            n_image_tokens = n_image_tokens, 
+            n_text_tokens = n_text_tokens, 
+        )
+        return rcb
+
+
+class ScenarioPredictor(RequestProcessorComponent):
+    def __init__(self, config: RequestProcessorConfig):
+        self.config = config
+        self.scenario_classifier = ScenarioClassifier()
+
+    def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
+        if rcb.request_metadata is None:
+            return rcb
+        if rcb.sampling_params is None:
+            return rcb
+
         scenario_type = self.scenario_classifier.classify(
-            n_prompt_tokens_without_image = n_prompt_tokens_without_image, 
-            max_tokens = request.sampling_params.max_tokens, 
+            n_text_tokens = rcb.request_metadata.n_text_tokens, 
+            n_output_tokens = request.sampling_params.max_tokens, 
         )
+        rcb.scenario_type = scenario_type
+        return rcb
 
-        # 8. output tokenizer
-        rcb = RequestControlBlock(
-            request_id = request.request_id, 
-            instructions = instructions, 
-            sampling_params = request.sampling_params, 
-            output_token_params = params.outout_token_parmas,
-            scenario_type = scenario_type, 
-        )
+class OutputTokenProcessorComponent(RequestProcessorComponent):
+    def __init__(self, config: RequestProcessorConfig):
+        self.config = config
 
+    def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
+        # if request.sampling_params.eos_token_id is None:
+        #     request.sampling_params.eos_token_id = self.tokenizer.eos_token_id
+        rcb.output_token_params = params.outout_token_parmas
         for output_token_processor in params.output_token_processors:
             rcb.register_output_token_processor(output_token_processor)
+        return rcb
 
-        if self.batch_scheduler:
-            self.batch_scheduler.schedule_new(rcb)
+class RequestProcessor:
+    def __init__(self, config: RequestProcessorConfig):
+        super().__init__()
+        self.config = config
+
+        if config.multi_thread_request_process:
+            self.lock = threading.Lock()
+            self.executor = ThreadPoolExecutor(max_workers=32)
+
+        self.request_process_components: list[RequestProcessorComponent] = [
+            InstructionCreator(config), 
+            ScenarioPredictor(config), 
+            OutputTokenProcessorComponent(config), 
+        ]
+        self.request_process_observer: list[RequestProcessorObserver] = []
+
+    def register_output_observer(self, observer: RequestProcessorObserver):
+        self.request_process_observer.append(observer)
+
+    def process(self, request: Request, params: RequestProcessParameters) -> None:
+        if self.config.multi_thread_request_process:
+            self.executor.submit(self._request_process_lock_wrapper, request, params)
+        else:
+            self._request_process(request, params)
+
+    def _request_process_lock_wrapper(self, request: Request, params: RequestProcessParameters):
+        try:
+            with self.lock:
+                self._request_process(request, params)
+        except Exception as e:
+            print(e)
+    
+    def _request_process(self, request: Request, params: RequestProcessParameters):
+        rcb = RequestControlBlock()
+        rcb.request_id = request.request_id
+        rcb.sampling_params = request.sampling_params
+        for component in self.request_process_components:
+            rcb = component.process(request, rcb, params)
+        for observer in self.request_process_observer:
+            observer.update(rcb)

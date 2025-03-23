@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SamplingParameters:
     max_tokens: int = 50
+    eos_token_id: Optional[int] = None
 
 
 @dataclass
@@ -25,3 +26,15 @@ class Request:
     image_base64: str = ""
     sampling_params: SamplingParameters = field(default_factory=SamplingParameters)
     token_params: TokenParameters = field(default_factory=TokenParameters)
+
+
+@dataclass
+class RequestMetaData:
+    """ 
+    n_prompt_tokens = n_text_tokens + n_image_tokens
+    n_image_tokens = n_image_tokens * n_image_tokens_per_image
+    """
+    n_images: int
+    n_prompt_tokens: int
+    n_text_tokens: int
+    n_image_tokens: int

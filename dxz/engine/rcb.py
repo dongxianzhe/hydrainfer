@@ -2,25 +2,24 @@ from typing import Optional
 from dxz.engine import Instruction, InstructionList, OutputTokenProcessor, RequestMetric, ScenarioType
 from dxz.engine.output_token_processor import OutputTokenParams
 from dxz.memory import VirtualTokenCache
-from dxz.request import SamplingParameters
+from dxz.request import SamplingParameters, Request, RequestMetaData
 
 
 class RequestControlBlock:
-    def __init__(self, request_id: int, instructions: InstructionList, sampling_params: SamplingParameters, output_token_params: OutputTokenParams, scenario_type: ScenarioType=ScenarioType.Relaxed):
-        self.request_id = request_id
-        self.instructions: InstructionList = instructions
-        self.virtual_kv_cache: VirtualTokenCache = None
-        self.virtual_image_cache: VirtualTokenCache = None
+    def __init__(self):
+        self.request_id: Optional[int] = None
+        self.sampling_params: Optional[SamplingParameters] = None
 
+        self.request_metadata: Optional[RequestMetaData] = None
+        self.instructions: Optional[InstructionList] = None
+        self.virtual_kv_cache: Optional[VirtualTokenCache] = None
+        self.virtual_image_cache: Optional[VirtualTokenCache] = None
         self.sid: int = -1
-
         self.output_token_processors: list[OutputTokenProcessor] = []
-        self.output_token_params = output_token_params
+        self.output_token_params: Optional[OutputTokenParams] = None
         self.output_token_ids: list[int] = []
-        self.sampling_params = sampling_params
+        self.scenario_type: Optional[ScenarioType] = None
         self.metric = RequestMetric()
-
-        self.scenario_type = scenario_type
 
     def current_instruction(self) -> Instruction:
         return self.instructions.curr
@@ -29,7 +28,11 @@ class RequestControlBlock:
         self.instructions.curr = self.instructions.curr.next
 
     def is_finished(self) -> bool:
-        return self.instructions.curr is None
+        if self.instructions.curr is None:
+            return True
+        if len(self.output_token_ids) > 0 and self.output_token_ids[-1] == self.sampling_params.eos_token_id:
+            return True
+        return False
 
     def register_output_token_processor(self, output_token_processor: OutputTokenProcessor):
         self.output_token_processors.append(output_token_processor)

@@ -5,6 +5,8 @@ from typing import Optional, Literal
 class Instruction:
     """
         Instruction is the scheduling granularity of the batch scheduler
+        for a typical request the instruction linked list will be 
+        ImageEmbed -> EPMigrate -> PullCache -> Fill -> PDMigrate -> PullCache -> Fill -> ...(many decode Fill) -> Empty
     """
     next: "Instruction" = None
     prev: "Instruction" = None
@@ -17,10 +19,27 @@ class Instruction:
 
 
 class Fill(Instruction):
-    def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional["Fill"]):
+    """
+    we use fill instruction to implement prefill and decode stage
+    for example if we have a prompt "who are you ?" and it is tokenized as [1, 2, 3, 4]
+    then prefill stage
+    token_ids  [1, 2, 3, 4]
+    position_ids is [0, 1, 2, 3]
+    cache_ids is [0, 1, 2, 3]
+    sample is True
+    sample dst is next Fill instruction used in decode stage
+
+    decode Fill's token_ids is None when request created and set when autoregressing
+    """
+    def __init__(
+        self, 
+        token_ids: Optional[list[int]],
+        position_ids: list[int], 
+        cache_ids: list[int], 
+        sample: bool, 
+        sample_dst: Optional["Fill"]
+    ):
         super().__init__()
-        # cache_ids (n_layers, n_tokens)
-        # kv_caches (n_layers, )
         self.token_ids = token_ids
         self.position_ids = position_ids
         self.cache_ids = cache_ids
@@ -29,10 +48,20 @@ class Fill(Instruction):
 
 
 class TextFill(Fill):
-    def __init__(self, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+    def __init__(
+        self, 
+        token_ids: Optional[list[int]], 
+        position_ids: list[int], 
+        cache_ids: list[int], 
+        sample: bool, 
+        sample_dst: Optional[Fill]
+    ):
         super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
 
     def chunk_prefill(self, chunk_size: int):
+        """
+        chunked prefill must at least contain one token and less than all tokens
+        """
         assert chunk_size > 0 and chunk_size < len(self.token_ids), f"invalid chunk prefill size {chunk_size}"
         rest_text_fill = TextFill(
             token_ids = self.token_ids[chunk_size:], 
@@ -53,7 +82,18 @@ class TextFill(Fill):
 
 
 class ImageFill(Fill):
-    def __init__(self, pixel_values: Tensor, token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+    """
+    pixel values is image tensor shaped (n_images, n_channels, n_width, n_height)
+    """
+    def __init__(
+        self, 
+        pixel_values: Tensor, 
+        token_ids: Optional[list[int]], 
+        position_ids: list[int], 
+        cache_ids: list[int], 
+        sample: bool, 
+        sample_dst: Optional[Fill]
+    ):
         super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
         self.pixel_values    = pixel_values # (n_images, n_channel, )
 
@@ -62,7 +102,21 @@ class ImageFill(Fill):
 
 
 class ImageEmbedFill(Fill):
-    def __init__(self, image_token_cache_ids: list[int], image_token_mask: list[bool], token_ids: Optional[list[int]], position_ids: list[int], cache_ids: list[int], sample: bool, sample_dst: Optional[Fill]):
+    """
+    for example if we have a prompt "<image> what's the content of this image"
+    and tokenized as [x, x, x, x, what's, the, content, of, this, image]
+    then image_token_cache_ids is [0, 1, 2, 3]
+    image_token_mask [1, 1, 1, 1, 0, 0, 0, 0, 0, 0]
+    """
+    def __init__(self, 
+        image_token_cache_ids: list[int], 
+        image_token_mask: list[bool], 
+        token_ids: Optional[list[int]], 
+        position_ids: list[int], 
+        cache_ids: list[int], 
+        sample: bool, 
+        sample_dst: Optional[Fill]
+    ):
         super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
         self.image_token_cache_ids = image_token_cache_ids # 0, 1, 2, ..., 575 
         self.image_token_mask = image_token_mask
@@ -99,30 +153,55 @@ class EmptyInstruction(Instruction):
 
 
 class ImageEmbed(Instruction):
-    def __init__(self, pixel_values: Tensor, cache_ids: list[int], token_pruning_params: dict):
+    def __init__(
+        self, 
+        pixel_values: Tensor, 
+        cache_ids: list[int], 
+    ):
         super().__init__()
         self.pixel_values = pixel_values
         self.cache_ids = cache_ids
-        self.token_pruning_params = token_pruning_params
 
     def __repr__(self):
         return "IE"
 
 
 class MigrateRequest(Instruction):
-    def __init__(self, ty: Literal['ep', 'pd']):
-        self.ty = ty
+    def __init__(self):
         super().__init__()
 
     def __repr__(self):
-        return f"{self.ty}MR"
+        return f"MR"
+
+
+class EPMigrate(MigrateRequest):
+    def __init__(self):
+        super().__init__()
+
+    def __repr__(self):
+        return f"EPMR"
+    
+class PDMigrate(MigrateRequest):
+    def __init__(self):
+        super().__init__()
+
+    def __repr__(self):
+        return f"PDMR"
+
 
 class PullCache(Instruction):
     def __repr__(self):
         return f"PR"
 
+
 class InstructionList:
-    def __init__(self, head: Instruction, tail: Instruction, curr: Instruction):
+    """ we use double linked list with empty head and empty tail"""
+    def __init__(
+        self, 
+        head: Instruction, 
+        tail: Instruction, 
+        curr: Instruction
+    ):
         self.head = head
         self.tail = tail
         self.curr = curr

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
 from dxz.request import Request
 from dxz.model import getModelFactory, ModelFactoryContext
-from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, RequestProcessorContext
+from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
 from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext
 from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
 from dxz.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
@@ -28,6 +28,13 @@ class NodeContext:
     world_size: int # number of engines
     is_ray_actor: bool = False
 
+
+class BatchSchedulerObserver(RequestProcessorObserver):
+    def __init__(self, batch_scheduler: BatchScheduler):
+        self.batch_scheduler = batch_scheduler
+
+    def update(self, rcb: RequestControlBlock):
+        self.batch_scheduler.schedule_new(rcb)
 
 class AsyncEPDNode(AsyncEngine):
     def __init__(self, config: NodeConfig, context: NodeContext):
@@ -105,11 +112,8 @@ class AsyncEPDNode(AsyncEngine):
                 profiler = self.profiler, 
             ))
 
-        self.request_processor = RequestProcessor(
-            self.config.request_processor, 
-            RequestProcessorContext(
-                batch_scheduler=self.batch_scheduler, 
-            ))
+        self.request_processor = RequestProcessor(self.config.request_processor)
+        self.request_processor.register_output_observer(BatchSchedulerObserver(self.batch_scheduler))
 
     def _init_migrate(self):
         self.migrate_graph: Optional[MigrateGraph] = None
@@ -294,7 +298,7 @@ class AsyncEPDNode(AsyncEngine):
             return
         for rcb, inst in contexts:
             rcb.step()
-            loadbalancer = self.ep_loadbalancer if inst.ty == 'ep' else self.pd_loadbalancer
+            loadbalancer = self.ep_loadbalancer if isinstance(inst, EPMigrate) else self.pd_loadbalancer
             node = loadbalancer.choice(key=rcb.scenario_type)
             if node.id == self.actor_id:
                 # if migrate to self, skip migrate and pull cache stage and continue schedule running
