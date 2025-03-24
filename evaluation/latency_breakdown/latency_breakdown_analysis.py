@@ -1,13 +1,17 @@
 import re
 from collections import defaultdict
 
-log_file = "result/api_server.log"
+import argparse
+
+parser = argparse.ArgumentParser(description="读取路径参数示例")
+parser.add_argument("--log-path", type=str, required=True)
+args = parser.parse_args()
 
 pattern = re.compile(r"(\w+)\s+time:\s+([\d.e-]+)")
 
 time_data = defaultdict(list)
 
-with open(log_file, "r") as file:
+with open(args.log_path, "r") as file:
     for line in file:
         match = pattern.search(line)
         if match:

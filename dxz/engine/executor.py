@@ -330,43 +330,12 @@ class InstructionExecutor:
             self.image_embed_executor = MultiThreadsDecorator(self.pool, self.image_embed_executor)
 
     def execute_fill(self, batch: BatchRequest) -> Future:
-        tmp = []
-        for rcb, inst in batch:
-            tmp.append((rcb, inst))
-            if not isinstance(inst, Fill):
-                continue
-            if len(inst.token_ids) > 1: # this is a chunked prefill inst
-                if len(rcb.metric.prefill_execute) == 0: # this is first chunk
-                    rcb.metric.prefill_execute.append(time.perf_counter())
-                else: # this is not first chunk
-                    pass
-            else: # this is decode
-                if len(rcb.metric.decode_execute) == 0: # this is first decode
-                    rcb.metric.decode_execute.append(time.perf_counter())
-            
         future = self.fill_executor.execute(batch)
 
-        for rcb, inst in tmp:
-            if not isinstance(inst, Fill):
-                continue
-            if len(inst.token_ids) > 1: # this is prefill
-                if len(rcb.metric.prefill_execute) == 1:
-                    rcb.metric.prefill_execute.append(time.perf_counter())
-                else:
-                    rcb.metric.prefill_execute[1] = time.perf_counter()
-            else: # this is decode
-                if len(rcb.metric.decode_execute) == 1:
-                    rcb.metric.decode_execute.append(time.perf_counter())
-                else:
-                    rcb.metric.decode_execute[1] = time.perf_counter()
         return future
 
     def execute_image_embed(self, batch: BatchRequest) -> Future:
-        for rcb, inst in batch:
-            rcb.metric.encode_execute.append(time.perf_counter())
         future = self.image_embed_executor.execute(batch)
-        for rcb, inst in batch:
-            rcb.metric.encode_execute.append(time.perf_counter())
         return future
 
     def execute_empty(self, batch: BatchRequest) -> Future:

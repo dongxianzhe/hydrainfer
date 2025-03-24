@@ -143,6 +143,7 @@ class AsyncEPDNode(AsyncEngine):
             for migrate_node in table:
                 if migrate_node.tpot_slo < 0.05:
                     loadbalancer.register_worker(key=ScenarioType.Strict, worker=migrate_node)
+                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
                 else:
                     loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
         print(f'ep_loadbalancer {self.ep_loadbalancer}')
@@ -181,6 +182,27 @@ class AsyncEPDNode(AsyncEngine):
                 continue
             raise Exception(f'unsupported instrction {type(inst)}')
 
+        # latency break down analysis
+        if self.config.log_latency_breakdown:
+            tmp = []
+            for rcb, inst in batch_fill:
+                tmp.append((rcb, inst))
+                if not isinstance(inst, Fill):
+                    continue
+                if len(inst.token_ids) > 1: # this is a chunked prefill inst
+                    if len(rcb.metric.prefill_execute) == 0: # this is first chunk
+                        rcb.metric.prefill_execute.append(time.perf_counter())
+                    else: # this is not first chunk
+                        pass
+                else: # this is decode
+                    if len(rcb.metric.decode_execute) == 0: # this is first decode
+                        rcb.metric.decode_execute.append(time.perf_counter())
+        
+            for rcb, _ in batch_image_embed:
+                rcb.metric.encode_execute.append(time.perf_counter())
+
+
+        # execute concurrently
         async_futures = []
         async_futures.append(asyncio.create_task(self._execute_batch_migrate(batch_migrate)))
         async_futures.append(asyncio.create_task(self._execute_pull_cache(batch_pull_cache)))
@@ -196,6 +218,25 @@ class AsyncEPDNode(AsyncEngine):
             self.kv_cache_block_manager.synchronize()
         if self.image_cache_block_manager:
             self.image_cache_block_manager.synchronize()
+
+        # latency break down analysis
+        if self.config.log_latency_breakdown:
+            for rcb, inst in tmp:
+                if not isinstance(inst, Fill):
+                    continue
+                if len(inst.token_ids) > 1: # this is prefill
+                    if len(rcb.metric.prefill_execute) == 1:
+                        rcb.metric.prefill_execute.append(time.perf_counter())
+                    else:
+                        rcb.metric.prefill_execute[1] = time.perf_counter()
+                else: # this is decode
+                    if len(rcb.metric.decode_execute) == 1:
+                        rcb.metric.decode_execute.append(time.perf_counter())
+                    elif len(rcb.metric.decode_execute) > 1:
+                        rcb.metric.decode_execute[1] = time.perf_counter()
+            
+            for rcb, _ in batch_image_embed:
+                rcb.metric.encode_execute.append(time.perf_counter())
 
         # 3. scheduler requests
         t = time.perf_counter()

@@ -1,9 +1,9 @@
 defaults:
   - ../node/ed@ednode
-  - ../node/pd@pdnode
+  - ../node/p@pnode
   - ../node/d@dnode
 
 cluster_type: "hybrid"
 n_ednode: 1
-n_pdnode: 1
+n_pnode: 1
 n_dnode: 1

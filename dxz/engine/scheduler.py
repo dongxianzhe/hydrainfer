@@ -2,7 +2,7 @@ import time
 from queue import Queue
 from typing import Literal, Optional
 from dataclasses import dataclass, fields
-from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest
+from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest, PullCache
 from dxz.utils.allocate import IncreaingAllocator
 import argparse
 
@@ -55,23 +55,36 @@ class BatchScheduler:
         assert self.migrating_cnt > 0, f'invalid release'
         self.migrating_cnt -= 1
 
-    def _stamp_queuing_time(self, rcb: RequestControlBlock):
+    def _stamp_queuing_begin_time(self, rcb: RequestControlBlock):
         if isinstance(rcb.current_instruction(), ImageEmbed):
             rcb.metric.encode_queueing.append(time.perf_counter())
-        elif isinstance(rcb.current_instruction(), Fill):
-            if len(rcb.metric.prefill_queueing) < 2:
-                rcb.metric.prefill_queueing.append(time.perf_counter())
-            else:
-                rcb.metric.decode_queueing.append(time.perf_counter())
+            return
+        if len(rcb.metric.prefill_queueing) == 0:
+            rcb.metric.prefill_queueing.append(time.perf_counter())
+            return
+        if len(rcb.metric.decode_queueing) == 0:
+            rcb.metric.decode_queueing.append(time.perf_counter())
+            return
+
+    def _stamp_queuing_end_time(self, rcb: RequestControlBlock):
+        if len(rcb.metric.encode_queueing) == 1:
+            rcb.metric.encode_queueing.append(time.perf_counter())
+            return
+        if len(rcb.metric.prefill_queueing) == 1:
+            rcb.metric.prefill_queueing.append(time.perf_counter())
+            return
+        if len(rcb.metric.decode_queueing) == 1:
+            rcb.metric.decode_queueing.append(time.perf_counter())
+            return
 
     def schedule_new(self, rcb: RequestControlBlock):
         rcb.sid = self.sid_allocator.allocate()
         self.waiting.put(rcb)
-        self._stamp_queuing_time(rcb)
+        self._stamp_queuing_begin_time(rcb)
 
     def schedule_running(self, rcb: RequestControlBlock):
         self.running.append(rcb)
-        self._stamp_queuing_time(rcb)
+        self._stamp_queuing_end_time(rcb)
 
     def step(self) -> BatchRequest:
         self.step_cnt += 1

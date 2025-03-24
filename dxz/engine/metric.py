@@ -17,19 +17,19 @@ class RequestMetric:
     decode_execute: list[float] = field(default_factory=list)
 
 def log_latency_breakdown(metric: RequestMetric):
-    if len(metric.encode_queueing ) > 0: 
+    if len(metric.encode_queueing ) == 2: 
         print(f"encode_queueing  time: {metric.encode_queueing [1] - metric.encode_queueing [0]}")
-    if len(metric.encode_execute  ) > 0: 
+    if len(metric.encode_execute  ) == 2: 
         print(f"encode_execute   time: {metric.encode_execute  [1] - metric.encode_execute  [0]}")
-    if len(metric.ep_transfer     ) > 0: 
+    if len(metric.ep_transfer     ) == 2: 
         print(f"ep_transfer      time: {metric.ep_transfer     [1] - metric.ep_transfer     [0]}")
-    if len(metric.prefill_queueing) > 0: 
+    if len(metric.prefill_queueing) == 2: 
         print(f"prefill_queueing time: {metric.prefill_queueing[1] - metric.prefill_queueing[0]}")
-    if len(metric.prefill_execute ) > 0: 
+    if len(metric.prefill_execute ) == 2: 
         print(f"prefill_execute  time: {metric.prefill_execute [1] - metric.prefill_execute [0]}")
-    if len(metric.pd_transfer     ) > 0: 
+    if len(metric.pd_transfer     ) == 2: 
         print(f"pd_transfer      time: {metric.pd_transfer     [1] - metric.pd_transfer     [0]}")
-    if len(metric.decode_queueing ) > 0: 
+    if len(metric.decode_queueing ) == 2: 
         print(f"decode_queueing  time: {metric.decode_queueing [1] - metric.decode_queueing [0]}")
-    if len(metric.decode_execute  ) > 0: 
+    if len(metric.decode_execute  ) == 2: 
         print(f"decode_execute   time: {metric.decode_execute  [1] - metric.decode_execute  [0]}")
