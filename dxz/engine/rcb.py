@@ -30,8 +30,15 @@ class RequestControlBlock:
     def is_finished(self) -> bool:
         if self.instructions.curr is None:
             return True
-        if len(self.output_token_ids) > 0 and self.output_token_ids[-1] == self.sampling_params.eos_token_id:
+
+        if len(self.output_token_ids) == self.sampling_params.max_tokens:
             return True
+
+        if len(self.output_token_ids) > 0:
+            for eos_token_id in self.sampling_params.eos_token_ids:
+                if self.output_token_ids[-1] == eos_token_id:
+                    return True
+
         return False
 
     def register_output_token_processor(self, output_token_processor: OutputTokenProcessor):
@@ -57,3 +64,7 @@ class BatchRequest:
 
     def append(self, rcb: RequestControlBlock):
         self.rcbs.append(rcb)
+
+    def step(self):
+        for rcb in self.rcbs:
+            rcb.step()

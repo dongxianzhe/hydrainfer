@@ -63,7 +63,7 @@ class ExecutorContext:
 
 
 class Executor:
-    def execute(self, contexts: BatchRequest):
+    def execute(self, batch: BatchRequest):
         raise NotImplementedError
 
 
@@ -93,30 +93,30 @@ class BatchFillExecutor(Executor):
             self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
         self.print_text_output_token_processor = PrintTextOutputTokenProcessor(self.tokenizer)
 
-    def _execute_image_embed(self, contexts: BatchRequest) -> Tensor:
-        if len(contexts) == 0:
+    def _execute_image_embed(self, batch: BatchRequest) -> Tensor:
+        if len(batch) == 0:
             return None
         pixel_values: list[Tensor] = []
-        for rcb, inst in contexts:
+        for rcb, inst in batch:
             pixel_values.append(inst.pixel_values)
             inst.pixel_values = None
         pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.dtype, device=self.device)
         image_features = self.worker.execute_vision_model(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
         return image_features
             
-    def execute(self, contexts: BatchRequest) -> Future:
-        if len(contexts) == 0:
+    def execute(self, batch: BatchRequest) -> Future:
+        if len(batch) == 0:
             return EmptyFuture()
 
         # 1. allocate memory if necessary
-        for rcb, _ in contexts:
+        for rcb, _ in batch:
             if rcb.virtual_kv_cache is None:
                 rcb.virtual_kv_cache = self.block_mangaer.allocate_virtual_cache()
 
         # 2. filter out request which need image embed
         batch_image_fill = BatchRequest()
         image_tokens: list[Tensor] = []
-        for rcb, inst in contexts:
+        for rcb, inst in batch:
             if isinstance(inst, ImageFill):
                 batch_image_fill.append(rcb)
             elif isinstance(inst, ImageEmbedFill):
@@ -147,7 +147,7 @@ class BatchFillExecutor(Executor):
             flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper, 
             flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper, 
         )
-        for rcb, inst in contexts:
+        for rcb, inst in batch:
             token_ids += inst.token_ids
             position_ids += inst.position_ids
             if inst.sample:
@@ -175,56 +175,65 @@ class BatchFillExecutor(Executor):
         sample_token_ids = self.worker.execute_language_model(input_ids_tensor, image_features, position_ids_tensor, model_params).sample_token_ids
         sample_token_ids = sample_token_ids.tolist()
 
-        if len(selected_token_ids) > 0:
-            t = time.perf_counter()
-            i = 0
-            for rcb, instruction in contexts:
-                if (isinstance(instruction, Fill)) and instruction.sample:
-                    next_token_id = sample_token_ids[i]
-                    is_last_token =  instruction.sample_dst is None
-                    if not is_last_token:
-                        instruction.sample_dst.token_ids = [next_token_id]
-                    rcb.metric.token_times.append(t)
-                    # process output tokens
-                    rcb.output_token_ids.append(next_token_id)
-                    for output_token_processor in rcb.output_token_processors:
-                        output_token_processor.append_token_id(next_token_id, is_last_token)
-                    if rcb.output_token_params.print_output_text:
-                        self.print_text_output_token_processor.append_token_id(next_token_id, is_last_token)
-                    if self.context.zmq_send and rcb.output_token_params.zmq_output:
-                        if rcb.output_token_params.is_offline_output:
-                            if rcb.output_token_params.is_stream_output:
-                                raise Exception('offline inference is not support stream output')
-                            else:
-                                if is_last_token:
-                                    self.context.zmq_send.send_pyobj(OfflineInferenceOutput(
-                                        text = self.tokenizer.decode(rcb.output_token_ids),
-                                        output_token_ids = rcb.output_token_ids, 
-                                        arrival_time  = rcb.metric.arrival_time, 
-                                        finished_time = rcb.metric.finished_time, 
-                                        token_times = rcb.metric.token_times,
+        if len(selected_token_ids) == 0:
+            batch.step()
+            return EmptyFuture()
 
-                                        ttft = rcb.metric.token_times[0] - rcb.metric.arrival_time, 
-                                        tpot = [
-                                            rcb.metric.token_times[i] - rcb.metric.token_times[i-1]
-                                            for i in range(1, len(rcb.metric.token_times))
-                                        ], 
-                                    ))
-                        else:
-                            if rcb.output_token_params.is_stream_output:
-                                self.context.zmq_send.send_pyobj((rcb.request_id, self.tokenizer.decode([next_token_id])))
-                                if is_last_token:
-                                    self.context.zmq_send.send_pyobj((rcb.request_id, None))
-                            else:
-                                if is_last_token:
-                                    self.context.zmq_send.send_pyobj((rcb.request_id, self.tokenizer.decode(rcb.output_token_ids)))
-                                    self.context.zmq_send.send_pyobj((rcb.request_id, None))
+        token_time = time.perf_counter()
+        i = 0
+        for rcb, inst in batch:
+            if not isinstance(inst, Fill) or not inst.sample:
+                continue
 
-                    i += 1
+            next_token_id = sample_token_ids[i]
+            i += 1
 
-        for rcb, _ in contexts:
-            rcb.instructions.curr = rcb.instructions.curr.next
-        
+            rcb.metric.token_times.append(token_time)
+            rcb.output_token_ids.append(next_token_id)
+
+            if inst.sample_dst:
+                inst.sample_dst.token_ids = [next_token_id]
+
+            is_last_token: bool = rcb.is_finished()
+
+            # process output tokens
+            for output_token_processor in rcb.output_token_processors:
+                output_token_processor.append_token_id(next_token_id, is_last_token)
+            if rcb.output_token_params.print_output_text:
+                self.print_text_output_token_processor.append_token_id(next_token_id, is_last_token)
+
+            if not self.context.zmq_send or not rcb.output_token_params.zmq_output:
+                continue
+
+            if rcb.output_token_params.is_offline_output:
+                if rcb.output_token_params.is_stream_output:
+                    raise Exception('offline inference is not support stream output')
+                else:
+                    if is_last_token:
+                        self.context.zmq_send.send_pyobj(OfflineInferenceOutput(
+                            text = self.tokenizer.decode(rcb.output_token_ids),
+                            output_token_ids = rcb.output_token_ids, 
+                            arrival_time  = rcb.metric.arrival_time, 
+                            finished_time = rcb.metric.finished_time, 
+                            token_times = rcb.metric.token_times,
+
+                            ttft = rcb.metric.token_times[0] - rcb.metric.arrival_time, 
+                            tpot = [
+                                rcb.metric.token_times[i] - rcb.metric.token_times[i-1]
+                                for i in range(1, len(rcb.metric.token_times))
+                            ], 
+                        ))
+            else:
+                if rcb.output_token_params.is_stream_output:
+                    self.context.zmq_send.send_pyobj((rcb.request_id, self.tokenizer.decode([next_token_id])))
+                    if is_last_token:
+                        self.context.zmq_send.send_pyobj((rcb.request_id, None))
+                else:
+                    if is_last_token:
+                        self.context.zmq_send.send_pyobj((rcb.request_id, self.tokenizer.decode(rcb.output_token_ids)))
+                        self.context.zmq_send.send_pyobj((rcb.request_id, None))
+
+        batch.step()
         return EmptyFuture()
 
 
@@ -241,16 +250,16 @@ class BatchImageEmbedExecutor(Executor):
         self.dtype = str2dtype(config.model.dtype)
         self.device = str2device(config.model.device)
 
-    def execute(self, contexts: BatchRequest) -> Future:
-        if len(contexts) == 0:
+    def execute(self, batch: BatchRequest) -> Future:
+        if len(batch) == 0:
             return EmptyFuture()
-        for rcb, _ in contexts:
+        for rcb, _ in batch:
             if rcb.virtual_image_cache is None:
                 rcb.virtual_image_cache = self.block_manager.allocate_virtual_cache()
 
         new_cache_slots: list[int] = []
         batch_pixel_values: list[Tensor] = []
-        for rcb, inst in contexts:
+        for rcb, inst in batch:
             pixel_values = inst.pixel_values.to(self.dtype).to(self.device) # (n_images, n_channels, width, height)
             batch_pixel_values.append(pixel_values)
             inst.pixel_values = None
@@ -266,8 +275,7 @@ class BatchImageEmbedExecutor(Executor):
         token_cache = self.block_manager.get_layer_cache(layer_id=0)
         token_cache.set_caches(new_cache_slots, [image_tokens])
 
-        for rcb, _ in contexts:
-            rcb.instructions.curr = rcb.instructions.curr.next
+        batch.step()
 
         return EmptyFuture()
 
@@ -277,12 +285,12 @@ class MultiStreamsDecorator(Executor):
         self.stream = stream
         self.executor = executor
 
-    def execute(self, contexts: BatchRequest) -> Future:
-        if len(contexts) == 0:
+    def execute(self, batch: BatchRequest) -> Future:
+        if len(batch) == 0:
             return EmptyFuture()
 
         with torch.cuda.stream(self.stream):
-            self.executor.execute(contexts)
+            self.executor.execute(batch)
             self.stream.synchronize()
         return EmptyFuture()
 
@@ -292,11 +300,11 @@ class MultiThreadsDecorator:
         self.pool = pool
         self.executor = executor
 
-    def execute(self, contexts: BatchRequest) -> Future:
-        if len(contexts) == 0:
+    def execute(self, batch: BatchRequest) -> Future:
+        if len(batch) == 0:
             return EmptyFuture()
 
-        future = self.pool.submit(self.executor.execute, contexts)
+        future = self.pool.submit(self.executor.execute, batch)
 
         return ThreadPoolExecutorFuture(future)
 
@@ -321,9 +329,9 @@ class InstructionExecutor:
             self.pool = ThreadPoolExecutor(max_workers=1)
             self.image_embed_executor = MultiThreadsDecorator(self.pool, self.image_embed_executor)
 
-    def execute_fill(self, contexts: BatchRequest) -> Future:
+    def execute_fill(self, batch: BatchRequest) -> Future:
         tmp = []
-        for rcb, inst in contexts:
+        for rcb, inst in batch:
             tmp.append((rcb, inst))
             if not isinstance(inst, Fill):
                 continue
@@ -336,7 +344,7 @@ class InstructionExecutor:
                 if len(rcb.metric.decode_execute) == 0: # this is first decode
                     rcb.metric.decode_execute.append(time.perf_counter())
             
-        future = self.fill_executor.execute(contexts)
+        future = self.fill_executor.execute(batch)
 
         for rcb, inst in tmp:
             if not isinstance(inst, Fill):
@@ -353,17 +361,16 @@ class InstructionExecutor:
                     rcb.metric.decode_execute[1] = time.perf_counter()
         return future
 
-    def execute_image_embed(self, contexts: BatchRequest) -> Future:
-        for rcb, inst in contexts:
+    def execute_image_embed(self, batch: BatchRequest) -> Future:
+        for rcb, inst in batch:
             rcb.metric.encode_execute.append(time.perf_counter())
-        future = self.image_embed_executor.execute(contexts)
-        for rcb, inst in contexts:
+        future = self.image_embed_executor.execute(batch)
+        for rcb, inst in batch:
             rcb.metric.encode_execute.append(time.perf_counter())
         return future
 
-    def execute_empty(self, contexts: BatchRequest) -> Future:
-        if len(contexts) == 0:
+    def execute_empty(self, batch: BatchRequest) -> Future:
+        if len(batch) == 0:
             return EmptyFuture()
-        for rcb, _ in contexts:
-            rcb.instructions.curr = rcb.instructions.curr.next
+        batch.step()
         return EmptyFuture()

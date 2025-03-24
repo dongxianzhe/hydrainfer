@@ -18,6 +18,7 @@ class RequestProcessorConfig:
     ep_migrate: bool = False
     pd_migrate: bool = False
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
+    ignore_eos: bool = False
     debug: bool = False
 
 
@@ -194,11 +195,23 @@ class OutputTokenProcessorComponent(RequestProcessorComponent):
         self.config = config
 
     def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
-        # if request.sampling_params.eos_token_id is None:
-        #     request.sampling_params.eos_token_id = self.tokenizer.eos_token_id
+        rcb.request_id = request.request_id
         rcb.output_token_params = params.outout_token_parmas
         for output_token_processor in params.output_token_processors:
             rcb.register_output_token_processor(output_token_processor)
+        return rcb
+
+class SamplingParamsProcess(RequestProcessorComponent):
+    def __init__(self, config: RequestProcessorConfig):
+        self.config = config
+        model_factory = getModelFactory(self.config.model, ModelFactoryContext())
+        tokenizer = model_factory.getTokenizer()
+        self.eos_token_id = tokenizer.eos_token_id
+
+    def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
+        rcb.sampling_params = request.sampling_params
+        if not self.config.ignore_eos:
+            rcb.sampling_params.eos_token_ids.append(self.eos_token_id)
         return rcb
 
 class RequestProcessor:
@@ -211,6 +224,7 @@ class RequestProcessor:
             self.executor = ThreadPoolExecutor(max_workers=32)
 
         self.request_process_components: list[RequestProcessorComponent] = [
+            SamplingParamsProcess(config), 
             InstructionCreator(config), 
             ScenarioPredictor(config), 
             OutputTokenProcessorComponent(config), 
@@ -235,8 +249,6 @@ class RequestProcessor:
     
     def _request_process(self, request: Request, params: RequestProcessParameters):
         rcb = RequestControlBlock()
-        rcb.request_id = request.request_id
-        rcb.sampling_params = request.sampling_params
         for component in self.request_process_components:
             rcb = component.process(request, rcb, params)
         for observer in self.request_process_observer:

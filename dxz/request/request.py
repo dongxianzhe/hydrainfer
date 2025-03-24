@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 @dataclass
 class SamplingParameters:
     max_tokens: int = 50
-    eos_token_id: Optional[int] = None
+    eos_token_ids: list[int] = field(default_factory=list)
 
 
 @dataclass

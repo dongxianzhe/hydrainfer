@@ -3,4 +3,5 @@ disaggregate_embed_prefill: True
 ep_migrate: False
 pd_migrate: False
 debug: False
+ignore_eos: ${ignore_eos}
 model: ${model}

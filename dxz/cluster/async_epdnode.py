@@ -181,14 +181,17 @@ class AsyncEPDNode(AsyncEngine):
                 continue
             raise Exception(f'unsupported instrction {type(inst)}')
 
+        async_futures = []
+        async_futures.append(asyncio.create_task(self._execute_batch_migrate(batch_migrate)))
+        async_futures.append(asyncio.create_task(self._execute_pull_cache(batch_pull_cache)))
         futures = []
         futures.append(self.executor.execute_image_embed(batch_image_embed))
         futures.append(self.executor.execute_fill(batch_fill))
         futures.append(self.executor.execute_empty(batch_empty))
-        await self._execute_batch_migrate(batch_migrate)
-        await self._execute_pull_cache(batch_pull_cache)
+
         for future in futures:
             future.get()
+        asyncio.gather(*async_futures)
         if self.kv_cache_block_manager:
             self.kv_cache_block_manager.synchronize()
         if self.image_cache_block_manager:
@@ -243,22 +246,8 @@ class AsyncEPDNode(AsyncEngine):
 
         return new_virtual_cache
 
-    # def _migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
-    #     old_rcb = copy.deepcopy(rcb)
-    #     if rcb.virtual_kv_cache and self.has_kv_cache:
-    #         rcb.virtual_kv_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
-    #     else:
-    #         rcb.virtual_kv_cache = None
-    #     if rcb.virtual_image_cache and self.has_image_cache:
-    #         rcb.virtual_image_cache = self._migrate_virtual_cache(src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
-    #     else:
-    #         rcb.virtual_image_cache = None
-        
-    #     self.batch_scheduler.schedule_new(rcb)
-    #     src_node_actor_handle.free_migrate_request.remote(old_rcb)
-
-    async def _execute_pull_cache(self, contexts: BatchRequest):
-        for rcb, inst in contexts:
+    async def _execute_pull_cache(self, batch: BatchRequest):
+        for rcb, inst in batch:
             if len(rcb.metric.ep_transfer) == 0:
                 rcb.metric.ep_transfer.append(time.perf_counter())
             else:
@@ -292,11 +281,11 @@ class AsyncEPDNode(AsyncEngine):
         self.batch_scheduler.schedule_new(rcb)
         # self._migrate(src_node_actor_handle, rcb)
     
-    async def _execute_batch_migrate(self, contexts: BatchRequest):
+    async def _execute_batch_migrate(self, batch: BatchRequest):
         """ 1. sender send block table to receiver"""
-        if len(contexts) == 0:
+        if len(batch) == 0:
             return
-        for rcb, inst in contexts:
+        for rcb, inst in batch:
             rcb.step()
             loadbalancer = self.ep_loadbalancer if isinstance(inst, EPMigrate) else self.pd_loadbalancer
             node = loadbalancer.choice(key=rcb.scenario_type)

@@ -7,6 +7,7 @@ import functools
 from typing import Callable, Optional
 from dataclasses import dataclass, field
 from dxz.engine import BatchRequest, InstructionExecutor, InstructionListBuilder, ImageEmbed, RequestControlBlock, TextFill, Instruction, Future
+from dxz.request import SamplingParameters
 from dxz.memory import TokenCacheBlockManager
 from dxz.engine.output_token_processor import OutputTokenParams
 from dxz.model import ModelFactoryConfig, ModelFactoryContext, getModelFactory
@@ -52,19 +53,17 @@ class BatchSchedulerProfiler:
         inst_builder = InstructionListBuilder()
         for i in range(self.n_warmup_iter + self.n_profile_iter):
             inst_builder.append(copy.deepcopy(inst))
-        rcb = RequestControlBlock(
-            request_id=random.randint(1, 9999), 
-            instructions=inst_builder.build_instruction_list(), 
-            output_token_params=OutputTokenParams(zmq_output=False), 
-            sampling_params=None
-        )
+        rcb = RequestControlBlock()
+        rcb.request_id=random.randint(1, 9999)
+        rcb.instructions=inst_builder.build_instruction_list()
+        rcb.output_token_params=OutputTokenParams(zmq_output=False)
+        rcb.sampling_params=SamplingParameters()
         return rcb
     
     def _prepare_encode_batch(self, batch_size: int) -> BatchRequest:
         encode_inst = ImageEmbed(
             pixel_values = torch.randn(size=(1, 3, 336, 336), dtype=self.dtype, device=self.device),
             cache_ids = list(range(0, self.vision_config.num_image_tokens)), 
-            token_pruning_params = None,
         )
 
         batch = BatchRequest()
