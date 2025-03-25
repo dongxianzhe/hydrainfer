@@ -250,10 +250,20 @@ class AsyncEPDNode(AsyncEngine):
                 else:
                     self.batch_scheduler.schedule_running(rcb)
 
+    async def loop(self):
+        asyncio.gather(
+            asyncio.create_task(self.step_loop()), 
+            asyncio.create_task(self.perf_monitor_loop()), 
+        )
+
     async def step_loop(self):
         while True:
             await self.step()
             await asyncio.sleep(0.001)
+    
+    async def perf_monitor_loop(self):
+        while True:
+            await asyncio.sleep(10)
 
     async def pull_virtual_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
         block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager

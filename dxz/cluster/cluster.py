@@ -100,7 +100,7 @@ class Cluster:
         ray.get(objs)
 
         for node in self.nodes:
-            node.step_loop.remote()
+            node.loop.remote()
 
     def add_request(self, request: Request, params: RequestProcessParameters):
         has_image: bool = request.image is not None or request.image_base64 is not None
