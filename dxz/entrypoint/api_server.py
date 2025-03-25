@@ -53,7 +53,7 @@ class APIServer:
                 del self.async_streams[request_id]
                 output_stream.finish()
                 print(f'request {request_id} finished')
-            await asyncio.sleep(0.001)
+            await asyncio.sleep(0)
 
     def register(self, observer: RequestObserver):
         self.observers.append(observer)
