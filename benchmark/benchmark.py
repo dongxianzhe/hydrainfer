@@ -96,7 +96,7 @@ scenarios = [{
     'request_metadata_generator': lambda: {
         'n_output_tokens': 10, 
         'ttft_slo': 1,  
-        'tpot_slo': 0.04,
+        'tpot_slo': 0.08,
     }, 
     'is_simulated_scenario': False, 
 }, {
@@ -105,8 +105,18 @@ scenarios = [{
     'default' : 0, 
     'request_metadata_generator': lambda: {
         'n_output_tokens': 100, 
-        'ttft_slo': 1,  
-        'tpot_slo': 0.04,
+        'ttft_slo': 2,  
+        'tpot_slo': 0.08,
+    }, 
+    'is_simulated_scenario': False, 
+}, {
+    'argument' : '--vega', 
+    'help' : "whether add vega dataset", 
+    'default' : 0, 
+    'request_metadata_generator': lambda: {
+        'n_output_tokens': 100, 
+        'ttft_slo': 2,  
+        'tpot_slo': 0.08,
     }, 
     'is_simulated_scenario': False, 
 }
@@ -187,9 +197,27 @@ def prepare_requests(args: argparse.Namespace) -> SyntheticDataset:
                             )
                     population.append(TextCapsDatasetGenerator(dataset=dataset, metadata_generator=scenario['request_metadata_generator']))
                 if scenario_name == 'vega':
-                    raise Exception()
-                    dataset_request_generator = VEGADataset(path='vega')
-                    population.append(dataset_request_generator[scenario_name])
+                    dataset = VEGADataset(path='vega')
+                    class VEGADatasetGenerator:
+                        def __init__(self, dataset: VEGADataset, metadata_generator):
+                            self.dataset = dataset
+                            self.metadata_generator = metadata_generator
+
+                        def __call__(self) -> SimulatedDataEntry:
+                            question = random.choice(self.dataset)
+                            prompt = f"<image>{question.context}\n{question.question}\n"
+                            metadata = self.metadata_generator()
+                            return SimulatedDataEntry(
+                                prompt = prompt, 
+                                images = [question.image], 
+                                image_base64 = [question.image_base64], 
+                                n_prompt_tokens = len(tokenizer.encode(prompt)), 
+                                n_output_tokens = metadata['n_output_tokens'], 
+                                ttft_slo = metadata['ttft_slo'], 
+                                tpot_slo = metadata['tpot_slo'], 
+                            )
+                    dataset_request_generator = VEGADatasetGenerator(dataset=dataset, metadata_generator=scenario['request_metadata_generator'])
+                    population.append(dataset_request_generator)
     assert len(weights) > 0, "No scenario is selected"
             
     request_generators = random.choices(population=population, weights=weights, k=args.num_requests)
@@ -228,11 +256,6 @@ def log_result(args: argparse.Namespace, dataset: SyntheticDataset, results: lis
 
     if len(results) > 1:
         print(f'==================== slo analysis ====================')
-        data = [
-            ["Alice", 24, "Engineer"],
-            ["Bob", 30, "Doctor"],
-            ["Charlie", 22, "Artist"]
-        ]
         headers = ["request_rate", "ttft_slo_attainment", "tpot_slo_attainment", "slo_attainment"]
         data = []
         for request_rate, result in zip(args.request_rate, results):
@@ -434,18 +457,20 @@ async def dxz_server_proxy(args: argparse.Namespace, entry: SimulatedDataEntry, 
 
 
 async def online_benchmark(args: argparse.Namespace, dataset: SyntheticDataset, server_proxy, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
-    pbar = tqdm(total = len(dataset))
+    send_pbar = tqdm(total = len(dataset), desc='send')
+    recv_pbar = tqdm(total = len(dataset), desc='recv')
     metric_builder = BenchmarkMetricsBuilder()
 
     start = time.perf_counter()
     metric_builder.start()
     tasks = []
     async for (i, entry) in poisson_process_request_generator(dataset=dataset, request_rate=request_rate):
-        tasks.append(asyncio.create_task(server_proxy(args, entry, pbar=pbar, client=client)))
+        tasks.append(asyncio.create_task(server_proxy(args, entry, pbar=recv_pbar, client=client)))
+        send_pbar.update(1)
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
 
     metric_builder.end()
-    pbar.close()
+    recv_pbar.close()
     for output in outputs:
         metric_builder.append(
             input_len = output.entry.n_prompt_tokens, 
