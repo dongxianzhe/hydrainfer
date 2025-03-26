@@ -1,4 +1,6 @@
+from collections import deque
 import time
+import queue
 from queue import Queue
 from typing import Literal, Optional
 from dataclasses import dataclass, fields
@@ -11,6 +13,7 @@ class BatchSchedulerConfig:
     batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
+    max_overload_requests: int = 0
     chunked_prefill: bool = False
     max_batch_fill_tokens: int = 1024
     max_batch_embed_images: int = 3
@@ -38,7 +41,9 @@ class BatchScheduler:
         else:
             self.token_budgets = self.config.max_batch_fill_tokens
 
-        self.waiting = Queue()
+        # self.waiting = Queue()
+        self.waiting = deque()
+
         self.running: list[RequestControlBlock] = []
         self.step_cnt = 0
         self.sid_allocator = IncreaingAllocator(first_value=1)
@@ -79,7 +84,11 @@ class BatchScheduler:
 
     def schedule_new(self, rcb: RequestControlBlock):
         rcb.sid = self.sid_allocator.allocate()
-        self.waiting.put(rcb)
+        if isinstance(rcb.current_instruction(), PullCache):
+            self.waiting.appendleft(rcb)
+        else:
+            self.waiting.append(rcb)
+
         self._stamp_queuing_begin_time(rcb)
 
     def schedule_running(self, rcb: RequestControlBlock):
@@ -91,19 +100,27 @@ class BatchScheduler:
         schedule_time = time.perf_counter()
         # 1. get enough requests to participate in the batch
         if self.config.batch_policy == 'nobatch':
+            raise NotImplementedError
             if len(self.running) == 0:
                 if not self.waiting.empty():
                     rcb = self.waiting.get()
                     self.schedule_running(rcb)
         elif self.config.batch_policy == 'requestlevel':
+            raise NotImplementedError
             if len(self.running) == 0:
                 while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
                     rcb = self.waiting.get()
                     self.schedule_running(rcb)
         elif self.config.batch_policy == 'continuousbatch':
-            while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
-                rcb = self.waiting.get()
+            while len(self.running) < self.config.max_running_requests - self.migrating_cnt and len(self.waiting) > 0:
+                rcb = self.waiting.popleft()
                 self.schedule_running(rcb)
+            # we are risking dead pull cache lock when ED Node' all requests are waiting P Node pull and P Node's all requests are waiting ED Node pull cache
+            # so we need to limit the number of new requests
+            while len(self.running) < self.config.max_running_requests - self.migrating_cnt + self.config.max_overload_requests and len(self.waiting) > 0 and isinstance(self.waiting[0].current_instruction(), PullCache):
+                rcb = self.waiting.popleft()
+                self.schedule_running(rcb)
+
         if len(self.running) == 0:
             return []
 

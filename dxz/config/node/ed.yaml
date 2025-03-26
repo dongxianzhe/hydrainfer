@@ -7,6 +7,8 @@ enable_decode: True
 request_processor:
   ep_migrate: True
   pd_migrate: True
+batch_scheduler:
+  max_overload_requests: 24
 batch_scheduler_profiler:
   tpot_slo: 0.08
   profile_image_budgets: True
