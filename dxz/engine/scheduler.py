@@ -53,7 +53,7 @@ class BatchScheduler:
     def migrating_acquire(self):
         # migrating_acquire and migrating_release are used to count how many request need to be pulled
         # we need this count because avoid sender OOM when there are too many waiting migrate requests and running requests
-        assert self.migrating_cnt < self.config.max_running_requests, f'invalid acquire'
+        assert self.migrating_cnt < self.config.max_running_requests + self.config.max_overload_requests, f'invalid acquire'
         self.migrating_cnt += 1
 
     def migrating_release(self):

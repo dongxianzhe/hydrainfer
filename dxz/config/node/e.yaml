@@ -4,6 +4,11 @@ defaults:
 enable_encode: True
 enable_prefill: False
 enable_decode: False
+image_cache:
+  n_blocks: 6144
+batch_scheduler:
+  max_running_requests: 6144
+  max_overload_requests: 0
 request_processor:
   ep_migrate: True
   pd_migrate: True

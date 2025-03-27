@@ -5,7 +5,7 @@ enable_encode: True
 enable_prefill: True
 enable_decode: False
 request_processor:
-  ep_migrate: False
+  ep_migrate: True
   pd_migrate: True
 batch_scheduler:
   max_overload_requests: 24
