@@ -1,3 +1,4 @@
+import os
 import sys
 import time
 import random
@@ -128,7 +129,9 @@ def prepare_requests(args: argparse.Namespace) -> SyntheticDataset:
     if args.model_path is None:
         args.model_path = args.model_name
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    simulated_dataset = SimulatedDataset(tokenizer, image_path='./dataset/cherry_blossom.jpg')
+    script_path = os.path.dirname(os.path.abspath(__file__))
+    image_path = os.path.join(script_path, 'dataset', 'cherry_blossom.jpg')
+    simulated_dataset = SimulatedDataset(tokenizer, image_path=image_path)
 
     class SimulatedRequestGenerator:
         def __init__(self, simulated_dataset: SimulatedDataset, metadata_generator):
