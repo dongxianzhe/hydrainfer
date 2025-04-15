@@ -1,4 +1,5 @@
 multi_thread_request_process: True
+num_request_process_workers: 1
 disaggregate_embed_prefill: True
 ep_migrate: False
 pd_migrate: False

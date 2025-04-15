@@ -14,6 +14,7 @@ from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, get
 @dataclass
 class RequestProcessorConfig:
     multi_thread_request_process: bool = False
+    num_request_process_workers: int = 32
     disaggregate_embed_prefill: bool = True
     ep_migrate: bool = False
     pd_migrate: bool = False
@@ -221,7 +222,7 @@ class RequestProcessor:
 
         if config.multi_thread_request_process:
             self.lock = threading.Lock()
-            self.executor = ThreadPoolExecutor(max_workers=32)
+            self.executor = ThreadPoolExecutor(max_workers=config.num_request_process_workers)
 
         self.request_process_components: list[RequestProcessorComponent] = [
             SamplingParamsProcess(config), 
