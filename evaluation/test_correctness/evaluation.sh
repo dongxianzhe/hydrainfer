@@ -33,6 +33,7 @@ conda run -n dxz_dev --no-capture-output \
     --port $port \
     --result-path=$RESULT_PATH/result.json \
     --request-rate $REQUEST_RATES \
+    --backend=ours \
     --textcaps=1
 
 clean_up

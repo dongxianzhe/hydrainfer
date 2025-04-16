@@ -13,6 +13,7 @@ from dataclasses import dataclass, field, asdict
 from transformers import AutoTokenizer
 from metric import OnlineRequestOutput, BenchmarkResult, BenchmarkMetrics, BenchmarkMetricsBuilder, MethodResults
 from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
+from backend import get_server_proxy
 
 
 def log_result(args: argparse.Namespace, dataset: SyntheticDataset, method_results: MethodResults):
@@ -43,39 +44,15 @@ def async_wrapper(func):
     return wrapper
 
 
-async def server_proxy(args: argparse.Namespace, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, client: AsyncOpenAI) -> OnlineRequestOutput:
-    send_pbar.update(1)
-    output = OnlineRequestOutput(entry=entry)
-    output.start_time = time.perf_counter()
-    response = await client.chat.completions.create(
-        messages = [{
-            "role" : "user", 
-            "content" : f"<image>\n{entry.prompt}\n", 
-            "image" : entry.images[0],
-        }], 
-        max_tokens=1024, 
-        model = args.model_path,
-        stream=True, 
-    )
-    output.success = True
-    async for chunk in response:
-        context = chunk.choices[0].delta.content
-        if output.output_text != "":
-            output.output_text += " "
-        output.output_text += context
-        output.token_times.append(time.perf_counter())
-    output.prompt = entry.prompt
-    recv_pbar.update(1)
-    return output
-
-
 async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
     send_pbar = tqdm(total = len(dataset), desc='send')
     recv_pbar = tqdm(total = len(dataset), desc='recv')
+    server_proxy = get_server_proxy(args.backend)
+
     start_time = time.perf_counter()
     tasks = []
     async for (i, entry) in poisson_process_request_generator(dataset=dataset, request_rate=request_rate):
-        tasks.append(asyncio.create_task(server_proxy(args, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, client=client)))
+        tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, client=client)))
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
     end_time = time.perf_counter()
     recv_pbar.close()
@@ -129,6 +106,13 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(f'--model', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
     parser.add_argument(f'--model-path', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
+    parser.add_argument(
+        "--backend",
+        type=str,
+        choices=["ours", "vllm"],
+        required=True, 
+        help="choose the backend"
+    )
     parser.add_argument(
         "--num-requests",
         type=int,
