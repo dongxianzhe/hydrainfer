@@ -1,8 +1,8 @@
 SCRIPT=$(readlink -f "$0")
 SCRIPT_PATH=$(dirname "$SCRIPT")
-OUR_ROOT_DIR=$(realpath "$SCRIPT_PATH/../../")
-RESULT_DIR="$SCRIPT_PATH/result"
-mkdir -p $RESULT_DIR
+OUR_ROOT_PATH=$(realpath "$SCRIPT_PATH/../../")
+RESULT_PATH="$SCRIPT_PATH/result"
+mkdir -p $RESULT_PATH
 
 clean_up() {
     echo "Cleaning up..."

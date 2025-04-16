@@ -27,3 +27,4 @@ config/outputs/
 outputs/
 /benchmark/vega/IITC_4k_test.json
 /benchmark/vega/imgs.zip
+**/result
