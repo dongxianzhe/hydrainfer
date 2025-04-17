@@ -39,15 +39,17 @@ class LlamaSdpaAttention(nn.Module):
         ))
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
-        query = self.q_proj(hidden_states)
-        key   = self.k_proj(hidden_states)
-        value = self.v_proj(hidden_states)
-        query = query.view(-1, self.config.num_attention_heads, self.config.head_dim)
-        key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim)
-        value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim)
-        query, key = self.rotary_emb(query, key, position_ids)
-        hidden_states = self.attention(query, key, value, attention_param).o
-        return self.o_proj(hidden_states)
+        # hidden_states (n_tokens, hidden_size)
+        # position_ids (n_tokens, )
+        query = self.q_proj(hidden_states) # (n_tokesn, hidden_size)
+        key   = self.k_proj(hidden_states) # (n_tokesn, hidden_size)
+        value = self.v_proj(hidden_states) # (n_tokesn, hidden_size)
+        query = query.view(-1, self.config.num_attention_heads, self.config.head_dim) # (n_tokens, n_qo_heads, head_size)
+        key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
+        value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
+        query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
+        hidden_states = self.attention(query, key, value, attention_param).o # (n_tokens, hidden_size)
+        return self.o_proj(hidden_states) # (n_tokens, hidden_size)
 
 class LlamaMLP(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -57,6 +59,7 @@ class LlamaMLP(nn.Module):
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
     
     def forward(self, hidden_states: Tensor) -> Tensor:
+        # hidden_states (n_tokens, hidden_size)
         down_proj = self.down_proj(silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
         return down_proj
 
@@ -81,11 +84,12 @@ class LlamaDecoderLayer(nn.Module):
         self.post_attention_layernorm = LlamaRMSNorm(config)
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id])
-        hidden_states = residual + hidden_states
+        residual = hidden_states # (n_tokens, hidden_size)
+        hidden_states = self.input_layernorm(hidden_states) # (n_tokens, hidden_size)
+        hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id]) # (n_tokens, hidden_size)
+        hidden_states = residual + hidden_states # (n_tokens, hidden_size)
 
+        # if it is last layer we discared tokens which is not sampled to reduce redundent computation in the last ffn layer
         if not model_params.all_sequences_decode and self.layer_id == self.n_layers - 1:
             hidden_states = hidden_states[model_params.selected_token_ids, :]
 
@@ -121,12 +125,11 @@ class LlamaForCausalLM(nn.Module):
         self.model = LlamaModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
-        # input_ids is token_ids or input embeds
-        hidden_state = self.model(input_ids, position_ids, model_params)
-        logits = self.lm_head(hidden_state)
-        sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False)
-        # sample_token_ids = torch.argmax(logits[model_params.selected_token_ids, :], dim=-1, keepdim=False)
+    def forward(self, input_ids_or_input_embeds: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        # input_ids (n_tokens, ) or input embeds (n_tokens, hidden_size)
+        hidden_state = self.model(input_ids_or_input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
+        logits = self.lm_head(hidden_state) # (n_selected_tokens, hidden_size)
+        sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False) # (n_selected_tokens, )
         return sample_token_ids
     
     @classmethod

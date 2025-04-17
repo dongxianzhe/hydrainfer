@@ -26,15 +26,8 @@ conda deactivate
 conda env remove -n dxz_dev
 ```
 
-You can run offline benchmark with the following code:
+You can use script to test inference correctness:
 ```
-cd benchmark
-python offline_inference_vision_language_benchmark.py --backend=dxz --num-prompts=10
-```
-
-You can run online benchmark with the following code:
-```
-cd benchmark
-python dxz.entrypoint.api_server
-python online_inference_vision_language_benchmark.py --backend=dxz --num-prompts=10
+cd evaluation/test_correctness
+./evalulation.sh
 ```

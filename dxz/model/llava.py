@@ -11,6 +11,7 @@ from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageMode
 from dxz.model.downloader import download_hf_model
 from dxz.utils.torch_utils import str2device, str2dtype
 
+
 class LlavaMultiModalProjector(nn.Module):
     def __init__(self, config: LlavaConfig):
         super().__init__()
@@ -24,6 +25,7 @@ class LlavaMultiModalProjector(nn.Module):
         hidden_states = self.act(hidden_states)
         hidden_states = self.linear_2(hidden_states)
         return hidden_states
+
 
 class LlavaForConditionalGeneration(nn.Module):
     def __init__(self, config: LlavaConfig):
@@ -60,6 +62,7 @@ class LlavaForConditionalGeneration(nn.Module):
         assert len(loaded_set) == len(state_dict)
 
         return model
+
 
 class LlavaVisionModel(VisionModel):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
@@ -98,11 +101,12 @@ class LlavaVisionModel(VisionModel):
     
     def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
         # pixel_values (n_images, n_channels, height, width)
-        hidden_states, output = self.vision_tower(pixel_values, self.vision_feature_layer, model_params)
-        selected_image_feature = hidden_states[:, 1:]
-        image_features = self.multi_modal_projector(selected_image_feature)
+        hidden_states, output = self.vision_tower(pixel_values, self.vision_feature_layer, model_params) # (n_images, num_tokens_per_images, hidden_size of vision model)
+        selected_image_feature = hidden_states[:, 1:] # (n_images, num_tokens_per_images - 1, hidden_size of vision model) evict first class token of each image
+        image_features = self.multi_modal_projector(selected_image_feature) # (n_images, num_tokens_per_images - 1, hidden_size of language model)
         output.image_features = image_features
         return output
+
 
 class LlavaLanguageModel(LanguageModel):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
@@ -126,24 +130,26 @@ class LlavaLanguageModel(LanguageModel):
                         state_dict[name.removeprefix('language_model.')].copy_(weight)
                         loaded_set.add(name)
 
+        # to ensure that all tensor data type are correct such as non persistent rope inv freq, becuase it is created with float dtype specifically and will not be affected by set_default_dtype
         self.language_model.to(dtype)
         self.language_model.eval()
         # 4. verify
         assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
     
     def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
-        # input_ids      (n_tokens + m_tokens) n_tokens is text tokens, m_tokens is n_image * 576, n_image is number of image
-        # image_features (m_tokens, hidden_size)
-        # position_ids (n_tokens + m_tokens)
+        # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
+        # image_features (n_text_tokens, hidden_size)
+        # position_ids (n_text_tokens + n_image_tokens)
         input_embeds = self.language_model.model.embed_tokens(input_ids)
         if image_features is not None:
             image_overwrite_mask = input_ids == self.image_token_id
             input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
-        sample_token_ids = self.language_model(input_embeds, position_ids, model_params)
+        sample_token_ids = self.language_model(input_embeds, position_ids, model_params) # (n_selected_tokens, )
 
         return LanguageModelOutput(
             sample_token_ids = sample_token_ids,
         )
+
 
 class LlavaModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):

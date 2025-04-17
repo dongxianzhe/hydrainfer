@@ -266,9 +266,6 @@ class FlashAttentionCausalGroupedQueryPageAttentionHandler(nn.Module):
 
         kv_cache = attention_params.kv_cache
         key_cache, value_cache = kv_cache.get_kv_cache()
-        if attention_params.flash_infer_handler:
-            output = attention_params.flash_infer_handler.run(query, (key_cache, value_cache))
-            return output.view(-1, self.n_qo_heads * self.head_dim)
 
         output=torch.empty_like(query)
         mha_varlen_fwd(

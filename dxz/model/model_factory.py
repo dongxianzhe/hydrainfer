@@ -68,9 +68,6 @@ class ModelFactoryContext:
 
 
 def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) -> ModelFactory:
-    import copy
-    dtype = str2dtype(config.dtype)
-    device = str2device(config.device)
     if config.name == "llava-hf/llava-1.5-7b-hf":
         from dxz.model.llava import LlavaModelFactory
         return LlavaModelFactory(config, context)

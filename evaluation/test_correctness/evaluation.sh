@@ -17,6 +17,7 @@ RAY_DEDUP_LOGS=0 \
     model.name=$MODEL \
     model.path=$MODEL_PATH \
     cluster=single \
+    cluster.epdnode.kv_cache.n_blocks=512 \
     apiserver.host=$host \
     apiserver.port=$port \
     > $RESULT_PATH/api_server.log 2>&1 &
