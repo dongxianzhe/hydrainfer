@@ -29,7 +29,7 @@ internode_migrate_backend: "nccl"
 log_latency_breakdown: false
 ignore_eos: False
 
-hydra:
-  run:
-    dir: .
-  output_subdir: null
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: "hydra_log"

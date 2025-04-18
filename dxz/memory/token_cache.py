@@ -6,7 +6,11 @@ from dataclasses import dataclass, field
 from typing import Optional, Literal
 from dxz._C.data_transfer.block_migration import get_ipc_mem_handle
 from dxz._C.data_transfer import block_migration
-from dxz._C.kernel.cache_kernels import set_image_cache
+try:
+    from dxz._C.kernel.cache_kernels import set_image_cache
+except ImportError:
+    set_image_cache = None
+    print('set_image_cache import failed')
 from dxz.memory import BlockAllocator
 from dxz.utils.allocate import IncreaingAllocator
 from dxz.utils.torch_utils import str2dtype, str2device

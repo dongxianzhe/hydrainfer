@@ -11,6 +11,12 @@ pip install -r requirements.txt
 git submodule init
 git submodule update
 pip install -e .
+
+conda activate dxz_dev
+mkdir build
+cd build
+cmake .. -GNinja -DUSE_CXX11_ABI=OFF
+cmake --build . --target block_migration activation position_embedding kv_cache_kernels cache_kernels norm 
 ```
 
 If you want it to run faster, you may try to install the following library, or you may skip them.
@@ -18,6 +24,11 @@ If you want it to run faster, you may try to install the following library, or y
 pip install flashinfer==0.1.6+cu124torch2.4 -i https://flashinfer.ai/whl/cu124/torch2.4
 pip install flash-attn==2.7.0.post2
 ```
+If you want it to run faster, you may try to build the following library, or you may skip them.
+```
+cmake --build . --target flash_attn 
+```
+
 
 You can uninstall it with the following code:
 ```
@@ -29,5 +40,5 @@ conda env remove -n dxz_dev
 You can use script to test inference correctness:
 ```
 cd evaluation/test_correctness
-./evalulation.sh
+./evaluation.sh
 ```
