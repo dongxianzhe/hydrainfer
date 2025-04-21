@@ -47,7 +47,7 @@ async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pba
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": f"data:image/jpeg;base64,{entry.images[0]}"
+                        "url": f"data:image/png;base64,{entry.images[0]}"
                     },
                 },
             ],
@@ -70,6 +70,6 @@ async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pba
 def get_server_proxy(backend: str):
     if backend == 'ours':
         return our_server_proxy
-    if backend == 'vllm':
+    if backend in ['vllm', 'tgi']:
         return vllm_server_proxy
     raise Exception('invalid server proxy')
