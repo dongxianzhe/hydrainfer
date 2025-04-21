@@ -10,6 +10,7 @@ clean_up() {
     pgrep -f "vllm serve" >/dev/null && pgrep -f "vllm serve" | xargs kill
     pgrep -f "dxz.entrypoint.entrypoint" >/dev/null && pgrep -f "dxz.entrypoint.entrypoint" | xargs kill
     pgrep -f "text-generation-launcher" >/dev/null && pgrep -f "text-generation-launcher" | xargs kill
+    pgrep -f "sglang.launch_server" >/dev/null && pgrep -f "sglang.launch_server" | xargs kill
 }
 trap clean_up EXIT
 
