@@ -27,6 +27,7 @@ class BenchmarkResult:
 @dataclass
 class MethodResults:
     method_name: str
+    model: str
     results: list[BenchmarkResult] = field(default_factory=list)
 
 

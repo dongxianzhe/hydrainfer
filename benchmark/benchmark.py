@@ -81,6 +81,7 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
         results.append(result)
     return MethodResults(
         method_name = args.method_name, 
+        model=args.model_path, 
         results = results, 
     )
 
@@ -109,7 +110,7 @@ if __name__ == '__main__':
     parser.add_argument(
         "--backend",
         type=str,
-        choices=["ours", "vllm", 'tgi'],
+        choices=["ours", "vllm", 'tgi', 'sglang'],
         required=True, 
         help="choose the backend"
     )

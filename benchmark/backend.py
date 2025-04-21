@@ -60,7 +60,8 @@ async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pba
     output.success = True
     async for chunk in response:
         context = chunk.choices[0].delta.content
-        output.output_text += context
+        if isinstance(context, str):
+            output.output_text += context
         output.token_times.append(time.perf_counter())
     output.prompt = entry.prompt
     recv_pbar.update(1)
@@ -71,5 +72,7 @@ def get_server_proxy(backend: str):
     if backend == 'ours':
         return our_server_proxy
     if backend in ['vllm', 'tgi']:
+        return vllm_server_proxy
+    if backend == 'sglang':
         return vllm_server_proxy
     raise Exception('invalid server proxy')

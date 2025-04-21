@@ -3,13 +3,25 @@
 source ../common.sh
 
 export CUDA_VISIBLE_DEVICES=2
-MODEL="llava-hf/llava-1.5-7b-hf"
+# MODEL="llava-hf/llava-1.5-7b-hf"
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
-MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
+
+# MODEL="llava-hf/llava-v1.6-vicuna-7b-hf"
+# MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
+
+# MODEL="liuhaotian/llava-v1.5-7b"
+# MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/liuhaotian/llava-v1.5-7b"
+
+MODEL="lmms-lab/llama3-llava-next-8b"
+MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/lmms-lab/llama3-llava-next-8b"
+
+# MODEL="Qwen/Qwen2.5-VL-7B-Instruct"
+# MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/Qwen2.5-VL-7B-Instruct"
 # REQUEST_RATES="1 2 3 4 5 6 7 8 9 10"
 # NUM_REQUESTS=200
 REQUEST_RATES="5"
 NUM_REQUESTS=50
+CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
 host="127.0.0.1"
 port="8888"
 
@@ -22,8 +34,8 @@ scenarios=(
 )
 
 methods=(
-    "tgi"
-    # "sglang"
+    # "tgi"
+    "sglang"
     # "llama"
     "vllm"
     # "ours"
@@ -40,7 +52,7 @@ for method in "${methods[@]}"; do
             --enable-chunked-prefill \
             --no-enable-prefix-caching \
             --enforce-eager \
-            --chat-template=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja \
+            --chat-template=$CHAT_TEMPLATE_PATH \
             > $RESULT_PATH/${method}_api_server.log 2>&1 &
     elif [ "$method" == "ours" ]; then
         RAY_DEDUP_LOGS=0 \
@@ -63,6 +75,14 @@ for method in "${methods[@]}"; do
             --hostname=$host \
             --port=$port \
             --payload-limit=200000000 \
+            > $RESULT_PATH/${method}_api_server.log 2>&1 &
+    elif [ "$method" == "sglang" ]; then
+        conda run -n sglang --no-capture-output \
+            python -m sglang.launch_server \
+            --host=$host \
+            --port=$port \
+            --model-path=$MODEL_PATH \
+            --chat-template=$CHAT_TEMPLATE_PATH \
             > $RESULT_PATH/${method}_api_server.log 2>&1 &
     else
         echo "Unsupported method: $method"
