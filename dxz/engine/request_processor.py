@@ -9,6 +9,7 @@ from typing import Optional
 from dxz.request.request import Request, RequestMetaData
 from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache, EPMigrate, PDMigrate
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
+from dxz.model import ImageTokenCaculator
 
 
 @dataclass
@@ -53,41 +54,51 @@ class InstructionCreator(RequestProcessorComponent):
         language_model_config = model_factory.getLanguageModelConfig()
         vision_model_config = model_factory.getVisionModelConfig()
         self.image_token_id = vision_model_config.image_token_id
-        self.num_image_tokens = vision_model_config.num_image_tokens
+        self.num_image_tokens = vision_model_config.num_image_tokens # number of image tokens per patch
+        self.image_token_caculator: Optional[ImageTokenCaculator]  = vision_model_config.image_token_caculator
         self.n_layers = language_model_config.n_layers
 
-    def _insert_image_tokens(self, token_ids: list[int], num_image_tokens):
+    def _insert_image_tokens(self, token_ids: list[int], images_size: list[tuple[int, int]], num_image_tokens, image_token_caculator: Optional[ImageTokenCaculator]) -> tuple[list[int], int]:
         # replace each image_token_id with num_image_tokens image_token_id
         inserted_token_ids: list[int] = []
+        image_id = -1
+        total_num_image_tokens = 0
         for token_id in token_ids:
             if token_id == self.image_token_id:
+                image_id += 1
+                if image_token_caculator is not None:
+                    num_image_tokens = image_token_caculator.get_num_image_tokens(image_size=images_size[image_id])
+                total_num_image_tokens += num_image_tokens
                 inserted_token_ids.extend([self.image_token_id] * (num_image_tokens - 1))
             inserted_token_ids.append(token_id)
-        return inserted_token_ids 
+        return inserted_token_ids, total_num_image_tokens
 
     def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
         # 1. images
         image: Optional[Image.Image] = None
-        images_tensor: Optional[Tensor] = None # (n_images, n_channels, width, height)
+        images_tensor: Optional[Tensor] = None 
+        images_size: list[tuple[int, int]] = []
         if request.image_base64 is not None:
             image = Image.open(io.BytesIO(base64.b64decode(request.image_base64)))
         if image is None and request.image:
             image = request.image
         if image is not None:
+            width, height = image.size
+            image_size = (height, width)
+            images_size.append(image_size)
             images_tensor = self.processor(
                 text="", 
                 images = image, 
                 return_tensors="pt"
-            )['pixel_values']
+            )['pixel_values'] # llava (n_images, n_channels, height, width) or llavanext (n_images, n_patches, n_channels, height, width)
         n_pixel_values_images = images_tensor.shape[0] if images_tensor is not None else 0
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt)
         n_token_ids_images = token_ids.count(self.image_token_id)
         assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
-        token_ids = self._insert_image_tokens(token_ids, self.num_image_tokens)
+        token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.num_image_tokens, self.image_token_caculator)
         n_images = n_token_ids_images
         n_prompt_tokens = len(token_ids)
-        n_image_tokens = n_pixel_values_images * self.num_image_tokens
         n_text_tokens = n_prompt_tokens - n_image_tokens
         token_ids = token_ids + [-1] * (request.sampling_params.max_tokens - 1) # -1 will be set when executing
         # 3. image_overwrite_mask
@@ -101,10 +112,11 @@ class InstructionCreator(RequestProcessorComponent):
         builder = InstructionListBuilder()
         if images_tensor is not None:
             if self.config.disaggregate_embed_prefill:
-                image_token_cache_ids = list(range(n_pixel_values_images * self.num_image_tokens))
+                image_token_cache_ids = list(range(n_image_tokens))
                 embed = ImageEmbed(
                     pixel_values = images_tensor,
                     cache_ids=image_token_cache_ids, 
+                    images_size=images_size, 
                 )
                 prefill = ImageEmbedFill(
                     image_token_cache_ids=image_token_cache_ids, 
@@ -121,6 +133,7 @@ class InstructionCreator(RequestProcessorComponent):
                     builder.append(PullCache())
                 builder.append(prefill)
             else:
+                assert self.image_token_caculator is None, "dynamic num image token is not support in image fill"
                 prefill = ImageFill(
                     pixel_values = images_tensor, 
                     token_ids = token_ids[:n_prompt_tokens], 

@@ -2,7 +2,7 @@ import os
 import safetensors.torch
 import torch
 from torch import nn, Tensor
-from transformers import LlavaConfig, AutoProcessor, AutoTokenizer
+from transformers import LlavaConfig, AutoProcessor, AutoTokenizer, AutoConfig
 from typing import Optional
 from dxz.model.llama import LlamaForCausalLM
 from dxz.model.clip import CLIPVisionModel
@@ -68,7 +68,7 @@ class LlavaVisionModel(VisionModel):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
         # 1. config
-        config = LlavaConfig.from_pretrained(model_path)
+        config = AutoConfig.from_pretrained(model_path)
         self.vision_feature_layer = config.vision_feature_layer
         # 2. create model
         torch.set_default_dtype(dtype)
@@ -112,7 +112,7 @@ class LlavaLanguageModel(LanguageModel):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
         # 1. config
-        config = LlavaConfig.from_pretrained(model_path)
+        config = AutoConfig.from_pretrained(model_path)
         self.image_token_id = config.image_token_index
         # 2. create model
         torch.set_default_dtype(dtype)
@@ -170,7 +170,7 @@ class LlavaModelFactory(ModelFactory):
         return model
 
     def getVisionModelConfig(self) -> VisionModelConfig:
-        config_ref = LlavaConfig.from_pretrained(self.path)
+        config_ref = AutoConfig.from_pretrained(self.path)
         config = VisionModelConfig(
             image_token_id = config_ref.image_token_index, 
             num_image_tokens = config_ref.image_seq_length, 
@@ -178,7 +178,7 @@ class LlavaModelFactory(ModelFactory):
         return config
 
     def getLanguageModelConfig(self) -> LanguageModelConfig:
-        config_ref = LlavaConfig.from_pretrained(self.path)
+        config_ref = AutoConfig.from_pretrained(self.path)
         config = LanguageModelConfig(
             n_layers = config_ref.text_config.num_hidden_layers, 
             max_position_embeddings = config_ref.text_config.max_position_embeddings, 

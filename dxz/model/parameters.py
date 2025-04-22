@@ -2,11 +2,13 @@ import torch
 from torch import Tensor
 from dataclasses import dataclass
 from dxz.layer.causal_attention import AttentionParameters
+from typing import Optional
 
 
 @dataclass
 class VisionModelParameters:
     return_last_layer_attention: bool = False
+    original_image_sizes: Optional[list[tuple[int, int]]] = None # used in llavanext image unpadding
 
 
 @dataclass

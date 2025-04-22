@@ -157,10 +157,12 @@ class ImageEmbed(Instruction):
         self, 
         pixel_values: Tensor, 
         cache_ids: list[int], 
+        images_size: list[tuple[int, int]], 
     ):
         super().__init__()
         self.pixel_values = pixel_values
         self.cache_ids = cache_ids
+        self.images_size = images_size
 
     def __repr__(self):
         return "IE"

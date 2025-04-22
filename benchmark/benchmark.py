@@ -89,7 +89,6 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
 def main(args: argparse.Namespace):
     random.seed(args.seed)
     np.random.seed(args.seed)
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
     dataset = SyntheticDataset(
         num_requests = args.num_requests, 
         textcaps     = args.textcaps, 

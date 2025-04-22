@@ -61,9 +61,21 @@ class BatchSchedulerProfiler:
         return rcb
     
     def _prepare_encode_batch(self, batch_size: int) -> BatchRequest:
+        image_size = self.vision_config.image_size
+        if self.vision_config.n_patches_per_images:
+            pixel_values_shape = (1, self.vision_config.n_patches_per_images, 3, image_size, image_size)
+        else:
+            pixel_values_shape = (1, 3, image_size, image_size)
+
+        if self.vision_config.image_token_caculator is not None:
+            num_image_tokens = self.vision_config.image_token_caculator.get_num_image_tokens(image_size=(image_size, image_size))
+        else:
+            num_image_tokens = self.vision_config.num_image_tokens
+
         encode_inst = ImageEmbed(
-            pixel_values = torch.randn(size=(1, 3, 336, 336), dtype=self.dtype, device=self.device),
-            cache_ids = list(range(0, self.vision_config.num_image_tokens)), 
+            pixel_values = torch.randn(size=pixel_values_shape, dtype=self.dtype, device=self.device),
+            cache_ids = list(range(0, num_image_tokens)), 
+            images_size=[(image_size ,image_size)] # original image size
         )
 
         batch = BatchRequest()
