@@ -42,7 +42,7 @@ class TokenCache:
         assert slot_ids.dim() == 1
         for value in values:
             assert value.dim() == 3
-            assert slot_ids.shape[0] == value.shape[0], f"{slot_ids[0].shape} {value.shape[0]}"
+            assert slot_ids.shape[0] == value.shape[0], f"{slot_ids.shape[0]} {value.shape[0]}"
             assert slot_ids.device == value.device, f"{slot_ids.device} {value.device}"
 
         if self.device.type == 'cuda' and set_image_cache:

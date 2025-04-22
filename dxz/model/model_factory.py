@@ -9,10 +9,20 @@ from dxz.utils.torch_utils import str2dtype, str2device
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from dxz.model_parallel.process_group import ParallelConfig, ProcessGroup
 
+
+class ImageTokenCaculator:
+    def get_num_image_tokens(self, image_size: tuple[int, int]) -> int:
+        raise NotImplemented
+
+
 @dataclass
 class VisionModelConfig:
     image_token_id: int
     num_image_tokens: int
+    image_size: int = 336 # pixel_values's height and width
+    image_token_caculator: Optional[ImageTokenCaculator] = None # used to determine number of image tokens per image in llavanext model which is caculated based on image resolution
+    n_patches_per_images: Optional[int] = None # if None, pixel_values shape is (n_images, n_channels, height, width) else (n_images, n_patches_per_images, n_channels, height, width)
+    
 
 
 @dataclass
@@ -68,6 +78,9 @@ class ModelFactoryContext:
 
 
 def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) -> ModelFactory:
+    if config.name == 'llava-hf/llava-v1.6-vicuna-7b-hf': 
+        from dxz.model.llavanext import LlavaNextModelFactory
+        return LlavaNextModelFactory(config, context)
     if config.name == "llava-hf/llava-1.5-7b-hf":
         from dxz.model.llava import LlavaModelFactory
         return LlavaModelFactory(config, context)
