@@ -13,6 +13,14 @@ git submodule update
 pip install -e .
 
 conda activate dxz_dev
+conda install -c anaconda cmake=3.26
+conda install -c conda-forge gcc_linux-64 gxx_linux-64 ninja
+ORIGINAL_DIR=$(pwd)
+cd $CONDA_PREFIX/bin
+ln -sf x86_64-conda_cos7-linux-gnu-gcc gcc
+ln -sf x86_64-conda_cos7-linux-gnu-g++ g++
+cd $ORIGINAL_DIR
+conda install -c nvidia/label/cuda-12.4.0 cuda
 mkdir build
 cd build
 cmake .. -GNinja -DUSE_CXX11_ABI=OFF

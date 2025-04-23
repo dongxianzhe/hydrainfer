@@ -4,7 +4,6 @@ import time
 import random
 import asyncio
 import argparse
-from tabulate import tabulate
 import numpy as np
 from tqdm import tqdm
 from openai import AsyncOpenAI

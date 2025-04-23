@@ -2,7 +2,6 @@ import time
 import pickle
 import numpy as np
 from typing import Union
-from tabulate import tabulate
 from dataclasses import dataclass, field
 from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
 

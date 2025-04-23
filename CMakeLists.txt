@@ -150,8 +150,12 @@ include(CTest)
 include(GoogleTest)
 
 # 6. find rust
-enable_language(Rust)
-find_package(Rust REQUIRED)
+if(FULL_COMPILE)
+  enable_language(Rust)
+  find_package(Rust REQUIRED)
+else()
+  message(STATUS "Skipping find Rust because")
+endif()
 
 # 7. add subdirectory
 add_subdirectory(csrc)
