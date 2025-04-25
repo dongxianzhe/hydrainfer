@@ -27,7 +27,7 @@ class Worker:
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         raise NotImplementedError
 
-    def execute_vision_model(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
+    def execute_vision_model(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
         raise NotImplementedError
 
 
@@ -43,7 +43,7 @@ class VanillaWorker(Worker):
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         return self.language_model.forward(input_ids, image_features, position_ids, model_params)
 
-    def execute_vision_model(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
+    def execute_vision_model(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
         return self.vision_model.forward(pixel_values, model_params)
 
 
@@ -65,7 +65,7 @@ class RayWorker(Worker):
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         return self.language_model.forward(input_ids, image_features, position_ids, model_params)
 
-    def execute_vision_model(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
+    def execute_vision_model(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
         return self.vision_model.forward(pixel_values, model_params)
 
 
@@ -81,7 +81,7 @@ class RayWorkers(Worker):
             self.workers.append(worker)
         print('ray workers init finished')
 
-    def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
+    def execute_language_model(self, input_ids: list[Tensor], image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         print('execute language model')
         objs = []
         for worker in self.workers:

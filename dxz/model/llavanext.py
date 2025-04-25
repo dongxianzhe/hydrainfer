@@ -70,18 +70,27 @@ class LlavaNextVisionModel(VisionModel):
                         loaded_set.add(name)
         assert len(loaded_set) == 1
 
-    def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
-        n_images, n_patches, n_channels, height, width = pixel_values.shape
-        pixel_values = pixel_values.view(n_images * n_patches, n_channels, height, width)
-        output = self.vision_model.forward(pixel_values, model_params)
-        image_features = output.image_features # (n_images * n_patches, n_tokens_per_patch, hidden_size)
-        image_features = image_features.view(n_images, n_patches, self.config.image_seq_length, self.config.text_config.hidden_size)
+    def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
+        n_patches_list: list[int] = []
+        pixel_values_list: list[Tensor] = []
+        for pixel_values_per_request in pixel_values:
+            # pixel_values_per_request (1, n_patches, 3, 336, 336)
+            assert pixel_values_per_request.shape[0] == 1, f'only support one image per request, {pixel_values_per_request.shape}'
+            n_images, n_patches, n_channels, height, width = pixel_values_per_request.shape
+            pixel_values_per_request = pixel_values_per_request.view(-1, n_channels, height, width)
+            pixel_values_list.append(pixel_values_per_request)
+            n_patches_list.append(n_images * n_patches)
+
+        output = self.vision_model.forward(pixel_values_list, model_params)
+        image_features = output.image_features # (total_patches, 576, hidden_size)
 
         unpad_image_features_list: list[Tensor] = []
-        for i, patch_embeddings in enumerate(image_features):
-            # patch_embeddings (n_patches, n_tokens_per_patch, hidden_size)
+        image_features_id: int = 0
+        for i, n_patches in enumerate(n_patches_list):
+            patch_embeddings = image_features[image_features_id : image_features_id + n_patches] # patch_embeddings (n_patches, n_tokens_per_patch, hidden_size)
             unpad_image_features = self._merge_image_patch_embeddings(origin_image_size=model_params.original_image_sizes[i], patch_embeddings=patch_embeddings) # (n_this_image_tokens, hidden_size)
             unpad_image_features_list.append(unpad_image_features)
+            image_features_id += n_patches
 
         image_features = torch.cat(unpad_image_features_list, dim=0)
 
@@ -95,7 +104,7 @@ class LlavaNextVisionModel(VisionModel):
         # patch_embeddings (n_patches, n_tokens_per_patch, hidden_size)
         n_height_tokens_per_patch = n_width_tokens_per_patch = self.config.vision_config.image_size // self.config.vision_config.patch_size
         base_patch_embeds = patch_embeddings[0] # (n_tokens_per_patch=576, hidden_size)
-        other_patch_embeds = patch_embeddings[1:] # (4, n_tokens_per_patch=576, hidden_size)
+        other_patch_embeds = patch_embeddings[1:] # (n_other_patches, n_tokens_per_patch=576, hidden_size)
         assert n_height_tokens_per_patch * n_width_tokens_per_patch == base_patch_embeds.shape[0], f"The number of patches is not consistent with the image size. {n_height_tokens_per_patch} {n_width_tokens_per_patch} {base_patch_embeds.shape[0]}"
 
         num_patch_height, num_patch_width = get_anyres_image_grid_shape(origin_image_size, self.config.image_grid_pinpoints, self.config.vision_config.image_size)

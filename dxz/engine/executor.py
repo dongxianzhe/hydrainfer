@@ -267,10 +267,9 @@ class BatchImageEmbedExecutor(Executor):
             slot_ids = self.block_manager.set(rcb.virtual_image_cache, inst.cache_ids) 
             new_cache_slots += slot_ids 
             images_size += inst.images_size
-        pixel_values = torch.cat(batch_pixel_values, dim=0) # (total_images, n_channels, width, height)
 
         vision_params = VisionModelParameters(return_last_layer_attention=False, original_image_sizes=images_size)
-        image_features = self.worker.execute_vision_model(pixel_values, vision_params).image_features
+        image_features = self.worker.execute_vision_model(batch_pixel_values, vision_params).image_features
         # (total_images, num_image_tokens, hidden_size)
         image_tokens = image_features.reshape(-1, self.n_qo_heads, self.head_dim) # (total_image_tokens, n_qo_heads, head_size)
         new_cache_slots = torch.tensor(new_cache_slots, dtype=torch.int, device=self.device)

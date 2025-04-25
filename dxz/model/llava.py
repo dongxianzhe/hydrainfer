@@ -99,7 +99,9 @@ class LlavaVisionModel(VisionModel):
         assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
 
     
-    def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
+    def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
+        pixel_values = torch.cat(pixel_values, dim=0)
+        assert pixel_values.dim() == 4, f'pixel value shape should be 4 dim but got {pixel_values.shape}'
         # pixel_values (n_images, n_channels, height, width)
         hidden_states, output = self.vision_tower(pixel_values, self.vision_feature_layer, model_params) # (n_images, num_tokens_per_images, hidden_size of vision model)
         selected_image_feature = hidden_states[:, 1:] # (n_images, num_tokens_per_images - 1, hidden_size of vision model) evict first class token of each image
