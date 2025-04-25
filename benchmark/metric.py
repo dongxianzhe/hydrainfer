@@ -26,7 +26,9 @@ class BenchmarkResult:
 @dataclass
 class MethodResults:
     method_name: str
+    datasets: dict[str, int]
     model: str
+    model_path: str
     results: list[BenchmarkResult] = field(default_factory=list)
 
 

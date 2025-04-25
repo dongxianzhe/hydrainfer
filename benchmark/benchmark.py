@@ -80,7 +80,15 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
         results.append(result)
     return MethodResults(
         method_name = args.method_name, 
-        model=args.model_path, 
+        datasets = {
+            "textcaps" : args.textcaps, 
+            "pope" : args.pope, 
+            "mme" : args.mme, 
+            "text_vqa" : args.text_vqa, 
+            "vizwiz_vqa" : args.vizwiz_vqa,
+        }, 
+        model = args.model, 
+        model_path = args.model_path, 
         results = results, 
     )
 

@@ -16,7 +16,7 @@ async def our_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar
             "content" : f"<image>\n{entry.prompt}\n", 
             "image" : entry.images[0],
         }], 
-        max_tokens=1024, 
+        max_tokens=128, 
         model = model_path,
         stream=True, 
     )

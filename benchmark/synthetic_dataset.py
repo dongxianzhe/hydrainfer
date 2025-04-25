@@ -21,6 +21,8 @@ def encode_base64_content_from_image(image: Image.Image) -> str:
 class SyntheticDataEntry:
     prompt: str
     images: list[str]
+    images_size: list[tuple[int, int]] # (width, height)
+    dataset: str
 
 
 class SyntheticDataset:
@@ -57,24 +59,27 @@ class SyntheticDataset:
         assert len(weights) > 0, "no dataset source is chosen"
         chosen_dataset_ids = random.choices(population=range(len(weights)), weights=weights, k=num_requests)
 
-        data_list = []
+        tasks = []
         for i in chosen_dataset_ids:
             dataset = datasets[i]
             dataset_iter = dataset_iters[i]
             name = datasets_name[i]
             data = next(dataset_iter)
-            data_list.append(data)
+            tasks.append((name, data))
 
-        def create_entry(data):
+        def create_entry(task):
+            name, data = task
             entry = SyntheticDataEntry(
                 prompt = data['question'], 
                 images = [encode_base64_content_from_image(data['image'])], 
+                images_size = [data['image'].size], 
+                dataset = name, 
             )
             return entry
 
         self.entries: list[SyntheticDataEntry] = []
         with ThreadPoolExecutor(max_workers=32) as executor:
-            self.entries = list(executor.map(create_entry, data_list))
+            self.entries = list(executor.map(create_entry, tasks))
 
     def __len__(self):
         return self.num_requests
@@ -97,3 +102,5 @@ if __name__ == '__main__':
     print(f'dur {end - start}')
     for i in range(10):
         print(dataset[i].prompt)
+        print(dataset[i].images_size)
+        print(dataset[i].dataset)
