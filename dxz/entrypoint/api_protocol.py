@@ -1,18 +1,30 @@
 import shortuuid
 import time
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Union
 from pydantic import BaseModel, Field
+
+class ChatCompletionImageURL(BaseModel):
+    url: str
+
+
+class ChatCompletionContent(BaseModel):
+    type: Literal['text', 'image_url']
+    text: Optional[str] = None
+    image_url: Optional[ChatCompletionImageURL] = None
+
 
 class ChatCompletionMessage(BaseModel):
     role: Literal["user", "system", "assistant"]
-    content: str
+    content: Union[str, list[ChatCompletionContent]]
     image: Optional[str] = None
+
 
 class ChatCompletionRequest(BaseModel):
     model: str
     messages: List[ChatCompletionMessage]
     max_tokens: Optional[int] = 16
     stream: Optional[bool] = False
+    temperature: float = 0.
 
 
 class ChatMessage(BaseModel):

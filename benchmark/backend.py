@@ -32,7 +32,7 @@ async def our_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar
     return output
 
 
-async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, client: AsyncOpenAI) -> OnlineRequestOutput:
+async def openai_compitable_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, client: AsyncOpenAI) -> OnlineRequestOutput:
     send_pbar.update(1)
     output = OnlineRequestOutput(entry=entry)
     output.start_time = time.perf_counter()
@@ -70,9 +70,9 @@ async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pba
 
 def get_server_proxy(backend: str):
     if backend == 'ours':
-        return our_server_proxy
+        return openai_compitable_server_proxy
     if backend in ['vllm', 'tgi']:
-        return vllm_server_proxy
+        return openai_compitable_server_proxy
     if backend == 'sglang':
-        return vllm_server_proxy
-    raise Exception('invalid server proxy')
+        return openai_compitable_server_proxy
+    return openai_compitable_server_proxy

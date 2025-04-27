@@ -93,7 +93,7 @@ class InstructionCreator(RequestProcessorComponent):
             )['pixel_values'] # llava (n_images, n_channels, height, width) or llavanext (n_images, n_patches, n_channels, height, width)
         n_pixel_values_images = images_tensor.shape[0] if images_tensor is not None else 0
         # 2. token_ids
-        token_ids = self.tokenizer.encode(request.prompt)
+        token_ids = self.tokenizer.encode(request.prompt, add_special_tokens=False)
         n_token_ids_images = token_ids.count(self.image_token_id)
         assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
         token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.num_image_tokens, self.image_token_caculator)

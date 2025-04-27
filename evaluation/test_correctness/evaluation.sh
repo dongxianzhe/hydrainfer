@@ -3,12 +3,18 @@
 source ../common.sh
 
 export CUDA_VISIBLE_DEVICES=1
-MODEL="llava-hf/llava-1.5-7b-hf"
-MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
+# MODEL="llava-hf/llava-1.5-7b-hf"
+# MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
+
+MODEL="llava-hf/llava-v1.6-vicuna-7b-hf"
+MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
+CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
+
 REQUEST_RATES=10
 NUM_REQUESTS=10
 host="127.0.0.1"
-port="8888"
+port="8891"
 
 echo "starting api server"
 RAY_DEDUP_LOGS=0 \
@@ -17,7 +23,8 @@ RAY_DEDUP_LOGS=0 \
     model.name=$MODEL \
     model.path=$MODEL_PATH \
     cluster=single \
-    cluster.epdnode.kv_cache.n_blocks=512 \
+    cluster.epdnode.kv_cache.n_blocks=2048 \
+    apiserver.chat_template=$CHAT_TEMPLATE_PATH \
     apiserver.host=$host \
     apiserver.port=$port \
     > $RESULT_PATH/api_server.log 2>&1 &
@@ -35,6 +42,7 @@ conda run -n dxz_dev --no-capture-output \
     --result-path=$RESULT_PATH/result.json \
     --request-rate $REQUEST_RATES \
     --backend=ours \
-    --textcaps=1
+    --mme=1
+    # --textcaps=1
 
 clean_up
