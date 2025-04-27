@@ -30,3 +30,5 @@ outputs/
 **/result
 **/out/**
 **/hydra_log/**
+.idea/
+**/figure/**
