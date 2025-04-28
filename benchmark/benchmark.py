@@ -116,8 +116,9 @@ if __name__ == '__main__':
     parser.add_argument(
         "--backend",
         type=str,
-        choices=["ours", "vllm", 'tgi', 'sglang'],
-        required=True, 
+        # choices=["ours", "vllm", 'tgi', 'sglang'],
+        default="unknown", 
+        required=False, 
         help="choose the backend"
     )
     parser.add_argument(

@@ -19,6 +19,12 @@ from dxz.engine import BatchRequest
 from dxz.request import OfflineInferenceOutput
 from dxz.utils.torch_utils import str2dtype, str2device
 
+try:
+    import flashinfer
+except ImportError:
+    print('flashinfer import failed')
+    flashinfer = None
+
 
 class Future:
     def get(self):
@@ -86,8 +92,7 @@ class BatchFillExecutor(Executor):
         self.workspace_buffer = None
         self.batch_prefill_with_paged_kvcache_wrapper = None
         self.batch_decode_with_paged_kvcache_wrapper = None
-        if config.use_flash_infer:
-            import flashinfer
+        if config.use_flash_infer and flashinfer is not None:
             self.workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.device)
             self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
             self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")

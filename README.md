@@ -29,7 +29,7 @@ cmake --build . --target block_migration activation position_embedding kv_cache_
 
 If you want it to run faster, you may try to install the following library, or you may skip them.
 ```
-pip install flashinfer==0.1.6+cu124torch2.4 -i https://flashinfer.ai/whl/cu124/torch2.4
+pip install flashinfer-python -i https://flashinfer.ai/whl/cu124/torch2.4/
 pip install flash-attn==2.7.0.post2
 ```
 If you want it to run faster, you may try to build the following library, or you may skip them.
