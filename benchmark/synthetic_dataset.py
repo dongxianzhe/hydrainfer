@@ -1,7 +1,7 @@
 import os
 import base64
 import random
-from datasets import load_dataset
+from data_preprocess import load_processed_dataset
 from dataclasses import dataclass
 from PIL import Image
 from io import BytesIO
@@ -21,6 +21,7 @@ def encode_base64_content_from_image(image: Image.Image) -> str:
 class SyntheticDataEntry:
     prompt: str
     images: list[str]
+    max_tokens: int
     images_size: list[tuple[int, int]] # (width, height)
     dataset: str
 
@@ -28,6 +29,7 @@ class SyntheticDataEntry:
 class SyntheticDataset:
     def __init__(
         self, 
+        model_path: str, 
         num_requests: int,
         textcaps: int = 0, 
         pope: int = 0, 
@@ -35,6 +37,7 @@ class SyntheticDataset:
         text_vqa: int = 0, 
         vizwiz_vqa: int = 0, 
     ):
+        self.model_path = model_path
         datasets_metadata = [
             (textcaps, "lmms-lab/TextCaps"), 
             (pope, "lmms-lab/POPE"), 
@@ -50,7 +53,7 @@ class SyntheticDataset:
         weights: list[int] = []
         for weight, path in datasets_metadata:
             if weight > 0:
-                dataset = load_dataset(path=path, split="test")
+                dataset = load_processed_dataset(path=path, split="test", model_path=self.model_path)
                 datasets.append(dataset)
                 dataset_iters.append(iter(dataset))
                 datasets_name.append(path)
@@ -72,6 +75,7 @@ class SyntheticDataset:
             entry = SyntheticDataEntry(
                 prompt = data['question'], 
                 images = [encode_base64_content_from_image(data['image'])], 
+                max_tokens = data['max_tokens'], 
                 images_size = [data['image'].size], 
                 dataset = name, 
             )
@@ -91,6 +95,7 @@ if __name__ == '__main__':
     import time
     start = time.perf_counter()
     dataset = SyntheticDataset(
+        model_path='/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf', 
         num_requests=10, 
         textcaps = 0, 
         pope = 1, 

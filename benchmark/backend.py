@@ -6,32 +6,6 @@ from metric import OnlineRequestOutput
 from synthetic_dataset import SyntheticDataEntry
 
 
-async def our_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, client: AsyncOpenAI) -> OnlineRequestOutput:
-    send_pbar.update(1)
-    output = OnlineRequestOutput(entry=entry)
-    output.start_time = time.perf_counter()
-    response = await client.chat.completions.create(
-        messages = [{
-            "role" : "user", 
-            "content" : f"<image>\n{entry.prompt}\n", 
-            "image" : entry.images[0],
-        }], 
-        max_tokens=128, 
-        model = model_path,
-        stream=True, 
-    )
-    output.success = True
-    async for chunk in response:
-        context = chunk.choices[0].delta.content
-        if output.output_text != "":
-            output.output_text += " "
-        output.output_text += context
-        output.token_times.append(time.perf_counter())
-    output.prompt = entry.prompt
-    recv_pbar.update(1)
-    return output
-
-
 async def openai_compitable_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, client: AsyncOpenAI) -> OnlineRequestOutput:
     send_pbar.update(1)
     output = OnlineRequestOutput(entry=entry)
@@ -52,7 +26,7 @@ async def openai_compitable_server_proxy(model_path: str, entry: SyntheticDataEn
                 },
             ],
         }], 
-        max_tokens=128, 
+        max_tokens=entry.max_tokens, 
         model=model_path,
         temperature=0., 
         stream=True, 

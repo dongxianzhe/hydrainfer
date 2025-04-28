@@ -1,28 +1,14 @@
 #!/bin/bash 
 
-export CUDA_VISIBLE_DEVICES=1
-export MODEL_PATH=/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf
+source ../common.sh
 
-SCRIPT=$(readlink -f "$0")
-SCRIPT_PATH=$(dirname "$SCRIPT")
+MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
+datasets=("lmms-lab/MME" "lmms-lab/TextCaps" "lmms-lab/POPE" "lmms-lab/textvqa" "lmms-lab/VizWiz-VQA")
 
-RESULT_DIR="$SCRIPT_PATH/result"
-mkdir -p $RESULT_DIR
-
-cd ../../benchmark
-
-DATASETS=("mme" "textcaps" "vega")
-
-for DATASET in "${DATASETS[@]}"; do
-    echo "Start analysis dataset $DATASET"
-
-    CMD="python analysis_dataset.py --dataset $DATASET"
-    
-    if [ -n "$MODEL_PATH" ]; then
-        CMD="$CMD --model $MODEL_PATH"
-    fi
-
-    $CMD > $RESULT_DIR/${DATASET}.log
-
-    sleep 3
+for i in {0..4}; do
+    CUDA_VISIBLE_DEVICES=$i conda run -n vllm --no-capture-output python $OUR_ROOT_PATH/benchmark/data_preprocess.py --model-path=$MODEL_PATH --dataset="${datasets[$i]}" &
 done
+
+wait
+
+echo "all dataset preprocess finished"

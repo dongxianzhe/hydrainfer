@@ -45,6 +45,19 @@ conda deactivate
 conda env remove -n dxz_dev
 ```
 
+Before testing inference correctness, it's necessary to set up the vLLM environment for dataset preprocessing.
+```
+conda create -n vllm python=3.12
+conda activate vllm
+pip install vllm==0.8.2
+```
+
+Dataset preprocess.
+```
+cd evaluation/dataset_analysis
+./evaluation.sh
+```
+
 You can use script to test inference correctness:
 ```
 cd evaluation/test_correctness

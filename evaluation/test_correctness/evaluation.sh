@@ -11,8 +11,8 @@ MODEL="llava-hf/llava-v1.6-vicuna-7b-hf"
 MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
 CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
 
-REQUEST_RATES=10
-NUM_REQUESTS=10
+REQUEST_RATES=1
+NUM_REQUESTS=3
 host="127.0.0.1"
 port="8891"
 
@@ -27,6 +27,7 @@ RAY_DEDUP_LOGS=0 \
     apiserver.chat_template=$CHAT_TEMPLATE_PATH \
     apiserver.host=$host \
     apiserver.port=$port \
+    ignore_eos=true \
     > $RESULT_PATH/api_server.log 2>&1 &
 
 wait_api_server $host $port
@@ -42,7 +43,6 @@ conda run -n dxz_dev --no-capture-output \
     --result-path=$RESULT_PATH/result.json \
     --request-rate $REQUEST_RATES \
     --backend=ours \
-    --mme=1
-    # --textcaps=1
+    --textcaps=1
 
 clean_up

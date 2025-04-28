@@ -97,6 +97,7 @@ def main(args: argparse.Namespace):
     random.seed(args.seed)
     np.random.seed(args.seed)
     dataset = SyntheticDataset(
+        model_path   = args.model_path, 
         num_requests = args.num_requests, 
         textcaps     = args.textcaps, 
         pope         = args.pope, 
