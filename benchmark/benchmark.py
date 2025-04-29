@@ -44,13 +44,18 @@ def async_wrapper(func):
 
 
 async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
-    send_pbar = tqdm(total = len(dataset), desc='send')
-    recv_pbar = tqdm(total = len(dataset), desc='recv')
+    request_rate_scaled = request_rate * args.request_rate_num_requests_scale
+    num_requests_scaled = int(args.num_requests * request_rate * args.request_rate_num_requests_scale)
+    send_pbar = tqdm(total = num_requests_scaled, desc='send')
+    recv_pbar = tqdm(total = num_requests_scaled, desc='recv')
     server_proxy = get_server_proxy(args.backend)
 
     start_time = time.perf_counter()
     tasks = []
-    async for (i, entry) in poisson_process_request_generator(dataset=dataset, request_rate=request_rate):
+    async for (i, entry) in poisson_process_request_generator(
+        dataset=dataset[:num_requests_scaled], 
+        request_rate=request_rate_scaled, 
+    ):
         tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, client=client)))
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
     end_time = time.perf_counter()
@@ -75,7 +80,7 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
     )
     results: list[BenchmarkResult] = []
     for request_rate in args.request_rate:
-        print(f'start test request rate {request_rate}')
+        print(f'start test request rate {request_rate} scale {args.request_rate_num_requests_scale}')
         result = await benchmark(args, dataset, client, request_rate)
         results.append(result)
     return MethodResults(
@@ -98,7 +103,7 @@ def main(args: argparse.Namespace):
     np.random.seed(args.seed)
     dataset = SyntheticDataset(
         model_path   = args.model_path, 
-        num_requests = args.num_requests, 
+        num_requests = int(args.num_requests * args.request_rate_num_requests_scale * max(args.request_rate)), 
         textcaps     = args.textcaps, 
         pope         = args.pope, 
         mme          = args.mme, 
@@ -138,6 +143,12 @@ if __name__ == '__main__':
         "then all the requests are sent at time 0. "
         "Otherwise, we use Poisson process to synthesize "
         "the request arrival times.",
+    )
+    parser.add_argument(
+        "--request-rate-num-requests-scale",
+        type=int,
+        default=1,
+        help="scaling factor of num requests and request scale, set to the number of gpu.",
     )
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8888)

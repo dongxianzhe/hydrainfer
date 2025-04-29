@@ -65,9 +65,15 @@ class SyntheticDataset:
         tasks = []
         for i in chosen_dataset_ids:
             dataset = datasets[i]
-            dataset_iter = dataset_iters[i]
             name = datasets_name[i]
-            data = next(dataset_iter)
+
+            dataset_iter = dataset_iters[i]
+            try:
+                data = next(dataset_iter)
+            except StopIteration:
+                dataset_iters[i] = iter(dataset)
+                dataset_iter = dataset_iters[i]
+                data = next(dataset_iter)
             tasks.append((name, data))
 
         def create_entry(task):
@@ -96,16 +102,17 @@ if __name__ == '__main__':
     start = time.perf_counter()
     dataset = SyntheticDataset(
         model_path='/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf', 
-        num_requests=10, 
+        num_requests=3000, 
         textcaps = 0, 
-        pope = 1, 
-        mme = 0, 
+        pope = 0, 
+        mme = 1, 
         text_vqa = 0,
         vizwiz_vqa = 0, 
     )
     end = time.perf_counter()
     print(f'dur {end - start}')
-    for i in range(10):
+    print(len(dataset))
+    for i in range(3):
         print(dataset[i].prompt)
         print(dataset[i].images_size)
         print(dataset[i].dataset)
