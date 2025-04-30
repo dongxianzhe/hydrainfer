@@ -304,7 +304,7 @@ class AsyncEPDNode(AsyncEngine):
             else:
                 rcb.metric.pd_transfer.append(time.perf_counter())
             
-            old_rcb = copy.deepcopy(rcb)
+            old_rcb = copy.copy(rcb)
             if rcb.virtual_kv_cache and self.has_kv_cache:
                 rcb.virtual_kv_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
             else:

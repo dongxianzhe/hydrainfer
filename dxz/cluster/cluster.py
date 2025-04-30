@@ -6,6 +6,7 @@ from dxz.engine import RequestProcessParameters
 from dxz.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph, NodeContext
 from dxz.utils.zmq_utils import ZMQConfig
 from dxz.utils.allocate import IncreaingAllocator
+from dxz.utils.ray_utils import start_head_node
 
 
 @dataclass
@@ -28,9 +29,21 @@ class ClusterConfig:
     n_pnode: int = 1
     n_pdnode: int = 1
     n_dnode: int = 1
+    ray_cluster_port: int = 6379
+    debug: bool = False
 
 class Cluster:
     def __init__(self, config: ClusterConfig):
+        start_head_node(ray_cluster_port=config.ray_cluster_port)
+        if config.debug:
+            ray.init(
+                runtime_env={
+                    "env_vars": {"RAY_DEBUG_POST_MORTEM": "1"},
+                }
+            )
+        else:
+            ray.init()
+
         self.config = config
         nodes_list = [
             (getattr(self.config, "n_enode", 0),   getattr(self.config, "enode", None), "e"), 

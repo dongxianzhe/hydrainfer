@@ -25,6 +25,8 @@ cluster:
     policy: "round"
   pbalancer:
     policy: "round"
+  ray_cluster_port: 6379
+  debug: false
 
 intranode_migrate_backend: "ipc"
 internode_migrate_backend: "nccl"

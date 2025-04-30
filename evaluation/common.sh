@@ -11,6 +11,7 @@ clean_up() {
     pgrep -f "dxz.entrypoint.entrypoint" >/dev/null && pgrep -f "dxz.entrypoint.entrypoint" | xargs kill
     pgrep -f "text-generation-launcher" >/dev/null && pgrep -f "text-generation-launcher" | xargs kill
     pgrep -f "sglang.launch_server" >/dev/null && pgrep -f "sglang.launch_server" | xargs kill
+    conda run -n dxz_dev ray stop
 }
 trap clean_up EXIT
 
