@@ -45,6 +45,7 @@ class Fill(Instruction):
         self.cache_ids = cache_ids
         self.sample = sample
         self.sample_dst = sample_dst
+        self.is_chunked = False # used to control weather return sample token to api server
 
 
 class TextFill(Fill):
@@ -76,6 +77,7 @@ class TextFill(Fill):
         self.cache_ids = self.cache_ids[:chunk_size]
         self.sample = True # todo remove the unnecessary sample. when a batch has no sample request because of chunked prefill, do not know why model forward will crash?.
         self.sample_dst = EmptyInstruction()
+        self.is_chunked = True
 
     def __repr__(self):
         return "TF"
@@ -145,6 +147,7 @@ class ImageEmbedFill(Fill):
         self.cache_ids = self.cache_ids[:chunk_size]
         self.sample = True # todo remove the unnecessary sample. when a batch has no sample request because of chunked prefill, do not know why model forward will crash?.
         self.sample_dst = EmptyInstruction()
+        self.is_chunked = True
 
 
 class EmptyInstruction(Instruction):

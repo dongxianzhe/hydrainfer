@@ -193,8 +193,9 @@ class BatchFillExecutor(Executor):
             next_token_id = sample_token_ids[i]
             i += 1
 
-            rcb.metric.token_times.append(token_time)
-            rcb.output_token_ids.append(next_token_id)
+            if not inst.is_chunked:
+                rcb.metric.token_times.append(token_time)
+                rcb.output_token_ids.append(next_token_id)
 
             if inst.sample_dst:
                 inst.sample_dst.token_ids = [next_token_id]
@@ -202,12 +203,16 @@ class BatchFillExecutor(Executor):
             is_last_token: bool = rcb.is_finished()
 
             # process output tokens
-            for output_token_processor in rcb.output_token_processors:
-                output_token_processor.append_token_id(next_token_id, is_last_token)
-            if rcb.output_token_params.print_output_text:
-                self.print_text_output_token_processor.append_token_id(next_token_id, is_last_token)
+            if not inst.is_chunked:
+                for output_token_processor in rcb.output_token_processors:
+                    output_token_processor.append_token_id(next_token_id, is_last_token)
+                if rcb.output_token_params.print_output_text:
+                    self.print_text_output_token_processor.append_token_id(next_token_id, is_last_token)
 
             if not self.context.zmq_send or not rcb.output_token_params.zmq_output:
+                continue
+
+            if inst.is_chunked:
                 continue
 
             if rcb.output_token_params.is_offline_output:
