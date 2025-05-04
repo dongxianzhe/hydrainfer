@@ -1,4 +1,5 @@
 import ray
+import traceback
 import copy
 import time
 import torch
@@ -348,7 +349,22 @@ class AsyncEPDNode(AsyncEngine):
             if self.config.debug_migrate:
                 print(f'1. sender {inst.ty} migrate to {node.id}, {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
             self.batch_scheduler.migrating_acquire()
-            obj = node.actor.migrate.remote(self.actor_handle, rcb)
+
+            # don't know why some rpc call will failed at pickle
+            # we do some retries if it failed and terminate the request
+            max_retries = 2
+            for attempt in range(max_retries):
+                try:
+                    obj = node.actor.migrate.remote(self.actor_handle, rcb)
+                    break
+                except Exception as e:
+                    print(f"{rcb.request_id} migrate attempt {attempt + 1} failed")
+                    traceback.print_exc()
+                    await asyncio.sleep(0.5)
+            else:
+                print(f"{rcb.request_id} migrate failed after {max_retries} attempts")
+                self.free_migrate_request(rcb)
+                self.zmq_send.send_pyobj((rcb.request_id, None)) # terminate the request
 
     async def free_migrate_request(self, rcb: RequestControlBlock):
         """ 4. sender free request"""

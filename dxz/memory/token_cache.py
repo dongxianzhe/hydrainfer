@@ -64,6 +64,7 @@ class TokenCache:
 @dataclass
 class VirtualTokenCache:
     vid: int
+    n_blocks_of_cache_manager: int # used to compute block tensor's index when migrating cache
     n_cache_tokens: int = 0
     block_table: list[int] = field(default_factory=list)
     memory_handle: Optional[list[int]] = None # used in cuda ipc memory handle
@@ -123,6 +124,7 @@ class TokenCacheBlockManager:
             block_table = [], 
             memory_handle = self.memory_handle,
             rank=self.rank,
+            n_blocks_of_cache_manager=self.n_blocks
         )
 
     def v2p(self, virtual_cache: VirtualTokenCache, virtual_cache_ids: list[int]) -> list[int]:
@@ -183,6 +185,7 @@ class TokenCacheBlockManager:
                     dst_virtual_cache.block_table, 
                     src_virtual_cache.memory_handle, 
                     self.cache_tensor,
+                    src_virtual_cache.n_blocks_of_cache_manager, 
                 )
         elif backend == 'nccl':
             block_table = src_virtual_cache.block_table if is_send else dst_virtual_cache.block_table

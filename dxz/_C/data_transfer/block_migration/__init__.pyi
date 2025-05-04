@@ -14,5 +14,6 @@ def migrate_blocks(
 	dst_block_table: list[int], 
 	src_cache: cudaMemoryIpcHandle, 
 	dst_cache: Tensor, # (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
+	src_cache_n_blocks: int, 
 ):
 	...

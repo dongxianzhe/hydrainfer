@@ -195,7 +195,8 @@ void migrate_blocks(
 	const std::vector<int64_t>& src_block_table, 
 	const std::vector<int64_t>& dst_block_table, 
 	const std::vector<int64_t>& src_cache, // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
-	torch::Tensor dst_cache               // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
+	torch::Tensor dst_cache,               // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
+	const int64_t src_cache_n_blocks 
 ){
 	cudaStream_t stream = at::cuda::getCurrentCUDAStream();
 	CHECK(dst_cache.is_contiguous());
@@ -204,7 +205,7 @@ void migrate_blocks(
 
 	const int64_t n_layers = dst_cache.size(0);
 	const int64_t n_tokens = dst_cache.size(1);
-	const int64_t n_blocks = dst_cache.size(2);
+	const int64_t dst_cache_n_blocks = dst_cache.size(2);
 	const int64_t block_size = dst_cache.size(3);
 	const int64_t n_heads = dst_cache.size(4);
 	const int64_t head_size = dst_cache.size(5);
@@ -224,11 +225,11 @@ void migrate_blocks(
 				int src_block_id = src_block_table[i];
 				int dst_block_id = dst_block_table[i];
 				const int64_t dst_bias = INDEX_6D(
-					n_layers, n_tokens, n_blocks, block_size, n_heads, head_size, 
+					n_layers, n_tokens, dst_cache_n_blocks, block_size, n_heads, head_size, 
 					layer_id, token_id, dst_block_id, 0, 0, 0
 				);
 				const int64_t src_bias = INDEX_6D(
-					n_layers, n_tokens, n_blocks, block_size, n_heads, head_size, 
+					n_layers, n_tokens, src_cache_n_blocks, block_size, n_heads, head_size, 
 					layer_id, token_id, src_block_id, 0, 0, 0
 				);
 				CUDA_CHECK(cudaMemcpyAsync(

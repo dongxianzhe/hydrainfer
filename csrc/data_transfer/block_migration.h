@@ -14,7 +14,8 @@ void migrate_blocks(
 	const std::vector<int64_t>& src_block_table, 
 	const std::vector<int64_t>& dst_block_table, 
 	const std::vector<int64_t>& src_cache, // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
-	torch::Tensor dst_cache               // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
+	torch::Tensor dst_cache,               // (n_layers, n_tokens, n_blocks, block_size, n_heads, head_size)
+	const int64_t src_cache_n_blocks
 );
 
 }
