@@ -30,3 +30,4 @@ outputs/
 **/result
 **/out/**
 **/hydra_log/**
+**/*.json

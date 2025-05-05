@@ -59,12 +59,13 @@ class APIServer:
         while True:
             request_id, output_text = await self.zmq_recv.recv_pyobj()
             # print(f'zmq recv {request_id} {output_text}')
-            output_stream = self.async_streams[request_id]
-            output_stream.put(output_text)
-            if output_text is None:
-                del self.async_streams[request_id]
-                output_stream.finish()
-                print(f'request {request_id} finished')
+            if request_id in self.async_streams:
+                output_stream = self.async_streams[request_id]
+                output_stream.put(output_text)
+                if output_text is None:
+                    del self.async_streams[request_id]
+                    output_stream.finish()
+                    print(f'request {request_id} finished')
             await asyncio.sleep(0)
 
     def register(self, observer: RequestObserver):

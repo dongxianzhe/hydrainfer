@@ -25,9 +25,10 @@ wait_api_server() {
         retry=$((retry + 1))
         if [ $retry -gt 50 ]; then
             echo "$name failed to start after 50 attempts. Exiting."
-            exit 1
+            return 1
         fi
         sleep 5
     done
     echo "api server is running on $ip $port"
+    return 0
 }

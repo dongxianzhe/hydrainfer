@@ -10,6 +10,7 @@ from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
 class OnlineRequestOutput:
     entry: SyntheticDataEntry
     success: bool = False
+    error_msg: str = ""
     output_text: str = ""
     start_time: float = 0.
     token_times: list[float] = field(default_factory=list)

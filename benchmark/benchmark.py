@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import httpx
 import random
 import asyncio
 import argparse
@@ -77,6 +78,7 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
     client = AsyncOpenAI(
         api_key=openai_api_key,
         base_url=openai_api_base,
+        timeout=httpx.Timeout(60.0), 
     )
     results: list[BenchmarkResult] = []
     for request_rate in args.request_rate:

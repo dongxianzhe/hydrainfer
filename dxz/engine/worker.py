@@ -40,9 +40,11 @@ class VanillaWorker(Worker):
         if config.has_language_model:
             self.language_model = model_factory.getLanguageModel() 
 
+    @torch.inference_mode()
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         return self.language_model.forward(input_ids, image_features, position_ids, model_params)
 
+    @torch.inference_mode()
     def execute_vision_model(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
         return self.vision_model.forward(pixel_values, model_params)
 
