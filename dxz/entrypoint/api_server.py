@@ -35,7 +35,6 @@ class APIServer:
         model_factory = getModelFactory(config.model, ModelFactoryContext())
         self.processor = model_factory.getProcessor()
         self.tokenizer = model_factory.getTokenizer()
-        self.image_token = self.processor.image_token
         self.bos_token = self.tokenizer.bos_token
         self.eos_token = self.tokenizer.eos_token
         assert config.chat_template is not None, 'not specified chat template'
@@ -82,7 +81,7 @@ class APIServer:
                 if content.type == 'text':
                     text_content += content.text
                 elif content.type == 'image_url':
-                    image_content += self.image_token
+                    image_content += '<image>'
                     prefix, image_base64 = content.image_url.url.split(',')
                     assert prefix == 'data:image/png;base64', f'only support base 64 png image url but got {prefix}'
                     image_base64_list.append(image_base64)
