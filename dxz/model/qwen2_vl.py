@@ -41,8 +41,8 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
                 print(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('vision.'):
-                        state_dict[name.removeprefix('vision.')].copy_(weight)
+                    if name.startswith('visual.'):
+                        state_dict[name.removeprefix('visual.')].copy_(weight)
                         loaded_set.add(name)
         self.vision.load_state_dict(state_dict)
         self.vision.to(dtype)
