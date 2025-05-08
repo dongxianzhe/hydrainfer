@@ -2,8 +2,9 @@ import copy
 import random
 import time
 import torch
-import argparse
 import functools
+import numpy as np
+from PIL import Image
 from typing import Callable, Optional
 from dataclasses import dataclass, field
 from dxz.engine import BatchRequest, InstructionExecutor, InstructionListBuilder, ImageEmbed, RequestControlBlock, TextFill, Instruction, Future
@@ -39,6 +40,7 @@ class BatchSchedulerProfiler:
         model_factory = getModelFactory(config=config.model, context=ModelFactoryContext())
         self.vision_config = model_factory.getVisionModelConfig()
         self.language_confeig = model_factory.getLanguageModelConfig()
+        self.processor = model_factory.getProcessor()
 
         self.dtype = str2dtype(config.model.dtype)
         self.device = str2device(config.model.device)
@@ -61,21 +63,20 @@ class BatchSchedulerProfiler:
         return rcb
     
     def _prepare_encode_batch(self, batch_size: int) -> BatchRequest:
-        image_size = self.vision_config.image_size
-        if self.vision_config.n_patches_per_images:
-            pixel_values_shape = (1, self.vision_config.n_patches_per_images, 3, image_size, image_size)
-        else:
-            pixel_values_shape = (1, 3, image_size, image_size)
-
-        if self.vision_config.image_token_caculator is not None:
-            num_image_tokens = self.vision_config.image_token_caculator.get_num_image_tokens(image_size=(image_size, image_size))
-        else:
-            num_image_tokens = self.vision_config.num_image_tokens
-
+        height, width, n_channel = 336, 336, 3
+        random_array = np.random.randint(0, 256, (height, width, n_channel), dtype=np.uint8)
+        image = Image.fromarray(random_array)
+        images_tensor = self.processor(
+            text="", 
+            images = image, 
+            return_tensors="pt"
+        )['pixel_values']
+        n_image_tokens = self.vision_config.image_token_caculator.get_num_image_tokens((height, width)) 
+        images_tensor = images_tensor.to(self.dtype).to(self.device)
         encode_inst = ImageEmbed(
-            pixel_values = torch.randn(size=pixel_values_shape, dtype=self.dtype, device=self.device),
-            cache_ids = list(range(0, num_image_tokens)), 
-            images_size=[(image_size ,image_size)] # original image size
+            pixel_values = images_tensor, 
+            cache_ids = list(range(0, n_image_tokens)), 
+            images_size=[(height, width)] # original image size
         )
 
         batch = BatchRequest()

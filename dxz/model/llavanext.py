@@ -6,6 +6,7 @@ from typing import Optional
 from torch import nn, Tensor
 from transformers import LlavaConfig, LlavaNextConfig, AutoProcessor, AutoConfig, AutoTokenizer
 from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
+from dxz.model.downloader import download_hf_model
 from dxz.model import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModelConfig, LanguageModelConfig, LanguageModel, VisionModel, ImageTokenCaculator
 from dxz.model.parameters import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
 from dxz.utils.torch_utils import str2device, str2dtype
@@ -145,10 +146,9 @@ class LlavaNextModelFactory(ModelFactory):
     def getVisionModelConfig(self) -> VisionModelConfig:
         config_ref = AutoConfig.from_pretrained(self.path)
         config = VisionModelConfig(
+            image_token = "<image>", 
             image_token_id = config_ref.image_token_index, 
-            num_image_tokens = config_ref.image_seq_length, 
             image_token_caculator = LlavaNextImageTokenCaculator(self.path), 
-            n_patches_per_images = 5, 
         )
         return config
 
