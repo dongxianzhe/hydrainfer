@@ -200,13 +200,17 @@ class Qwen2VLForConditionalGeneration(nn.Module):
         self.model = Qwen2VLModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids_or_input_embeds: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
-        # FIXME: add RoPE index
-        # input_ids (n_tokens, ) or input embeds (n_tokens, hidden_size)
+    def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        # input_ids (n_tokens, )
         # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
         # image_features (n_image_tokens, hidden_size)
         # position_ids (n_text_tokens + n_image_tokens)
-        hidden_state = self.model(input_ids_or_input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
+        input_embeds = self.model.embed_tokens(input_ids) # (n_tokens, hidden_size)
+        if image_features is not None:
+            image_overwrite_mask = input_ids == self.config.image_token_id
+            input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
+        
+        hidden_state = self.model(input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
         logits = self.lm_head(hidden_state) # (n_selected_tokens, hidden_size)
         sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False) # (n_selected_tokens, )
         return sample_token_ids
