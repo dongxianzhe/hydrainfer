@@ -12,16 +12,15 @@ from dxz.model_parallel.process_group import ParallelConfig, ProcessGroup
 
 class ImageTokenCaculator:
     def get_num_image_tokens(self, image_size: tuple[int, int]) -> int:
+        # image_size (height, width)
         raise NotImplemented
 
 
 @dataclass
 class VisionModelConfig:
-    image_token_id: int
-    num_image_tokens: int
-    image_size: int = 336 # pixel_values's height and width
-    image_token_caculator: Optional[ImageTokenCaculator] = None # used to determine number of image tokens per image in llavanext model which is caculated based on image resolution
-    n_patches_per_images: Optional[int] = None # if None, pixel_values shape is (n_images, n_channels, height, width) else (n_images, n_patches_per_images, n_channels, height, width)
+    image_token: str # llava: "<image>", qwenvl2: "<|vision_start|><|image_pad|><|vision_end|>"
+    image_token_id: int # llava: token id of "<image>", qwenvl2: token id of "<|image_pad|>"
+    image_token_caculator: ImageTokenCaculator # used to determine number of image tokens per image in llavanext model which is caculated based on image resolution
     
 
 
@@ -35,7 +34,10 @@ class LanguageModelConfig:
 
 
 class VisionModel:
-    def forward(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:
+    def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
+        # llava1.5 [(3, 336, 336), (3, 336, 336), (3, 336, 336) ...]
+        # llavanext [(n_patches, 3, 336, 336), (n_patches, 3, 336, 336), (n_patches, 3, 336, 336) ...]
+        # qwen2L [(n_patches, 1176), (n_patches, 1176), (n_patches, 1176) ...]
         raise NotImplementedError
 
 
