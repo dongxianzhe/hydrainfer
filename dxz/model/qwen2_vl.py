@@ -71,7 +71,7 @@ class Qwen2VisionModel(VisionModel):
             height, width = model_params.original_image_sizes[i]
             height, width = smart_resize(height, width)
             # thws: (1, 3) i.e. [[1, height, width]]
-            grid_thws.append(torch.tensor([1, height // 14, width // 14], dtype=torch.int64))
+            grid_thws.append(torch.tensor([[1, height // 14, width // 14]], dtype=torch.int64))
 
         pixel_values = torch.cat(pixel_values, dim=0)
         grid_thws = torch.cat(grid_thws, dim=0)
