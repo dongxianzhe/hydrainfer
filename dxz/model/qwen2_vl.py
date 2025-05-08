@@ -218,7 +218,7 @@ class Qwen2VisionModel(VisionModel):
             height, width = model_params.original_image_sizes[i]
             height, width = smart_resize(height, width)
             # thws: (1, 3) i.e. [[1, height, width]]
-            grid_thws.append(torch.tensor([1, height // 14, width // 14], dtype=torch.int64))
+            grid_thws.append(torch.tensor([[1, height // 14, width // 14]], dtype=torch.int64))
 
         pixel_values = torch.cat(pixel_values, dim=0)
         grid_thws = torch.cat(grid_thws, dim=0)
@@ -347,13 +347,17 @@ class Qwen2VLForConditionalGeneration(nn.Module):
         self.model = Qwen2VLModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids_or_input_embeds: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
-        # FIXME: add RoPE index
-        # input_ids (n_tokens, ) or input embeds (n_tokens, hidden_size)
+    def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        # input_ids (n_tokens, )
         # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
         # image_features (n_image_tokens, hidden_size)
         # position_ids (n_text_tokens + n_image_tokens)
-        hidden_state = self.model(input_ids_or_input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
+        input_embeds = self.model.embed_tokens(input_ids) # (n_tokens, hidden_size)
+        if image_features is not None:
+            image_overwrite_mask = input_ids == self.config.image_token_id
+            input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
+        
+        hidden_state = self.model(input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
         logits = self.lm_head(hidden_state) # (n_selected_tokens, hidden_size)
         sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False) # (n_selected_tokens, )
         return sample_token_ids
@@ -419,11 +423,11 @@ class Qwen2VLModelFactory(ModelFactory):
 
         # In qwen2-vl, the prompt <|vision_start|><|image_pad|><|vision_end|>
         # will be encoded into 3 tokens.
-        config = VisionModelConfig(      
+        config = VisionModelConfig(
+            # represent a image here
+            image_token = "<|vision_start|><|image_pad|><|vision_end|>",
             # the <|image_pad|> token id
             image_token_id = config_ref.image_token_id,
-            # we don't use num_image_tokens, because it is not sure
-            num_image_tokens = 334,
             # use calculator to determine the number of image tokens
             image_token_caculator = Qwen2VLImageTokenCaculator(),
         )
@@ -453,15 +457,4 @@ class Qwen2VLModelFactory(ModelFactory):
         return AutoProcessor.from_pretrained(self.path)
 
     def getTokenizer(self) -> AutoTokenizer:
-        tokenizer = AutoTokenizer.from_pretrained(self.path)
-        orginal_tokenizer_encode = tokenizer.encode
-        def encode(
-            self, 
-            text: str,
-            **kwargs
-        ) -> Tensor:
-            # replace all <image> with <|vision_start|><|image_pad|><|vision_end|>
-            text = text.replace("<image>", "<|vision_start|><|image_pad|><|vision_end|>")
-            return orginal_tokenizer_encode(text, **kwargs)
-        tokenizer.encode = encode.__get__(tokenizer)
-        return tokenizer
+        return AutoTokenizer.from_pretrained(self.path)
