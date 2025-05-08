@@ -7,9 +7,17 @@ from typing import Optional
 from dxz.model.llama import LlamaForCausalLM
 from dxz.model.clip import CLIPVisionModel
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator
 from dxz.model.downloader import download_hf_model
 from dxz.utils.torch_utils import str2device, str2dtype
+
+class LlavaTokenCaculator(ImageTokenCaculator):
+    def __init__(self, path: str):
+        config = LlavaConfig.from_pretrained(path)
+        self.num_image_tokens = config.image_seq_length 
+
+    def get_num_image_tokens(self, image_size: tuple[int, int]) -> int:
+        return self.num_image_tokens
 
 
 class LlavaMultiModalProjector(nn.Module):
@@ -174,8 +182,9 @@ class LlavaModelFactory(ModelFactory):
     def getVisionModelConfig(self) -> VisionModelConfig:
         config_ref = AutoConfig.from_pretrained(self.path)
         config = VisionModelConfig(
+            image_token = "<image>", 
             image_token_id = config_ref.image_token_index, 
-            num_image_tokens = config_ref.image_seq_length, 
+            image_token_caculator = LlavaTokenCaculator(self.path), 
         )
         return config
 

@@ -54,11 +54,10 @@ class InstructionCreator(RequestProcessorComponent):
         language_model_config = model_factory.getLanguageModelConfig()
         vision_model_config = model_factory.getVisionModelConfig()
         self.image_token_id = vision_model_config.image_token_id
-        self.num_image_tokens = vision_model_config.num_image_tokens # number of image tokens per patch
         self.image_token_caculator: Optional[ImageTokenCaculator]  = vision_model_config.image_token_caculator
         self.n_layers = language_model_config.n_layers
 
-    def _insert_image_tokens(self, token_ids: list[int], images_size: list[tuple[int, int]], num_image_tokens, image_token_caculator: Optional[ImageTokenCaculator]) -> tuple[list[int], int]:
+    def _insert_image_tokens(self, token_ids: list[int], images_size: list[tuple[int, int]], image_token_caculator: ImageTokenCaculator) -> tuple[list[int], int]:
         # replace each image_token_id with num_image_tokens image_token_id
         inserted_token_ids: list[int] = []
         image_id = -1
@@ -66,8 +65,7 @@ class InstructionCreator(RequestProcessorComponent):
         for token_id in token_ids:
             if token_id == self.image_token_id:
                 image_id += 1
-                if image_token_caculator is not None:
-                    num_image_tokens = image_token_caculator.get_num_image_tokens(image_size=images_size[image_id])
+                num_image_tokens = image_token_caculator.get_num_image_tokens(image_size=images_size[image_id])
                 total_num_image_tokens += num_image_tokens
                 inserted_token_ids.extend([self.image_token_id] * (num_image_tokens - 1))
             inserted_token_ids.append(token_id)
@@ -98,7 +96,8 @@ class InstructionCreator(RequestProcessorComponent):
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt, add_special_tokens=False)
         n_token_ids_images = token_ids.count(self.image_token_id)
-        token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.num_image_tokens, self.image_token_caculator)
+        assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
+        token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.image_token_caculator)
         n_images = n_token_ids_images
         n_prompt_tokens = len(token_ids)
         n_text_tokens = n_prompt_tokens - n_image_tokens
