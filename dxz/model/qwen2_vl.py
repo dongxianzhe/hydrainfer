@@ -189,7 +189,7 @@ class Qwen2VLModel(nn.Module):
             hidden_states = layer(hidden_states, position_ids, model_params)
         return self.norm(hidden_states)
 
-class Qwen2ForCausalLM(nn.Module):
+class Qwen2VLForConditionalGeneration(nn.Module):
     """
     This module mocks Qwen2VL for language generation only.
     """
@@ -200,8 +200,12 @@ class Qwen2ForCausalLM(nn.Module):
         self.model = Qwen2VLModel(config)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
     
-    def forward(self, input_ids_or_input_embeds: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+    def forward(self, input_ids_or_input_embeds: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        # FIXME: add RoPE index
         # input_ids (n_tokens, ) or input embeds (n_tokens, hidden_size)
+        # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
+        # image_features (n_image_tokens, hidden_size)
+        # position_ids (n_text_tokens + n_image_tokens)
         hidden_state = self.model(input_ids_or_input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
         logits = self.lm_head(hidden_state) # (n_selected_tokens, hidden_size)
         sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False) # (n_selected_tokens, )
@@ -236,14 +240,14 @@ class Qwen2ForCausalLM(nn.Module):
 
         return model
 
-class QwenLanguageModel(LanguageModel):
+class Qwen2VLLanguageModel(LanguageModel):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
-        self.model = Qwen2ForCausalLM.from_safetensor(model_path, dtype, device)
+        self.model = Qwen2VLForConditionalGeneration.from_safetensor(model_path, dtype, device)
         self.config = self.model.config
 
     def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
-        sample_token_ids = self.model(input_ids, position_ids, model_params)
+        sample_token_ids = self.model(input_ids, image_features, position_ids, model_params)
         return LanguageModelOutput(sample_token_ids=sample_token_ids)
     
 
@@ -261,7 +265,7 @@ class Qwen2VLModelFactory(ModelFactory):
         return Qwen2VisionModel(self.path, self.dtype, self.device)
 
     def getLanguageModel(self) -> LanguageModel:
-        return QwenLanguageModel(self.path, self.dtype, self.device)
+        return Qwen2VLLanguageModel(self.path, self.dtype, self.device)
 
     def getVisionModelConfig(self) -> VisionModelConfig:
         config_ref = Qwen2VLConfig.from_pretrained(self.path)
