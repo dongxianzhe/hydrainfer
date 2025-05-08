@@ -96,7 +96,6 @@ class InstructionCreator(RequestProcessorComponent):
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt, add_special_tokens=False)
         n_token_ids_images = token_ids.count(self.image_token_id)
-        assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
         token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.image_token_caculator)
         n_images = n_token_ids_images
         n_prompt_tokens = len(token_ids)

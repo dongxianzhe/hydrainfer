@@ -276,11 +276,11 @@ class Qwen2VLModelFactory(ModelFactory):
 
         # In qwen2-vl, the prompt <|vision_start|><|image_pad|><|vision_end|>
         # will be encoded into 3 tokens.
-        config = VisionModelConfig(      
+        config = VisionModelConfig(
+            # represent a image here
+            image_token = "<|vision_start|><|image_pad|><|vision_end|>",
             # the <|image_pad|> token id
             image_token_id = config_ref.image_token_id,
-            # we don't use num_image_tokens, because it is not sure
-            num_image_tokens = 334,
             # use calculator to determine the number of image tokens
             image_token_caculator = Qwen2VLImageTokenCaculator(),
         )
@@ -310,15 +310,4 @@ class Qwen2VLModelFactory(ModelFactory):
         return AutoProcessor.from_pretrained(self.path)
 
     def getTokenizer(self) -> AutoTokenizer:
-        tokenizer = AutoTokenizer.from_pretrained(self.path)
-        orginal_tokenizer_encode = tokenizer.encode
-        def encode(
-            self, 
-            text: str,
-            **kwargs
-        ) -> Tensor:
-            # replace all <image> with <|vision_start|><|image_pad|><|vision_end|>
-            text = text.replace("<image>", "<|vision_start|><|image_pad|><|vision_end|>")
-            return orginal_tokenizer_encode(text, **kwargs)
-        tokenizer.encode = encode.__get__(tokenizer)
-        return tokenizer
+        return AutoTokenizer.from_pretrained(self.path)
