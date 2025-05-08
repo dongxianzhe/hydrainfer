@@ -1,9 +1,10 @@
 import os
 import torch
 from torch import nn, Tensor
+import math
 from transformers import Qwen2VLConfig, AutoProcessor, AutoTokenizer
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
-from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel
+from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel,PatchEmbed,PatchMerger,apply_rotary_pos_emb_vision
 from typing import Optional
 import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
@@ -24,16 +25,109 @@ class Qwen2VLImageTokenCaculator(ImageTokenCaculator):
         height, width = smart_resize(height,width)
         return (height // 14) * (width // 14) // 4
 
+class VisionRotaryEmbedding(nn.Module):
+    def __init__(self, dim: int, theta: float = 10000.0) -> None:
+        super().__init__()
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+    def forward(self, seqlen: int) -> torch.Tensor:
+        seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+        freqs = torch.outer(seq, self.inv_freq)
+        return freqs
+
+
+class VisionMlp(nn.Module):
+    def __init__(self, dim: int, hidden_dim: int, hidden_act: str) -> None:
+        super().__init__()
+        self.fc1 = nn.Linear(dim, hidden_dim)
+        self.act = silu
+        self.fc2 = nn.Linear(hidden_dim, dim)
+
+    def forward(self, x) -> torch.Tensor:
+        return self.fc2(self.act(self.fc1(x)))
+
+class VisionSdpaAttention(nn.Module):
+    def __init__(self, dim: int, num_heads: int = 16) -> None:
+        super().__init__()
+        self.num_heads = num_heads
+        self.qkv = nn.Linear(dim, dim*3, bias=True)
+        self.proj = nn.Linear(dim, dim)
+
+    def forward(
+        self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor, rotary_pos_emb: torch.Tensor = None
+    ) -> torch.Tensor:
+        seq_length = hidden_states.shape[0]
+        q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+        q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
+        k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
+        
+        seq_length = hidden_states.shape[0]
+        attention_mask = torch.full(
+            [1, seq_length, seq_length], torch.finfo(q.dtype).min, device=q.device, dtype=q.dtype
+        )
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
+
+        q = q.transpose(0, 1)
+        k = k.transpose(0, 1)
+        v = v.transpose(0, 1)
+        attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
+        attn_weights = attn_weights + attention_mask
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        attn_output = torch.matmul(attn_weights, v)
+        attn_output = attn_output.transpose(0, 1)
+        attn_output = attn_output.reshape(seq_length, -1)
+        attn_output = self.proj(attn_output)
+        return attn_output
+
+class  Qwen2VLVisionBlock(nn.Module):
+    def __init__(self, config: Qwen2VLConfig, attn_implementation: str):
+        super().__init__()
+        self.norm1 = nn.LayerNorm(config.embed_dim, eps=1e-6)
+        self.norm2 = nn.LayerNorm(config.embed_dim, eps=1e-6)
+        mlp_hidden_dim = int(config.embed_dim * config.mlp_ratio)
+
+        self.attn = VisionSdpaAttention(config.embed_dim,num_heads=config.num_heads)
+
+        self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
+
+    def forward(self, hidden_states, cu_seqlens, rotary_pos_emb) -> torch.Tensor:
+        hidden_states = hidden_states + self.attn(
+            self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
+        )
+        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
+        return hidden_states
+
 class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
         # 1. config
         config = Qwen2VLConfig.from_pretrained(model_path)
+        self.spatial_merge_size = config.spatial_merge_size
+        
+        self.patch_embed = PatchEmbed(
+            patch_size=config.patch_size,
+            temporal_patch_size=config.temporal_patch_size,
+            in_channels=config.in_channels,
+            embed_dim=config.embed_dim,
+        )
+
+        head_dim = config.embed_dim // config.num_heads
+        self.rotary_pos_emb = VisionRotaryEmbedding(head_dim // 2)
+
+        self.blocks = nn.ModuleList(
+            [Qwen2VLVisionBlock(config, config._attn_implementation) for _ in range(config.depth)]
+        )
+        self.merger = PatchMerger(
+            dim=config.hidden_size, context_dim=config.embed_dim, spatial_merge_size=config.spatial_merge_size
+        )
         # 2. create model
-        torch.set_default_dtype(dtype)
-        with torch.device(device):
-            self.vision = Qwen2VisionTransformerPretrainedModel(config.vision_config)
-        torch.set_default_dtype(torch.float)
+        # torch.set_default_dtype(dtype)
+        # with torch.device(device):
+        #     self.vision = Qwen2VisionTransformerPretrainedModel(config.vision_config)
+        # torch.set_default_dtype(torch.float)
+
         # 3. load vision state dict
         state_dict = self.vision.state_dict()
         loaded_set = set() # used to verify all weight are loaded
@@ -50,17 +144,70 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
         # 4. verify
         assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
 
+    def rot_pos_emb(self, grid_thw):
+        pos_ids = []
+        for t, h, w in grid_thw:
+            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
+            hpos_ids = hpos_ids.reshape(
+                h // self.spatial_merge_size,
+                self.spatial_merge_size,
+                w // self.spatial_merge_size,
+                self.spatial_merge_size,
+            )
+            hpos_ids = hpos_ids.permute(0, 2, 1, 3)
+            hpos_ids = hpos_ids.flatten()
+
+            wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
+            wpos_ids = wpos_ids.reshape(
+                h // self.spatial_merge_size,
+                self.spatial_merge_size,
+                w // self.spatial_merge_size,
+                self.spatial_merge_size,
+            )
+            wpos_ids = wpos_ids.permute(0, 2, 1, 3)
+            wpos_ids = wpos_ids.flatten()
+            pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
+        pos_ids = torch.cat(pos_ids, dim=0)
+        max_grid_size = grid_thw[:, 1:].max()
+        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+        return rotary_pos_emb
     
-    def forward(self, pixel_values: Tensor, grid_thws: Tensor) -> VisionModelOutput:
-        assert pixel_values.dim() == 2, f'pixel value shape should be 4 dim but got {pixel_values.shape}'
-        output = VisionModelOutput()
-        output.image_features = self.vision(pixel_values, grid_thws) # (n_patches, hidden_size)
-        return output
+    def forward(self, hidden_states: Tensor, grid_thw: Tensor) -> VisionModelOutput:
+        # assert pixel_values.dim() == 2, f'pixel value shape should be 4 dim but got {pixel_values.shape}'
+        hidden_states = self.patch_embed(hidden_states)
+        rotary_pos_emb = self.rot_pos_emb(grid_thw)
+
+        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
+            dim=0, dtype=torch.int32
+        )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+
+        for blk in self.blocks:
+            hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
+
+        return self.merger(hidden_states)
 
 class Qwen2VisionModel(VisionModel):
     def __init__(self, path: str, dtype: torch.dtype, device: torch.device):
         self.config = Qwen2VLConfig.from_pretrained(path)
         self.visual = Qwen2VisionTransformerPretrainedModelMock(path, dtype, device)
+        
+        state_dict = self.visual.state_dict()
+        loaded_set = set() # used to verify all weight are loaded
+        for entry in os.scandir(path):
+            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
+                print(f'load safetensor from {entry.path}')
+                for name, weight in safetensors.torch.load_file(entry.path).items():
+                    if name.startswith('vision.'):
+                        state_dict[name.removeprefix('vision.')].copy_(weight)
+                        loaded_set.add(name)
+
+        self.vision.to(dtype)
+        self.vision.eval()
+        # 4. verify
+        assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
+
 
     def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
         pixel_values_list: list[Tensor] = []
