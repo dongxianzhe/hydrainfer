@@ -28,13 +28,14 @@ def preprocess_dataset(path: str, split: str, model_path: str) -> Dataset:
     cache_file = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), 
         'cache', 
-        f"{path}_{split}_{model_path}.parquet".replace('/', '-')
+        f"{path}_{split}.parquet".replace('/', '-')
     )
     cache_log = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), 
         'cache', 
-        f"{path}_{split}_{model_path}.log".replace('/', '-')
+        f"{path}_{split}.log".replace('/', '-')
     )
+    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
     if os.path.exists(cache_file):
         print(f"Loading preprocessed dataset from {cache_file}")
         dataset = Dataset.from_parquet(cache_file)
@@ -93,7 +94,7 @@ def load_processed_dataset(path: str, split: str, model_path: str) -> Dataset:
     cache_file = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), 
         'cache', 
-        f"{path}_{split}_{model_path}.parquet".replace('/', '-')
+        f"{path}_{split}.parquet".replace('/', '-')
     )
     if os.path.exists(cache_file):
         print(f"Loading preprocessed dataset from {cache_file}")
