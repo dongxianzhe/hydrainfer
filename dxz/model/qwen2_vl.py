@@ -5,6 +5,7 @@ import math
 from transformers import Qwen2VLConfig, AutoProcessor, AutoTokenizer
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel,PatchEmbed,PatchMerger,apply_rotary_pos_emb_vision
+from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig
 from typing import Optional
 import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
@@ -52,9 +53,10 @@ class VisionAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int = 16) -> None:
         super().__init__()
         self.num_heads = num_heads
+        self.head_dim = dim // num_heads
         self.qkv = nn.Linear(dim, dim*3, bias=True)
         self.proj = nn.Linear(dim, dim)
-        self.attention = QwenMultiHeadAttention(MultiHeadAttentionConfig(self.n_heads, self.head_dim))
+        self.attention = QwenMultiHeadAttention(MultiHeadAttentionConfig(self.num_heads, self.head_dim))
 
     def forward(
         self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor, rotary_pos_emb: torch.Tensor = None
@@ -77,8 +79,8 @@ class VisionAttention(nn.Module):
         attn_output = self.proj(attn_output)
         return attn_output
 
-class  Qwen2VLVisionBlock(nn.Module):
-    def __init__(self, config: Qwen2VLConfig, attn_implementation: str):
+class Qwen2VLVisionBlock(nn.Module):
+    def __init__(self, config: Qwen2VLVisionConfig, attn_implementation: str):
         super().__init__()
         self.norm1 = nn.LayerNorm(config.embed_dim, eps=1e-6)
         self.norm2 = nn.LayerNorm(config.embed_dim, eps=1e-6)
@@ -99,7 +101,7 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
     def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
         super().__init__()
         # 1. config
-        config = Qwen2VLConfig.from_pretrained(model_path)
+        config = Qwen2VLVisionConfig.from_pretrained(model_path)
         self.spatial_merge_size = config.spatial_merge_size
         
         self.patch_embed = PatchEmbed(
@@ -166,7 +168,8 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
 class Qwen2VisionModel(VisionModel):
     def __init__(self, path: str, dtype: torch.dtype, device: torch.device):
         self.config = Qwen2VLConfig.from_pretrained(path)
-        self.visual = Qwen2VisionTransformerPretrainedModelMock(path, dtype, device)
+        with torch.device(device):
+            self.visual = Qwen2VisionTransformerPretrainedModelMock(path, dtype, device)
 
         state_dict = self.visual.state_dict()
         loaded_set = set() # used to verify all weight are loaded
