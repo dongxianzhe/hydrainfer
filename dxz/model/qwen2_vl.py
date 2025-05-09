@@ -201,7 +201,8 @@ class Qwen2VisionModel(VisionModel):
         pixel_values = torch.cat(pixel_values, dim=0)
         grid_thws = torch.cat(grid_thws, dim=0)
 
-        output = self.visual.forward(pixel_values, grid_thws)
+        output = VisionModelOutput()
+        output.image_features = self.visual.forward(pixel_values, grid_thws)
         return output
 
 class Qwen2VLSdpaAttention(nn.Module):
