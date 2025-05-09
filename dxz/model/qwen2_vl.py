@@ -118,16 +118,6 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
         self.merger = PatchMerger(
             dim=config.hidden_size, context_dim=config.embed_dim, spatial_merge_size=config.spatial_merge_size
         )
-        # 2. create model
-        # torch.set_default_dtype(dtype)
-        # with torch.device(device):
-        #     self.vision = Qwen2VisionTransformerPretrainedModel(config.vision_config)
-        # torch.set_default_dtype(torch.float)
-
-        # 3. load vision state dict
-        
-        # 4. verify
-        # assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
 
     def rot_pos_emb(self, grid_thw):
         pos_ids = []
@@ -159,7 +149,7 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
         return rotary_pos_emb
     
     def forward(self, hidden_states: Tensor, grid_thw: Tensor) -> VisionModelOutput:
-        # assert pixel_values.dim() == 2, f'pixel value shape should be 4 dim but got {pixel_values.shape}'
+        # assert pixel_values.dim() == 2, f'pixel value shape should be 2 dim but got {pixel_values.shape}'
         hidden_states = self.patch_embed(hidden_states)
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
 
@@ -177,20 +167,8 @@ class Qwen2VisionModel(VisionModel):
     def __init__(self, path: str, dtype: torch.dtype, device: torch.device):
         self.config = Qwen2VLConfig.from_pretrained(path)
         self.visual = Qwen2VisionTransformerPretrainedModelMock(path, dtype, device)
-        
-        # state_dict = self.visual.state_dict()
-        # loaded_set = set() # used to verify all weight are loaded
-        # for entry in os.scandir(path):
-        #     if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-        #         print(f'load safetensor from {entry.path}')
-        #         for name, weight in safetensors.torch.load_file(entry.path).items():
-        #             if name.startswith('vision.'):
-        #                 state_dict[name.removeprefix('vision.')].copy_(weight)
-        #                 loaded_set.add(name)
 
-        # self.vision.to(dtype)
-        # self.vision.eval()
-        state_dict = self.vision.state_dict()
+        state_dict = self.visual.state_dict()
         loaded_set = set() # used to verify all weight are loaded
         for entry in os.scandir(path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
@@ -199,9 +177,9 @@ class Qwen2VisionModel(VisionModel):
                     if name.startswith('visual.'):
                         state_dict[name.removeprefix('visual.')].copy_(weight)
                         loaded_set.add(name)
-        self.vision.load_state_dict(state_dict)
-        self.vision.to(dtype)
-        self.vision.eval()
+        self.visual.load_state_dict(state_dict)
+        self.visual.to(dtype)
+        self.visual.eval()
         # 4. verify
         assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
 
