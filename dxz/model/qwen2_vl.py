@@ -14,6 +14,7 @@ from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageMode
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from dxz.layer.norm import rmsnorm
 from dxz.layer.activation import silu
+from dxz.layer.multihead_attention import MultiHeadAttentionConfig,QwenMultiHeadAttention
 from dxz.utils.torch_utils import str2dtype, str2device
 
 class Qwen2VLImageTokenCaculator(ImageTokenCaculator):
@@ -47,12 +48,13 @@ class VisionMlp(nn.Module):
     def forward(self, x) -> torch.Tensor:
         return self.fc2(self.act(self.fc1(x)))
 
-class VisionSdpaAttention(nn.Module):
+class VisionAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int = 16) -> None:
         super().__init__()
         self.num_heads = num_heads
         self.qkv = nn.Linear(dim, dim*3, bias=True)
         self.proj = nn.Linear(dim, dim)
+        self.attention = QwenMultiHeadAttention(MultiHeadAttentionConfig(self.n_heads, self.head_dim))
 
     def forward(
         self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor, rotary_pos_emb: torch.Tensor = None
@@ -61,23 +63,17 @@ class VisionSdpaAttention(nn.Module):
         q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
         q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
         k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
-        
-        seq_length = hidden_states.shape[0]
-        attention_mask = torch.full(
-            [1, seq_length, seq_length], torch.finfo(q.dtype).min, device=q.device, dtype=q.dtype
-        )
-        for i in range(1, len(cu_seqlens)):
-            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
 
-        q = q.transpose(0, 1)
-        k = k.transpose(0, 1)
-        v = v.transpose(0, 1)
-        attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
-        attn_weights = attn_weights + attention_mask
-        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
-        attn_output = torch.matmul(attn_weights, v)
-        attn_output = attn_output.transpose(0, 1)
-        attn_output = attn_output.reshape(seq_length, -1)
+        # attention_mask = torch.zeros([1, seq_length, seq_length], device=q.device, dtype=torch.bool)
+        # for i in range(1, len(cu_seqlens)):
+        #     attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
+        # q = q.transpose(0, 1)
+        # k = k.transpose(0, 1)
+        # v = v.transpose(0, 1)cu_seqlenscu_seqlens
+        # attn_output = nn.functional.scaled_dot_product_attention(q, k, v, attention_mask, dropout_p=0.0)
+        # attn_output = attn_output.transpose(0, 1)
+        # attn_output = attn_output.reshape(seq_length, -1)
+        attn_output = self.attention(q,k,v,seq_length,cu_seqlens)
         attn_output = self.proj(attn_output)
         return attn_output
 
@@ -88,7 +84,7 @@ class  Qwen2VLVisionBlock(nn.Module):
         self.norm2 = nn.LayerNorm(config.embed_dim, eps=1e-6)
         mlp_hidden_dim = int(config.embed_dim * config.mlp_ratio)
 
-        self.attn = VisionSdpaAttention(config.embed_dim,num_heads=config.num_heads)
+        self.attn = VisionAttention(config.embed_dim,num_heads=config.num_heads)
 
         self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
 
@@ -129,20 +125,9 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
         # torch.set_default_dtype(torch.float)
 
         # 3. load vision state dict
-        state_dict = self.vision.state_dict()
-        loaded_set = set() # used to verify all weight are loaded
-        for entry in os.scandir(model_path):
-            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('visual.'):
-                        state_dict[name.removeprefix('visual.')].copy_(weight)
-                        loaded_set.add(name)
-        self.vision.load_state_dict(state_dict)
-        self.vision.to(dtype)
-        self.vision.eval()
+        
         # 4. verify
-        assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
+        # assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
 
     def rot_pos_emb(self, grid_thw):
         pos_ids = []
@@ -193,16 +178,28 @@ class Qwen2VisionModel(VisionModel):
         self.config = Qwen2VLConfig.from_pretrained(path)
         self.visual = Qwen2VisionTransformerPretrainedModelMock(path, dtype, device)
         
-        state_dict = self.visual.state_dict()
+        # state_dict = self.visual.state_dict()
+        # loaded_set = set() # used to verify all weight are loaded
+        # for entry in os.scandir(path):
+        #     if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
+        #         print(f'load safetensor from {entry.path}')
+        #         for name, weight in safetensors.torch.load_file(entry.path).items():
+        #             if name.startswith('vision.'):
+        #                 state_dict[name.removeprefix('vision.')].copy_(weight)
+        #                 loaded_set.add(name)
+
+        # self.vision.to(dtype)
+        # self.vision.eval()
+        state_dict = self.vision.state_dict()
         loaded_set = set() # used to verify all weight are loaded
         for entry in os.scandir(path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
                 print(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('vision.'):
-                        state_dict[name.removeprefix('vision.')].copy_(weight)
+                    if name.startswith('visual.'):
+                        state_dict[name.removeprefix('visual.')].copy_(weight)
                         loaded_set.add(name)
-
+        self.vision.load_state_dict(state_dict)
         self.vision.to(dtype)
         self.vision.eval()
         # 4. verify

@@ -172,3 +172,97 @@ class MultiHeadAttention(nn.Module):
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, params: MultiHeadAttentionParameters) -> MultiHeadAttentionOutput:
         return self.handler(query, key, value, params)
+
+
+class QwenFlashAttentionMutliHeadAttentionHandler2(nn.Module):
+    def __init__(self, config: MultiHeadAttentionConfig):
+        super().__init__()
+        self.n_heads = config.n_heads
+        self.head_dim = config.head_dim
+
+        self.next_handler: nn.Module = None
+    def forward(self, q: Tensor, k: Tensor, v: Tensor,seq_length ,cu_seqlens: torch.Tensor) -> torch.Tensor:
+        if flash_attn is None:
+            return self.next_handler(q, k, v, seq_length,cu_seqlens)
+        
+        dtype = q.dtype
+        device = q.device
+        attn_output = torch.empty(size=(seq_length, self.n_heads, self.head_dim), dtype=dtype, device=device)
+        mha_varlen_fwd(
+            attn_output, 
+            q, 
+            k, 
+            v, 
+            cu_seqlens, 
+            cu_seqlens,
+            None, 
+            None, 
+            None, 
+            seq_length, 
+            seq_length, 
+            1. / math.sqrt(self.head_dim),
+            0, 
+            -1,
+            -1, 
+            0, 
+        )
+        attn_output=attn_output.reshape(seq_length, -1)
+        return attn_output
+
+class QwenFlashAttentionMultiHeadAttentionHandler(nn.Module):
+    def __init__(self, config: MultiHeadAttentionConfig):
+        super().__init__()
+        self.n_heads = config.n_heads
+        self.head_dim = config.head_dim
+
+        self.next_handler: nn.Module = None
+    def forward(self, q: Tensor, k: Tensor, v: Tensor,seq_length ,cu_seqlens: torch.Tensor) -> torch.Tensor:
+        if flash_attn is None:
+            return self.next_handler(q, k, v, seq_length,cu_seqlens)
+
+
+        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+        attn_output = flash_attn.flash_attn_varlen_func(q, k, v, cu_seqlens, cu_seqlens, max_seqlen, max_seqlen).reshape(
+            seq_length, -1
+        )
+        return attn_output
+
+class QwenTorchMultiHeadAttentionHandler(nn.Module):
+    def __init__(self, config: MultiHeadAttentionConfig):
+        super().__init__()
+        self.n_heads = config.n_heads
+        self.head_dim = config.head_dim
+
+        self.next_handler: nn.Module = None
+    
+    def forward(self, q: Tensor, k: Tensor, v: Tensor,seq_length ,cu_seqlens: torch.Tensor) -> torch.Tensor:
+        # query/key/value (batch_size, seq_len, hidden_size)
+        attention_mask = torch.full([1, seq_length, seq_length], torch.finfo(q.dtype).min, device=q.device, dtype=q.dtype)
+        for i in range(1, len(cu_seqlens)):
+            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0            
+        q = q.transpose(0, 1)
+        k = k.transpose(0, 1)
+        v = v.transpose(0, 1)
+        attn_weights = torch.matmul(q, k.transpose(1, 2)) / math.sqrt(self.head_dim)
+        attn_weights = attn_weights + attention_mask
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        attn_output = torch.matmul(attn_weights, v)
+        attn_output = attn_output.transpose(0, 1)
+        attn_output = attn_output.reshape(seq_length, -1)
+
+        return attn_output
+
+class QwenMultiHeadAttention(nn.Module):
+    def __init__(self, config: MultiHeadAttentionConfig):
+        super().__init__()
+        self.handlers = [
+            QwenFlashAttentionMutliHeadAttentionHandler2(config), 
+            QwenFlashAttentionMultiHeadAttentionHandler(config), 
+            QwenTorchMultiHeadAttentionHandler(config), 
+        ] 
+        for i in range(len(self.handlers) - 1):
+            self.handlers[i].next_handler = self.handlers[i + 1]
+        self.handler = self.handlers[0]
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor,seq_length ,cu_seqlens: torch.Tensor) -> MultiHeadAttentionOutput:
+        return self.handler(query, key, value,seq_length,cu_seqlens)
