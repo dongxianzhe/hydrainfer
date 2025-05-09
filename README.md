@@ -55,7 +55,7 @@ pip install vllm==0.8.2
 Dataset preprocess.
 ```
 cd evaluation/dataset_analysis
-./evaluation.sh
+./preprocess.sh
 ```
 
 You can use script to test inference correctness:
