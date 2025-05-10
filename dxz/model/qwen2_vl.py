@@ -160,6 +160,7 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
         )
         cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
 
+        cu_seqlens=cu_seqlens.to(hidden_states.device)
         for blk in self.blocks:
             hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
 
