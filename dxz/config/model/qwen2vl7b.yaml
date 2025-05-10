@@ -1,0 +1,15 @@
+name: "qwen/qwen2-vl-7b"
+path: null
+dtype: "fp16"
+device: "cuda"
+
+vision:
+    image_token_id: 151655
+    num_image_tokens: 576
+
+language:
+    n_layers: 28
+    max_position_embeddings: 32768
+    n_qo_heads: 28
+    n_kv_heads: 4
+    head_dim: 128

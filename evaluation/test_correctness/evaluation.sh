@@ -7,10 +7,13 @@ export CUDA_VISIBLE_DEVICES=1
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
 # CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
 
-MODEL="llava-hf/llava-v1.6-vicuna-7b-hf"
-MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
-CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
+# MODEL="llava-hf/llava-v1.6-vicuna-7b-hf"
+# MODEL_PATH="path"
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
 
+MODEL="qwen/qwen2-vl-7b"
+MODEL_PATH="path"
+CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_qwen_vl_chat.jinja
 REQUEST_RATES=1
 NUM_REQUESTS=3
 host="127.0.0.1"
@@ -20,6 +23,7 @@ echo "starting api server"
 RAY_DEDUP_LOGS=0 \
     conda run -n dxz_dev --no-capture-output \
     python -m dxz.entrypoint.entrypoint \
+    model=qwen2vl7b \
     model.name=$MODEL \
     model.path=$MODEL_PATH \
     cluster=single \
