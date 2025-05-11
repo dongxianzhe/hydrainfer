@@ -84,16 +84,18 @@ class InstructionCreator(RequestProcessorComponent):
             width, height = image.size
             image_size = (height, width)
             images_size.append(image_size)
+            # llava (n_images, n_channels, height, width)
+            # llavanext (n_images, n_patches, n_channels, height, width)
+            # for llava(next), height=width=336
+            # qwen2-vl (n_patches, 1176) n_patches = round(height // 28) * round(width // 28) * 4
             images_tensor = self.processor(
                 text="", 
                 images = image, 
                 return_tensors="pt"
-            )['pixel_values'] # llava (n_images, n_channels, height, width) or llavanext (n_images, n_patches, n_channels, height, width)
-        n_pixel_values_images = images_tensor.shape[0] if images_tensor is not None else 0
+            )['pixel_values']
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt, add_special_tokens=False)
         n_token_ids_images = token_ids.count(self.image_token_id)
-        assert n_token_ids_images == n_pixel_values_images, f"image number is not equal between text and image list {n_token_ids_images} {n_pixel_values_images}"
         token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.image_token_caculator)
         n_images = n_token_ids_images
         n_prompt_tokens = len(token_ids)

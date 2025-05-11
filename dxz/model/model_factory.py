@@ -92,6 +92,9 @@ def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) ->
     if config.name == 'meta-llama/Llama-2-7b-hf':
         from dxz.model.llama import LlamaModelFactory
         return LlamaModelFactory(config, context)
+    if config.name == 'Qwen/Qwen2-VL-7B':
+        from dxz.model.qwen2_vl import Qwen2VLModelFactory
+        return Qwen2VLModelFactory(config, context)
     if config.name == "fake":
         from dxz.model.fake import FakeModelFactory
         return FakeModelFactory(config, context)
