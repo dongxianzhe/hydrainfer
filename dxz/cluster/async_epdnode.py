@@ -286,9 +286,13 @@ class AsyncEPDNode(AsyncEngine):
         )
 
     async def step_loop(self):
-        while True:
-            await self.step()
-            await asyncio.sleep(0.001)
+        try:
+            while True:
+                await self.step()
+                await asyncio.sleep(0.001)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
     
     async def perf_monitor_loop(self):
         while True:
