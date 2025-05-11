@@ -10,7 +10,7 @@ request_processor:
 batch_scheduler:
   max_overload_requests: 24
 batch_scheduler_profiler:
-  tpot_slo: 0.08
+  tpot_slo: 0.04
   profile_image_budgets: True
   profile_token_budgets: True
   profile_interference_encode_decode: True

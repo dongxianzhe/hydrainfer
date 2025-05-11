@@ -16,3 +16,4 @@ nccl_communicator: ${nccl_communicator}
 intranode_migrate_backend: ${intranode_migrate_backend}
 internode_migrate_backend: ${internode_migrate_backend}
 log_latency_breakdown: ${log_latency_breakdown}
+auto_compute_cache_memory: true
