@@ -16,3 +16,6 @@ def str2dtype(dtype: str) -> torch.dtype:
     if dtype == 'fp32':
         return torch.float
     raise Exception(f'dtype {dtype} is not supported')
+
+def get_dtype_size(dtype: torch.dtype) -> int:
+    return torch.tensor([], dtype=dtype).element_size()

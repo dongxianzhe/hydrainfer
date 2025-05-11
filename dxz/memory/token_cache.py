@@ -13,7 +13,7 @@ except ImportError:
     print('set_image_cache import failed')
 from dxz.memory import BlockAllocator
 from dxz.utils.allocate import IncreaingAllocator
-from dxz.utils.torch_utils import str2dtype, str2device
+from dxz.utils.torch_utils import str2dtype, str2device, get_dtype_size
 
 
 class TokenCache:
@@ -207,3 +207,7 @@ class TokenCacheBlockManager:
 
     def synchronize(self):
         self.migrate_stream.synchronize()
+
+    @classmethod
+    def compute_n_blocks(cls, config: TokenCacheBlockManagerConfig, memory: int):
+        return memory // (config.n_layers * config.n_tokens * config.block_size * config.n_heads * config.head_size * get_dtype_size(str2dtype(config.dtype)))

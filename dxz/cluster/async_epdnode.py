@@ -86,10 +86,38 @@ class AsyncEPDNode(AsyncEngine):
         self.has_language_model = self.config.enable_prefill or self.config.enable_decode
         self.has_kv_cache = self.config.enable_prefill or self.config.enable_decode
         self.has_image_cache = self.config.enable_encode or self.config.enable_prefill 
+        self.worker = getWorker(self.config.worker, WorkerContext())
+
+        if self.config.auto_compute_cache_memory:
+            total_memory = torch.cuda.get_device_properties(torch.device('cuda:0')).total_memory
+            model_memory = torch.cuda.max_memory_allocated()
+            reserved_memory = total_memory - model_memory
+            activation_memory_utilization = 0.
+            if self.has_vision_model:
+                activation_memory_utilization += 0.1
+            if self.has_language_model:
+                activation_memory_utilization += 0.1
+            cache_memory_utilization = 1 - activation_memory_utilization
+            if self.has_image_cache and self.has_kv_cache:
+                image_cache_memory_utilization = cache_memory_utilization * 0.1
+                kv_cache_memory_utilization = cache_memory_utilization * 0.8
+            elif self.has_image_cache and not self.has_kv_cache:
+                image_cache_memory_utilization = cache_memory_utilization
+                kv_cache_memory_utilization = 0.
+            elif not self.has_image_cache and self.has_kv_cache:
+                image_cache_memory_utilization = 0.
+                kv_cache_memory_utilization = cache_memory_utilization
+            else:
+                raise Exception('no cache pool is allocated')
+            kv_cache_memory = int(reserved_memory * kv_cache_memory_utilization)
+            image_cache_memory = int(reserved_memory * image_cache_memory_utilization)
+            print(f'auto compute cache memory: model_memory {model_memory} kv_cache_memory {kv_cache_memory} image_cache_memory {image_cache_memory}')
+            self.config.kv_cache.n_blocks = TokenCacheBlockManager.compute_n_blocks(self.config.kv_cache, kv_cache_memory)
+            self.config.image_cache.n_blocks = TokenCacheBlockManager.compute_n_blocks(self.config.image_cache, image_cache_memory)
+            print(f'overwrite kv cache n_blocks to {self.config.kv_cache.n_blocks} image cache n_blocks to {self.config.image_cache.n_blocks}')
+
         self.kv_cache_block_manager = TokenCacheBlockManager(self.config.kv_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
         self.image_cache_block_manager = TokenCacheBlockManager(self.config.image_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None
-
-        self.worker = getWorker(self.config.worker, WorkerContext())
         self.executor = InstructionExecutor(
             self.config.executor, 
             ExecutorContext(
