@@ -1,4 +1,4 @@
-name: "qwen/qwen2-vl-7b"
+name: "Qwen/Qwen2-VL-7B"
 path: null
 dtype: "fp16"
 device: "cuda"
