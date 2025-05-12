@@ -182,7 +182,7 @@ class QwenFlashAttentionMutliHeadAttentionHandler2(nn.Module):
 
         self.next_handler: nn.Module = None
     def forward(self, q: Tensor, k: Tensor, v: Tensor,seq_length ,cu_seqlens: torch.Tensor) -> torch.Tensor:
-        if flash_attn is None:
+        if mha_varlen_fwd is None:
             return self.next_handler(q, k, v, seq_length,cu_seqlens)
         
         dtype = q.dtype
