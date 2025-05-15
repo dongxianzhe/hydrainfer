@@ -15,6 +15,10 @@ MODEL="Qwen/Qwen2-VL-7B"
 MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
 CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_qwen_vl_chat.jinja
 
+MODEL="deepseek-ai/deepseek-vl2-tiny"
+MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/deepseek-vl2-tiny"
+CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_deepseek_vl2.jinja
+
 REQUEST_RATES=1
 NUM_REQUESTS=3
 host="127.0.0.1"
@@ -24,7 +28,7 @@ echo "starting api server"
 RAY_DEDUP_LOGS=0 \
     conda run -n dxz_dev --no-capture-output \
     python -m dxz.entrypoint.entrypoint \
-    model=qwen2vl7b \
+    model=deepseekvl2tiny \
     model.name=$MODEL \
     model.path=$MODEL_PATH \
     cluster.epdnode.executor.use_flash_infer=false \
