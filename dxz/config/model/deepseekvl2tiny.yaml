@@ -1,0 +1,15 @@
+name: "deepseek-ai/deepseek-vl2-tiny"
+path: null
+dtype: "fp16"
+device: "cuda"
+
+vision:
+    image_token_id: 128815
+    num_image_tokens: 576
+
+language:
+    n_layers: 12
+    max_position_embeddings: 4096
+    n_qo_heads: 10
+    n_kv_heads: 10
+    head_dim: 128

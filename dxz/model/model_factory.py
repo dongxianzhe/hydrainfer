@@ -95,6 +95,9 @@ def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) ->
     if config.name == 'Qwen/Qwen2-VL-7B':
         from dxz.model.qwen2_vl import Qwen2VLModelFactory
         return Qwen2VLModelFactory(config, context)
+    if config.name == 'deepseek-ai/deepseek-vl2-tiny':
+        from dxz.model.deepseek_vl2 import DeepSeekVL2ModelFactory
+        return DeepSeekVL2ModelFactory(config, context)
     if config.name == "fake":
         from dxz.model.fake import FakeModelFactory
         return FakeModelFactory(config, context)
