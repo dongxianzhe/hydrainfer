@@ -1,17 +1,18 @@
 import os
-import torch
-from torch import nn, Tensor
 import math
+import torch
+import safetensors.torch
+from jinja2 import Template
+from typing import Optional
+from torch import nn, Tensor
 from transformers import Qwen2VLConfig, AutoProcessor, AutoTokenizer
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel,PatchEmbed,PatchMerger,apply_rotary_pos_emb_vision
 from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig
-from typing import Optional
-import safetensors.torch
 from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from dxz.model.downloader import download_hf_model
 from dxz.model.parameters import AttentionParameters, LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from dxz.layer.norm import rmsnorm
 from dxz.layer.activation import silu
@@ -385,6 +386,36 @@ class Qwen2VLLanguageModel(LanguageModel):
         return LanguageModelOutput(sample_token_ids=sample_token_ids)
     
 
+class Qwen2VLTokenizer(Tokenizer):
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(path)
+        self.bos_token = self.tokenizer.bos_token
+        self.eos_token = self.tokenizer.eos_token
+        self.eos_token_id = self.tokenizer.eos_token_id
+        current_script_path = os.path.abspath(__file__)
+        script_dir = os.path.dirname(current_script_path)
+        template_path = os.path.join(script_dir, "chat_template", "template_qwen_vl_chat.jinja")
+        with open(template_path, 'r', encoding='utf-8') as file:
+            self.chat_template = Template(file.read())
+
+    def encode(self, prompt: str) -> list[int]:
+        token_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        return token_ids
+
+    def decode(self, token_id: int) -> str:
+        return self.tokenizer.decode([token_id])
+
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
+        prompt = self.chat_template.render(
+            messages = messages, 
+            bos_token = self.bos_token, 
+            eos_token = self.eos_token,
+            add_generation_prompt = True, 
+        )
+        return prompt
+
+
 class Qwen2VLModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
         self.name = config.name
@@ -418,6 +449,7 @@ class Qwen2VLModelFactory(ModelFactory):
 
     def getLanguageModelConfig(self) -> LanguageModelConfig:
         config_ref = Qwen2VLConfig.from_pretrained(self.path)
+        tokenzier = AutoTokenizer.from_pretrained(self.path)
 
         n_layers = config_ref.num_hidden_layers
         max_position_embeddings = config_ref.max_position_embeddings
@@ -433,14 +465,15 @@ class Qwen2VLModelFactory(ModelFactory):
             n_qo_heads=n_qo_heads,
             n_kv_heads=n_kv_heads,
             head_dim=head_dim,
+            eos_token_id = tokenzier.eos_token_id, 
         )
         return config
 
     def getProcessor(self) -> AutoProcessor:
         return AutoProcessor.from_pretrained(self.path)
 
-    def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.path)
+    def getTokenizer(self) -> Tokenizer:
+        return Qwen2VLTokenizer(self.path)
 
 if __name__ == '__main__':
     device = torch.device('cuda:0')

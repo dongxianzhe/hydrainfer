@@ -5,21 +5,17 @@ source ../common.sh
 export CUDA_VISIBLE_DEVICES=1
 MODEL="llava-hf/llava-1.5-7b-hf"
 MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
-CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
 
 MODEL="llava-hf/llava-v1.6-vicuna-7b-hf"
 MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
-CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
 
 MODEL="Qwen/Qwen2-VL-7B"
 MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
-CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_qwen_vl_chat.jinja
 
 MODEL="deepseek-ai/deepseek-vl2-tiny"
 MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/deepseek-vl2-tiny"
-CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_deepseek_vl2.jinja
 
-REQUEST_RATES=1
+REQUEST_RATES=10
 NUM_REQUESTS=3
 host="127.0.0.1"
 port="8891"
@@ -36,7 +32,6 @@ RAY_DEDUP_LOGS=0 \
     cluster.epdnode.executor.multi_threads_forward=false \
     cluster=single \
     cluster.epdnode.kv_cache.n_blocks=2048 \
-    apiserver.chat_template=$CHAT_TEMPLATE_PATH \
     apiserver.host=$host \
     apiserver.port=$port \
     ignore_eos=true \

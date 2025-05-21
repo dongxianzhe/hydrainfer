@@ -94,7 +94,7 @@ class InstructionCreator(RequestProcessorComponent):
                 return_tensors="pt"
             )['pixel_values']
         # 2. token_ids
-        token_ids = self.tokenizer.encode(request.prompt, add_special_tokens=False)
+        token_ids = self.tokenizer.encode(request.prompt)
         n_token_ids_images = token_ids.count(self.image_token_id)
         token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.image_token_caculator)
         n_images = n_token_ids_images
@@ -219,8 +219,8 @@ class SamplingParamsProcess(RequestProcessorComponent):
     def __init__(self, config: RequestProcessorConfig):
         self.config = config
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
-        tokenizer = model_factory.getTokenizer()
-        self.eos_token_id = tokenizer.eos_token_id
+        language_config = model_factory.getLanguageModelConfig()
+        self.eos_token_id = language_config.eos_token_id
 
     def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
         rcb.sampling_params = request.sampling_params

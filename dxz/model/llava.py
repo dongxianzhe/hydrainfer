@@ -1,13 +1,14 @@
 import os
 import safetensors.torch
 import torch
+from jinja2 import Template
 from torch import nn, Tensor
 from transformers import LlavaConfig, AutoProcessor, AutoTokenizer, AutoConfig
 from typing import Optional
 from dxz.model.llama import LlamaForCausalLM
 from dxz.model.clip import CLIPVisionModel
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
 from dxz.model.downloader import download_hf_model
 from dxz.utils.torch_utils import str2device, str2dtype
 
@@ -161,6 +162,41 @@ class LlavaLanguageModel(LanguageModel):
         )
 
 
+class LlavaTokenizer(Tokenizer):
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(path)
+        self.bos_token = self.tokenizer.bos_token
+        self.eos_token = self.tokenizer.eos_token
+        self.eos_token_id = self.tokenizer.eos_token_id
+        current_script_path = os.path.abspath(__file__)
+        script_dir = os.path.dirname(current_script_path)
+        template_path = os.path.join(script_dir, "chat_template", "template_llava.jinja")
+        with open(template_path, 'r', encoding='utf-8') as file:
+            self.chat_template = Template(file.read())
+
+    def encode(self, prompt: str) -> list[int]:
+        token_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        return token_ids
+
+    def decode(self, token_id: int) -> str:
+        # note that this is not an ASCII U+005F _, it is U+2581
+        if self.tokenizer.convert_ids_to_tokens([token_id])[0].startswith('▁'):
+            text = " " + self.tokenizer.decode([token_id])
+        else:
+            text = self.tokenizer.decode([token_id])
+        return text
+
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
+        prompt = self.chat_template.render(
+            messages = messages, 
+            bos_token = self.bos_token, 
+            eos_token = self.eos_token,
+            add_generation_prompt = True, 
+        )
+        return prompt
+
+
 class LlavaModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
         self.name = config.name
@@ -190,17 +226,19 @@ class LlavaModelFactory(ModelFactory):
 
     def getLanguageModelConfig(self) -> LanguageModelConfig:
         config_ref = AutoConfig.from_pretrained(self.path)
+        tokenizer = AutoTokenizer.from_pretrained(self.path)
         config = LanguageModelConfig(
             n_layers = config_ref.text_config.num_hidden_layers, 
             max_position_embeddings = config_ref.text_config.max_position_embeddings, 
             n_qo_heads = config_ref.text_config.num_attention_heads, 
             n_kv_heads = config_ref.text_config.num_key_value_heads, 
             head_dim = config_ref.text_config.head_dim, 
+            eos_token_id = tokenizer.eos_token_id, 
         )
         return config
 
     def getProcessor(self) -> AutoProcessor:
         return AutoProcessor.from_pretrained(self.path)
 
-    def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.path)
+    def getTokenizer(self) -> Tokenizer:
+        return LlavaTokenizer(self.path)

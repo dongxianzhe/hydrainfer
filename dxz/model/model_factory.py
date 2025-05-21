@@ -31,6 +31,7 @@ class LanguageModelConfig:
     n_qo_heads: int
     n_kv_heads: int
     head_dim: int
+    eos_token_id: int
 
 
 class VisionModel:
@@ -45,6 +46,21 @@ class LanguageModel:
     def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         raise NotImplementedError
 
+
+class Tokenizer:
+    def encode(self, prompt: str) -> list[int]:
+        raise NotImplementedError
+    def decode(self, token_id: int) -> str:
+        raise NotImplementedError
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
+        """
+        messages = [
+            {"role": "user", "content": "Hello!"},
+            {"role": "assistant", "content": "Hi there!"},
+            {"role": "user", "content": "How are you?"},
+        ]
+        """
+        raise NotImplementedError
 
 class ModelFactory:
     def getVisionModel(self) -> VisionModel:
@@ -62,7 +78,7 @@ class ModelFactory:
     def getProcessor(self) -> AutoProcessor:
         raise NotImplementedError
 
-    def getTokenizer(self) -> AutoTokenizer:
+    def getTokenizer(self) -> Tokenizer:
         raise NotImplementedError
 
 

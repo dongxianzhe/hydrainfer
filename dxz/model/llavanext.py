@@ -7,10 +7,10 @@ from torch import nn, Tensor
 from transformers import LlavaConfig, LlavaNextConfig, AutoProcessor, AutoConfig, AutoTokenizer
 from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
 from dxz.model.downloader import download_hf_model
-from dxz.model import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModelConfig, LanguageModelConfig, LanguageModel, VisionModel, ImageTokenCaculator
+from dxz.model import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModelConfig, LanguageModelConfig, LanguageModel, VisionModel, ImageTokenCaculator, Tokenizer
 from dxz.model.parameters import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
 from dxz.utils.torch_utils import str2device, str2dtype
-from dxz.model.llava import LlavaVisionModel, LlavaLanguageModel
+from dxz.model.llava import LlavaVisionModel, LlavaLanguageModel, LlavaTokenizer
 
 
 class LlavaNextImageTokenCaculator(ImageTokenCaculator):
@@ -154,17 +154,19 @@ class LlavaNextModelFactory(ModelFactory):
 
     def getLanguageModelConfig(self) -> LanguageModelConfig:
         config_ref = AutoConfig.from_pretrained(self.path)
+        tokenizer = AutoTokenizer.from_pretrained(self.path)
         config = LanguageModelConfig(
             n_layers = config_ref.text_config.num_hidden_layers, 
             max_position_embeddings = config_ref.text_config.max_position_embeddings, 
             n_qo_heads = config_ref.text_config.num_attention_heads, 
             n_kv_heads = config_ref.text_config.num_key_value_heads, 
             head_dim = config_ref.text_config.head_dim, 
+            eos_token_id = tokenizer.eos_token_id, 
         )
         return config
 
     def getProcessor(self) -> AutoProcessor:
         return AutoProcessor.from_pretrained(self.path)
 
-    def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.path)
+    def getTokenizer(self) -> Tokenizer:
+        return LlavaTokenizer(self.path)

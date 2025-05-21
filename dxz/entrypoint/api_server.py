@@ -1,6 +1,5 @@
 import time
 import shortuuid
-from jinja2 import Template
 from dataclasses import dataclass, field
 from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -27,7 +26,6 @@ class APIServerConfig:
     port: int = 8888
     zmq: ZMQConfig = field(default_factory=ZMQConfig)
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
-    chat_template: Optional[str] = None # chat template path
 
 class APIServer:
     def __init__(self, config: APIServerConfig):
@@ -36,14 +34,6 @@ class APIServer:
         self.processor = model_factory.getProcessor()
         self.tokenizer = model_factory.getTokenizer()
         self.vision_config = model_factory.getVisionModelConfig()
-        self.bos_token = self.tokenizer.bos_token
-        self.eos_token = self.tokenizer.eos_token
-        assert config.chat_template is not None, 'not specified chat template'
-        if config.chat_template:
-            with open(config.chat_template, 'r', encoding='utf-8') as file:
-                self.chat_template = Template(file.read())
-        else:
-            self.chat_template = None
 
         self.zmq_recv = init_zmq_recv(config.zmq)
         @asynccontextmanager
@@ -104,12 +94,7 @@ class APIServer:
 
             image_base64_list = self._parse_content(request.messages)
             assert len(image_base64_list) == 1, f'only support one image per request, but got {len(image_base64_list)} images'
-            prompt = self.chat_template.render(
-                messages = request.messages, 
-                bos_token = self.bos_token, 
-                eos_token = self.eos_token,
-                add_generation_prompt = True, 
-            )
+            prompt = self.tokenizer.apply_chat_template(request.messages)
             
             async_stream = AsyncStream()
             self.async_streams[request_id] = async_stream
@@ -158,7 +143,7 @@ class APIServer:
                                 model=request.model,
                                 choices = [ChatCompletionResponseStreamChoice(
                                     index = index, 
-                                    delta = DeltaMessage(content = output_text + " ")
+                                    delta = DeltaMessage(content = output_text)
                                 )]
                             )
                             yield f"data: {response.model_dump_json(exclude_unset=True)}\n\n"

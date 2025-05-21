@@ -1,6 +1,7 @@
 import os
 import math
 import safetensors.torch
+from jinja2 import Template
 import torch
 import torch.nn.functional as F
 import timm
@@ -9,7 +10,7 @@ from torch import nn, Tensor
 from typing import Optional
 from dxz.model.downloader import download_hf_model
 from dxz.model.parameters import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
-from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator
+from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
 from dxz.model.deepseek_v3 import DeepseekForCausalLM
 from dxz.utils.torch_utils import str2dtype, str2device
 from dxz.transformers_utils.deepseek_vl2_config import MlpProjectorConfig, DeepseekVLV2Config
@@ -270,6 +271,35 @@ class DeepSeekVL2LanguageModel(LanguageModel):
         sample_token_ids = self.model(input_ids, image_features, position_ids, model_params)
         return LanguageModelOutput(sample_token_ids=sample_token_ids)
 
+class DeepSeekVL2Tokenizer(Tokenizer):
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(path)
+        self.bos_token = self.tokenizer.bos_token
+        self.eos_token = self.tokenizer.eos_token
+        self.eos_token_id = self.tokenizer.eos_token_id
+        current_script_path = os.path.abspath(__file__)
+        script_dir = os.path.dirname(current_script_path)
+        template_path = os.path.join(script_dir, "chat_template", "template_deepseek_vl2.jinja")
+        with open(template_path, 'r', encoding='utf-8') as file:
+            self.chat_template = Template(file.read())
+
+    def encode(self, prompt: str) -> list[int]:
+        token_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        return token_ids
+
+    def decode(self, token_id: int) -> str:
+        return self.tokenizer.decode([token_id])
+
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
+        prompt = self.chat_template.render(
+            messages = messages, 
+            bos_token = self.bos_token, 
+            eos_token = self.eos_token,
+            add_generation_prompt = True, 
+        )
+        return prompt
+
 class DeepSeekVL2ModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
         self.name = config.name
@@ -308,17 +338,19 @@ class DeepSeekVL2ModelFactory(ModelFactory):
         assert hidden_size % n_qo_heads == 0
         head_dim = hidden_size // n_qo_heads
 
+        tokenizer = AutoTokenizer.from_pretrained(self.path)
         config = LanguageModelConfig(
-            n_layers=n_layers,
-            max_position_embeddings=max_position_embeddings, 
-            n_qo_heads=n_qo_heads,
-            n_kv_heads=n_kv_heads,
-            head_dim=head_dim,
+            n_layers = n_layers,
+            max_position_embeddings = max_position_embeddings, 
+            n_qo_heads = n_qo_heads,
+            n_kv_heads = n_kv_heads,
+            head_dim = head_dim,
+            eos_token_id = tokenizer.eos_token_id, 
         )
         return config
 
     def getProcessor(self) -> AutoProcessor:
         return DeepseekVLV2Processor.from_pretrained(self.path)
 
-    def getTokenizer(self) -> AutoTokenizer:
-        return AutoTokenizer.from_pretrained(self.path)
+    def getTokenizer(self) -> Tokenizer:
+        return DeepSeekVL2Tokenizer(self.path)
