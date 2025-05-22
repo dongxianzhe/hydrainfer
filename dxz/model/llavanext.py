@@ -129,11 +129,7 @@ class LlavaNextVisionModel(VisionModel):
 
 class LlavaNextModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
-        self.name = config.name
-        if config.path is None:
-            self.path = download_hf_model(repo_id=config.name)
-        else:
-            self.path = config.path
+        self.path = config.path
         self.dtype = str2dtype(config.dtype)
         self.device = str2device(config.device)
 

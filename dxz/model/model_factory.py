@@ -1,3 +1,5 @@
+import os
+import json
 import torch
 from torch import Tensor
 from typing import Optional
@@ -5,6 +7,7 @@ from transformers import AutoProcessor
 from transformers import AutoTokenizer
 from dataclasses import dataclass, field, fields
 import argparse
+from dxz.model.downloader import download_hf_model
 from dxz.utils.torch_utils import str2dtype, str2device
 from dxz.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from dxz.model_parallel.process_group import ParallelConfig, ProcessGroup
@@ -84,8 +87,7 @@ class ModelFactory:
 
 @dataclass
 class ModelFactoryConfig:
-    name: str = "llava-hf/llava-1.5-7b-hf"
-    path: Optional[str] = None
+    path: str = "llava-hf/llava-1.5-7b-hf"
     dtype: str = "fp16"
     device: str = "cuda:0"
 
@@ -96,25 +98,25 @@ class ModelFactoryContext:
 
 
 def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) -> ModelFactory:
-    if config.name == 'llava-hf/llava-v1.6-vicuna-7b-hf': 
-        from dxz.model.llavanext import LlavaNextModelFactory
-        return LlavaNextModelFactory(config, context)
-    if config.name == "llava-hf/llava-1.5-7b-hf":
+    if not os.path.isdir(config.path):
+        config.path = download_hf_model(repo_id=config.path)
+
+    with open(os.path.join(config.path, "config.json"), "r", encoding="utf-8") as file:
+        json_config = json.load(file)
+    architecture = json_config.get("architectures", [None])[0]
+    model_type = json_config.get("model_type", None)
+
+    if architecture == 'LlavaForConditionalGeneration':
         from dxz.model.llava import LlavaModelFactory
         return LlavaModelFactory(config, context)
-    if config.name == "gpt2":
-        from dxz.model.gpt2 import GPT2ModelFactory
-        return GPT2ModelFactory(config, context)
-    if config.name == 'meta-llama/Llama-2-7b-hf':
-        from dxz.model.llama import LlamaModelFactory
-        return LlamaModelFactory(config, context)
-    if config.name == 'Qwen/Qwen2-VL-7B':
+    if architecture == 'LlavaNextForConditionalGeneration':
+        from dxz.model.llavanext import LlavaNextModelFactory
+        return LlavaNextModelFactory(config, context)
+    if architecture == 'Qwen2VLForConditionalGeneration':
         from dxz.model.qwen2_vl import Qwen2VLModelFactory
         return Qwen2VLModelFactory(config, context)
-    if config.name == 'deepseek-ai/deepseek-vl2-tiny':
+    if model_type == 'deepseek_vl_v2':
         from dxz.model.deepseek_vl2 import DeepSeekVL2ModelFactory
         return DeepSeekVL2ModelFactory(config, context)
-    if config.name == "fake":
-        from dxz.model.fake import FakeModelFactory
-        return FakeModelFactory(config, context)
-    raise Exception(f'invalid model {config.name}')
+
+    raise Exception(f'unsupported model architecture model_type {architecture} or {model_type}')
