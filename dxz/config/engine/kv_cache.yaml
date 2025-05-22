@@ -1,8 +1,0 @@
-n_layers: ${model.language.n_layers}
-n_tokens: 2
-n_blocks: 2048
-block_size: 16
-n_heads: ${model.language.n_kv_heads}
-head_size: ${model.language.head_dim}
-dtype: ${model.dtype}
-device: ${model.device}

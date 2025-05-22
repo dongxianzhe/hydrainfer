@@ -16,8 +16,6 @@ class NodeConfig:
     request_processor: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
     batch_scheduler: BatchSchedulerConfig = field(default_factory=BatchSchedulerConfig)
-    kv_cache: TokenCacheBlockManagerConfig = field(default_factory=TokenCacheBlockManagerConfig)
-    image_cache: TokenCacheBlockManagerConfig = field(default_factory=TokenCacheBlockManagerConfig)
     executor: ExecutorConfig = field(default_factory=ExecutorConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     batch_scheduler_profiler: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)

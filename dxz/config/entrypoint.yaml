@@ -1,7 +1,11 @@
 defaults:
-  - model: llava7b
   - cluster: hybrid
   - _self_
+
+model:
+  path: null
+  dtype: "fp16"
+  device: "cuda"  
 
 mode: "online"
 

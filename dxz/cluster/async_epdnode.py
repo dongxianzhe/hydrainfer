@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dxz.request import Request
 from dxz.model import getModelFactory, ModelFactoryContext
 from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
-from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext
+from dxz.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig
 from dxz.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
 from dxz.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
 
@@ -88,6 +88,28 @@ class AsyncEPDNode(AsyncEngine):
         self.has_image_cache = self.config.enable_encode or self.config.enable_prefill 
         self.worker = getWorker(self.config.worker, WorkerContext())
 
+        model_factory = getModelFactory(self.config.model, ModelFactoryContext())
+        language_config = model_factory.getLanguageModelConfig()
+        kv_cache_config = TokenCacheBlockManagerConfig(
+            n_layers = language_config.n_layers, 
+            n_tokens = 2, 
+            n_blocks = -1, 
+            block_size = 16, 
+            n_heads = language_config.n_kv_heads, 
+            head_size = language_config.head_dim, 
+            dtype = self.config.model.dtype, 
+            device = self.config.model.device, 
+        )
+        image_cache_config = TokenCacheBlockManagerConfig(
+            n_layers = 1, 
+            n_tokens = 1, 
+            n_blocks = -1, 
+            block_size = 576, 
+            n_heads = language_config.n_qo_heads, 
+            head_size = language_config.head_dim, 
+            dtype = self.config.model.dtype, 
+            device = self.config.model.device, 
+        )
         if self.config.auto_compute_cache_memory:
             total_memory = torch.cuda.get_device_properties(torch.device('cuda:0')).total_memory
             model_memory = torch.cuda.max_memory_allocated()
@@ -112,12 +134,12 @@ class AsyncEPDNode(AsyncEngine):
             kv_cache_memory = int(reserved_memory * kv_cache_memory_utilization)
             image_cache_memory = int(reserved_memory * image_cache_memory_utilization)
             print(f'auto compute cache memory: model_memory {model_memory} kv_cache_memory {kv_cache_memory} image_cache_memory {image_cache_memory}')
-            self.config.kv_cache.n_blocks = TokenCacheBlockManager.compute_n_blocks(self.config.kv_cache, kv_cache_memory)
-            self.config.image_cache.n_blocks = TokenCacheBlockManager.compute_n_blocks(self.config.image_cache, image_cache_memory)
-            print(f'overwrite kv cache n_blocks to {self.config.kv_cache.n_blocks} image cache n_blocks to {self.config.image_cache.n_blocks}')
+            kv_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory)
+            image_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory)
+            print(f'set kv cache n_blocks to {kv_cache_config.n_blocks} image cache n_blocks to {image_cache_config.n_blocks}')
 
-        self.kv_cache_block_manager = TokenCacheBlockManager(self.config.kv_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
-        self.image_cache_block_manager = TokenCacheBlockManager(self.config.image_cache, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None
+        self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
+        self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None
         self.executor = InstructionExecutor(
             self.config.executor, 
             ExecutorContext(
