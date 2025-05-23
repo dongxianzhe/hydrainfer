@@ -7,7 +7,7 @@ from dxz.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorCon
 from dxz.utils.zmq_utils import ZMQConfig
 
 @dataclass
-class NCCLMigrateCommunicator:
+class NCCLCommunicatorConfig:
     host: str
     port: int
 
@@ -24,7 +24,7 @@ class NodeConfig:
     enable_decode: bool = True
     zmq: Optional[ZMQConfig] = None
     debug_migrate: bool = True
-    nccl_communicator: Optional[NCCLMigrateCommunicator] = None
+    nccl_communicator: Optional[NCCLCommunicatorConfig] = None
     intranode_migrate_backend: Literal['ipc', 'nccl'] = 'ipc'
     internode_migrate_backend: Literal['nccl'] = 'nccl'
     log_latency_breakdown: bool = False

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from dxz.utils.socket_utils import parse_address
 import zmq
 import zmq.asyncio
 
@@ -10,7 +11,6 @@ import zmq.asyncio
     zmq_send.send_pyobj(pyobj)
     output = await zmq_recv.recv_pyobj()
 """
-@dataclass
 class ZMQConfig:
     host: str = "127.0.0.1"
     port: int = 40832
@@ -19,13 +19,13 @@ class ZMQConfig:
 def init_zmq_recv(config: ZMQConfig) -> zmq.asyncio.Socket:
     context = zmq.asyncio.Context(1)
     zmq_recv = context.socket(zmq.PULL)
-    zmq_url = f"tcp://{config.host}:{config.port}"
+    zmq_url = parse_address(config)
     zmq_recv.bind(zmq_url)
     return zmq_recv
 
 def init_zmq_send(config: ZMQConfig) -> zmq.sugar.socket.Socket:
     context = zmq.Context(1)     
     zmq_send = context.socket(zmq.PUSH)
-    zmq_url = f"tcp://{config.host}:{config.port}"
+    zmq_url = parse_address(config)
     zmq_send.connect(zmq_url)
     return zmq_send

@@ -1,4 +1,4 @@
-from .node_config import NodeConfig
+from .node_config import NodeConfig, NCCLCommunicatorConfig
 from .epdnode import EPDNode
 from .migrate import MigrateGraphBuilder, MigrateGraph, MigrateNode
 from .async_epdnode import AsyncEPDNode, NodeContext

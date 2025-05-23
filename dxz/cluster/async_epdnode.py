@@ -10,6 +10,7 @@ import torch.distributed as dist
 from torch.distributed import P2POp, batch_isend_irecv
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor
+from dxz.utils.socket_utils import parse_address
 from dxz.request import Request
 from dxz.model import getModelFactory, ModelFactoryContext
 from dxz.engine import AsyncEngine, RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
@@ -63,7 +64,7 @@ class AsyncEPDNode(AsyncEngine):
             backend="nccl", 
             rank=self.context.rank, 
             world_size=self.context.world_size, 
-            init_method=f"tcp://{self.config.nccl_communicator.host}:{self.config.nccl_communicator.port}", 
+            init_method=parse_address(self.config.nccl_communicator), 
         )
         print('warm up p2p operation')
         p2p_op_list = []

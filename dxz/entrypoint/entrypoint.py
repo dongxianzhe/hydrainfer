@@ -7,10 +7,11 @@ from typing import Literal
 from fastapi import Request
 import dxz
 from dxz.engine import RequestProcessParameters, OutputTokenParams
-from dxz.cluster import Cluster, ClusterConfig
+from dxz.cluster import Cluster, ClusterConfig, NCCLCommunicatorConfig
 from dxz.request import OfflineInferenceOutput
 from dxz.entrypoint.api_server import APIServer, APIServerConfig
 from dxz.utils.zmq_utils import ZMQConfig, init_zmq_recv
+from dxz.utils.socket_utils import parse_port
 from dxz.utils.counter import Counter
 
 
@@ -18,6 +19,7 @@ from dxz.utils.counter import Counter
 class EntryPointConfig:
     mode: Literal["offline", "online"] = "online"
     zmq: ZMQConfig = field(default_factory=ZMQConfig)
+    nccl_communicator: NCCLCommunicatorConfig = field(default_factory=NCCLCommunicatorConfig)
     apiserver: APIServerConfig = field(default_factory=ClusterConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
@@ -25,6 +27,8 @@ class EntryPointConfig:
 class EntryPoint:
     def __init__(self, config: EntryPointConfig):
         self.config = config
+        self.config.zmq.port = parse_port(self.config.zmq.port)
+        self.config.nccl_communicator.port = parse_port(self.config.nccl_communicator.port)
         self.cluster = Cluster(config.cluster)
         if self.config.mode == 'online':
             self.api_server = APIServer(config.apiserver)

@@ -11,7 +11,7 @@ mode: "online"
 
 zmq:
   host: "127.0.0.1"
-  port: 40832
+  port: -1
 
 apiserver:
   host: "127.0.0.1"
@@ -22,14 +22,14 @@ apiserver:
 
 nccl_communicator:
   host: "127.0.0.1"
-  port: 8889
+  port: -1
 
 cluster: 
   ebalancer:
     policy: "round"
   pbalancer:
     policy: "round"
-  ray_cluster_port: 6379
+  ray_cluster_port: -1
   debug: false
 
 intranode_migrate_backend: "ipc"
