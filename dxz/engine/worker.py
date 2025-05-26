@@ -6,6 +6,8 @@ from typing import Optional
 from dxz.model.model_factory import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput, ModelFactoryConfig, ModelFactoryContext, ModelFactory, getModelFactory
 from dxz.model_parallel.process_group import init_global_process_group, ParallelConfig
 from dataclasses import dataclass, field, fields
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 
 @dataclass
@@ -62,7 +64,7 @@ class RayWorker(Worker):
         model_factory: ModelFactory = getModelFactory(config.model_factory_config, model_factory_context)
         self.vision_model = model_factory.getVisionModel() 
         self.language_model = model_factory.getLanguageModel() 
-        print('ray worker init finished')
+        logger.info('ray worker init finished')
 
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         return self.language_model.forward(input_ids, image_features, position_ids, model_params)
@@ -81,16 +83,14 @@ class RayWorkers(Worker):
         for rank in range(config.parallel_config.world_size):
             worker = ray.remote(num_cpus=0, num_gpus=1)(RayWorker).remote(config, context, rank)
             self.workers.append(worker)
-        print('ray workers init finished')
+        logger.info('ray workers init finished')
 
     def execute_language_model(self, input_ids: list[Tensor], image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
-        print('execute language model')
         objs = []
         for worker in self.workers:
             obj = worker.execute_language_model.remote(input_ids, image_features, position_ids, model_params)
             objs.append(obj)
         results = ray.get(objs)
-        print('execute language model finished')
         return results[0]
 
     def execute_vision_model(self, pixel_values: Tensor, model_params: VisionModelParameters) -> VisionModelOutput:

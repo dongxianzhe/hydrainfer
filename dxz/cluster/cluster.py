@@ -8,6 +8,8 @@ from dxz.utils.zmq_utils import ZMQConfig
 from dxz.utils.socket_utils import parse_port
 from dxz.utils.allocate import IncreaingAllocator
 from dxz.utils.ray_utils import start_head_node
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 
 @dataclass
@@ -98,7 +100,7 @@ class Cluster:
         assert has_prefill and has_decode, "node type is not enough to inference"
 
         migrate_graph: MigrateGraph = graph_builder.build_graph()
-        migrate_graph.print()
+        logger.info(f'{migrate_graph}')
 
         objs = []
         for node in self.nodes:

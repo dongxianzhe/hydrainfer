@@ -13,6 +13,8 @@ from dxz.memory import TokenCacheBlockManager
 from dxz.engine.output_token_processor import OutputTokenParams
 from dxz.model import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 from dxz.utils.torch_utils import str2device, str2dtype
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 @dataclass
 class BatchSchedulerProfilerConfig:
@@ -148,11 +150,11 @@ class BatchSchedulerProfiler:
             total_dur += dur
         avg_dur = total_dur / self.n_profile_iter
         self._free_cache(batch)
-        print(f'{name} binary search [{mid}] avg_dur: {avg_dur} tpot_slo {self.config.tpot_slo}')
+        logger.info(f'{name} binary search [{mid}] profile_avg_dur: {avg_dur} target_tpot_slo {self.config.tpot_slo}')
         return avg_dur < self.config.tpot_slo - 0.01
 
     def profile_image_budgets(self) -> int:
-        print(f'start profile_image_budgets')
+        logger.info(f'start profile_image_budgets')
         image_budgets = self._binary_search_max_batch_size(
             left=1, 
             right=8, 
@@ -163,11 +165,11 @@ class BatchSchedulerProfiler:
                 name='image budgets', 
             )
         )
-        print(f'finish profile_image_budgets {image_budgets}')
+        logger.info(f'finish profile_image_budgets {image_budgets}')
         return image_budgets
 
     def profile_token_budgets(self) -> int:
-        print(f'start profile_token_budgets')
+        logger.info(f'start profile_token_budgets')
         token_budgets = self._binary_search_max_batch_size(
             left=1, 
             right=2048, 
@@ -178,25 +180,25 @@ class BatchSchedulerProfiler:
                 name='token budgets', 
             )
         )
-        print(f'finish profile_token_budgets {token_budgets}')
+        logger.info(f'finish profile_token_budgets {token_budgets}')
         return token_budgets
 
     def interference_analysis(self, mode='ep'):
-        print(f'start analysis interference {mode}')
+        logger.info(f'start analysis interference {mode}')
         # loop image number
         for n_encode in range(10):
-        # loop prefill number
+            # loop prefill number
             if mode == 'ep':
                 n_tokens_list = range(512, 512 * 8 + 1, 512)
             elif mode == 'ed':
                 n_tokens_list = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024]
             for n_tokens in n_tokens_list:
-        # prepare image batch
+                # prepare image batch
                 encode_batch = self._prepare_encode_batch(n_encode)
-        # prepare prefill batch
+                # prepare prefill batch
                 if mode == 'ep':
                     fill_batch = self._prepare_prefill_batch(n_tokens)
-        # prepare decode batch
+                # prepare decode batch
                 elif mode == 'ed':
                     fill_batch = self._prepare_decode_batch(n_tokens, n_cache = 512)
 
@@ -207,11 +209,11 @@ class BatchSchedulerProfiler:
                     for future in futures:
                         future.get()
 
-        # warm up
+                # warm up
                 for _ in range(self.n_warmup_iter):
                     execute()
 
-        # forward
+                # forward
                 total_dur = 0.
                 for _ in range(self.n_profile_iter):
                     start = time.perf_counter()
@@ -221,11 +223,11 @@ class BatchSchedulerProfiler:
                     total_dur += dur
                 self._free_cache(encode_batch)
                 self._free_cache(fill_batch)
-        # caculate time
+                # caculate time
                 avg_dur = total_dur / self.n_profile_iter
-        # caculate throughput
+                # caculate throughput
                 throughput = n_tokens / avg_dur
-                print('encode, n_tokens, latency, throughput:', n_encode, n_tokens, avg_dur, throughput)
+                logger.info('encode, n_tokens, latency, throughput:', n_encode, n_tokens, avg_dur, throughput)
 
     def profile(self) -> ProfileOutput:
         if self.config.interference_encode_decode_analysis:

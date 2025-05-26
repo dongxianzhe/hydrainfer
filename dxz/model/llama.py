@@ -13,6 +13,8 @@ from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGr
 from dxz.layer.norm import rmsnorm
 from dxz.layer.activation import silu
 from dxz.utils.torch_utils import str2dtype, str2device
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 class LlamaSdpaAttention(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -146,7 +148,7 @@ class LlamaForCausalLM(nn.Module):
         loaded_set = set()
         for entry in os.scandir(model_weights_path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     if name.endswith('.self_attn.rotary_emb.inv_freq'):
                         continue

@@ -21,6 +21,8 @@ from dxz.transformers_utils.deepseek_vl2_config import DeepseekVLV2Config, Deeps
 from dxz.model.parameters import LanguageModelParameters, AttentionParameters
 from dxz.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from dxz.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 class DeepseekV3RMSNorm(LlamaRMSNorm):
     pass
@@ -292,7 +294,7 @@ class DeepseekForCausalLM(nn.Module):
         loaded_set = set()
         for entry in os.scandir(model_weights_path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     if name.startswith('language.'):
                         name = name.removeprefix('language.')

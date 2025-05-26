@@ -19,6 +19,8 @@ from dxz.layer.activation import silu
 from dxz.layer.multihead_attention import MultiHeadAttentionConfig,QwenMultiHeadAttention
 from dxz.utils.torch_utils import str2dtype, str2device
 from functools import partial
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 smart_resize = partial(smart_resize, max_pixels=3584 * 3584)
 
@@ -180,7 +182,7 @@ class Qwen2VisionModel(VisionModel):
         loaded_set = set() # used to verify all weight are loaded
         for entry in os.scandir(path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     if name.startswith('visual.'):
                         state_dict[name.removeprefix('visual.')].copy_(weight)
@@ -360,7 +362,7 @@ class Qwen2VLForConditionalGeneration(nn.Module):
         loaded_set = set()
         for entry in os.scandir(model_weights_path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     if name.startswith('visual'):
                         continue

@@ -7,6 +7,8 @@ from dataclasses import dataclass, fields
 from dxz.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest, PullCache
 from dxz.utils.allocate import IncreaingAllocator
 import argparse
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 @dataclass
 class BatchSchedulerConfig:
@@ -176,11 +178,11 @@ class BatchScheduler:
                 next_step.append(seq)
 
         if self.config.debug:
-            print(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
-            print(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
-            print(f'inst: ' + ' '.join(f'{seq.instructions.curr}' for seq in this_step))
-            print(f'batch images {batch_embed_images}')
-            print(f'batch tokens {batch_fill_tokens}')
+            logger.debug(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
+            logger.debug(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
+            logger.debug(f'inst: ' + ' '.join(f'{seq.instructions.curr}' for seq in this_step))
+            logger.debug(f'batch images {batch_embed_images}')
+            logger.debug(f'batch tokens {batch_fill_tokens}')
 
         self.running = next_step
         return BatchRequest(this_step)

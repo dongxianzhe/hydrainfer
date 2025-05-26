@@ -1,10 +1,12 @@
 import torch
 from torch import nn, Tensor
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 try:
     from dxz._C.kernel.norm import rms_norm as rms_norm_kernel
 except ImportError:
-    print('rms_norm kernel import failed')
+    logger.warning('rms_norm kernel import failed')
     rms_norm_kernel = None
 
 def rmsnorm(h: Tensor, w: Tensor, eps: float) -> Tensor:

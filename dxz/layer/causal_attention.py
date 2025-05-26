@@ -7,11 +7,13 @@ from dxz.utils.statistic import attention_score_heatmap, histogram
 from dxz.utils import attention_utils
 from dxz.utils.attention_utils import sparsity
 from dataclasses import dataclass
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 try:
     from dxz._C.kernel.flash_attn import mha_varlen_fwd
 except ImportError:
-    print('self compiled flash attention mha_varlen_fwd import failed')
+    logger.warning('compiled flash attention mha_varlen_fwd import failed')
     mha_varlen_fwd = None
 
 

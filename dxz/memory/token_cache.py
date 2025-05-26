@@ -6,11 +6,13 @@ from dataclasses import dataclass, field
 from typing import Optional, Literal
 from dxz._C.data_transfer.block_migration import get_ipc_mem_handle
 from dxz._C.data_transfer import block_migration
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 try:
     from dxz._C.kernel.cache_kernels import set_image_cache
 except ImportError:
     set_image_cache = None
-    print('set_image_cache import failed')
+    logger.warning('set_image_cache import failed')
 from dxz.memory import BlockAllocator
 from dxz.utils.allocate import IncreaingAllocator
 from dxz.utils.torch_utils import str2dtype, str2device, get_dtype_size
@@ -56,7 +58,6 @@ class TokenCache:
 
         for cache, value in zip(self.caches, values):
             slot_view = cache.view(-1, cache.shape[-2], cache.shape[-1])
-            print(slot_view.shape, slot_ids.shape, value.shape)
             slot_view[slot_ids, :, :] = value
             return
 

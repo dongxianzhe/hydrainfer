@@ -1,4 +1,6 @@
 import os
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 def convert_pickle_to_safetensors(path):
     import torch
@@ -32,9 +34,9 @@ def convert_pickle_to_safetensors(path):
                 st_file = os.path.splitext(filename)[0] + ".safetensors"
                 st_file_path = os.path.join(path, st_file)
                 save_file(state_dict, st_file_path)
-                print(f"Converted {filename} to {st_file}")
+                logger.info(f"Converted {filename} to {st_file}")
             else:
-                print(f"Ignore non-tensor pickle file: {filename}")
+                logger.info(f"Ignore non-tensor pickle file: {filename}")
 
 
 def download_hf_model(repo_id, revision=None, allow_patterns=None, cache_dir=None, convert_to_safetensors=False):

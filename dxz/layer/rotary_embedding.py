@@ -1,10 +1,12 @@
 import torch
 from torch import nn, Tensor
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 try:
     from dxz._C.kernel.position_embedding import apply_rotary_pos_emb
 except ImportError:
-    print('import position embedding kernel failed')
+    logger.warning('import position embedding kernel failed')
     apply_rotary_pos_emb = None
 
 

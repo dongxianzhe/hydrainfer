@@ -2,11 +2,13 @@ import torch
 from torch import Tensor
 from dxz.memory.block_allocator import BlockAllocator
 from dxz.memory import TokenCache
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 try:
     from dxz._C.kernel.kv_cache_kernels import set_kv_cache as set_kv_cache_kernel
 except:
-    print('import set_kv_cache failed')
+    logger.warning('import set_kv_cache failed')
     set_kv_cache_kernel = None
 
 class KVCache:

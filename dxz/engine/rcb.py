@@ -43,13 +43,15 @@ class RequestControlBlock:
 
     def register_output_token_processor(self, output_token_processor: OutputTokenProcessor):
         self.output_token_processors.append(output_token_processor)
-
-    def print(self):
-        print(f'---------------------------- request control block --------------------------------')
-        print(f'sid {self.sid}')
-        for instruction in self.instructions:
-            print(f"{instruction}")
-        print(f'-----------------------------------------------------------------------------------')
+    
+    def __repr__(self) -> str:
+        lines = [
+            '---------------------------- request control block --------------------------------',
+            f'sid {self.sid}'
+        ]
+        lines.extend(repr(instruction) for instruction in self.instructions)
+        lines.append('-----------------------------------------------------------------------------------')
+        return '\n'.join(lines)
 
 
 class BatchRequest:

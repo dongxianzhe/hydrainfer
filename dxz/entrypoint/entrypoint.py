@@ -13,6 +13,8 @@ from dxz.entrypoint.api_server import APIServer, APIServerConfig
 from dxz.utils.zmq_utils import ZMQConfig, init_zmq_recv
 from dxz.utils.socket_utils import parse_port
 from dxz.utils.counter import Counter
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 
 @dataclass
@@ -75,7 +77,7 @@ class EntryPoint:
 
 @hydra.main(config_path=os.path.join(dxz.__path__[0], 'config'), config_name="entrypoint", version_base=None)
 def main(config: DictConfig):
-    print(OmegaConf.to_yaml(config))
+    logger.info(OmegaConf.to_yaml(config))
     entrypoint = EntryPoint(config) 
 
 

@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from dxz.utils.async_stream import AsyncStream
 from dxz.utils.counter import Counter
 from dxz.request.offline_inference_output import OfflineInferenceOutput
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 
 class OutputTokenProcessor:
@@ -17,7 +19,7 @@ class PrintOutputTokenProcessor(OutputTokenProcessor):
         pass
 
     def append_token_id(self, token_id, is_last_token = False):
-        print(f'output token {token_id}, {is_last_token}')
+        logger.info(f'output token {token_id}, {is_last_token}')
 
 
 class PrintTextOutputTokenProcessor(OutputTokenProcessor):
@@ -25,7 +27,7 @@ class PrintTextOutputTokenProcessor(OutputTokenProcessor):
         self.tokenizer = tokenizer
 
     def append_token_id(self, token_id, is_last_token = False):
-        print(f'output token {self.tokenizer.decode(token_id)}, {is_last_token}')
+        logger.info(f'output token {self.tokenizer.decode(token_id)}, {is_last_token}')
 
 
 class LogOutputTokenProcessor(OutputTokenProcessor):

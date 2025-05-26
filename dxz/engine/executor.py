@@ -18,11 +18,13 @@ from dxz.memory import TokenCacheBlockManager, KVCache
 from dxz.engine import BatchRequest
 from dxz.request import OfflineInferenceOutput
 from dxz.utils.torch_utils import str2dtype, str2device
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 try:
     import flashinfer
 except ImportError:
-    print('flashinfer import failed')
+    logger.warning('flashinfer import failed')
     flashinfer = None
 
 

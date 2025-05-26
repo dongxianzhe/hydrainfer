@@ -14,20 +14,24 @@ class MigrateGraph:
     ep_table: dict[str, list[MigrateNode]]
     pd_table: dict[str, list[MigrateNode]]
 
-    def print_table(self, table: dict[str, list[MigrateNode]]):
-        for i, table in table.items():
-            print(f'{i}', end='')
-            for j in table:
-                print(f' -> {j.id}', end='')
-            print()
+    def _table_repr(self, table: dict[str, list[MigrateNode]]) -> str:
+        lines = []
+        for i, nodes in table.items():
+            line = f'{i}'
+            for j in nodes:
+                line += f' -> {j.id}'
+            lines.append(line)
+        return '\n'.join(lines)
 
-    def print(self):
-        print('------------------- migrate graph ---------------------')
-        print('ep table:')
-        self.print_table(self.ep_table)
-        print('pd table:')
-        self.print_table(self.pd_table)
-
+    def __repr__(self) -> str:
+        return (
+            '------------------- migrate graph ---------------------\n'
+            'ep table:\n'
+            f'{self._table_repr(self.ep_table)}\n'
+            'pd table:\n'
+            f'{self._table_repr(self.pd_table)}\n'
+            '------------------------------------------------------'
+        )
 
 class MigrateGraphBuilder:
     def __init__(self):

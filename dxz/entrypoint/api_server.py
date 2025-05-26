@@ -13,6 +13,8 @@ from dxz.request import Request, SamplingParameters
 from dxz.engine import RequestProcessParameters, OutputTokenParams
 from dxz.model import ModelFactoryConfig, getModelFactory, ModelFactoryContext
 from dxz.utils.zmq_utils import ZMQConfig, init_zmq_recv
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 
 class RequestObserver:
@@ -55,7 +57,7 @@ class APIServer:
                 if output_text is None:
                     del self.async_streams[request_id]
                     output_stream.finish()
-                    print(f'request {request_id} finished')
+                    logger.info(f'request {request_id} finished')
             await asyncio.sleep(0)
 
     def register(self, observer: RequestObserver):
@@ -154,7 +156,7 @@ class APIServer:
                 raise Exception('not support non stream chat completion')
 
     def run(self):
-        print('api server is running')
+        logger.info('api server is running')
         uvicorn.run(self.app, host=self.config.host, port=self.config.port, log_level='info')
 
 # @app.post('/v1/chat/completions')

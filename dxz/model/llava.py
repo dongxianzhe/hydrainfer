@@ -11,6 +11,8 @@ from dxz.model.parameters import VisionModelParameters, VisionModelOutput, Langu
 from dxz.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
 from dxz.model.downloader import download_hf_model
 from dxz.utils.torch_utils import str2device, str2dtype
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 class LlavaTokenCaculator(ImageTokenCaculator):
     def __init__(self, path: str):
@@ -59,7 +61,7 @@ class LlavaForConditionalGeneration(nn.Module):
         loaded_set = set() # used to verify all weight are loaded
         for entry in os.scandir(model_weights_path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     state_dict[name].data.copy_(weight)
                     loaded_set.add(name)
@@ -91,7 +93,7 @@ class LlavaVisionModel(VisionModel):
         loaded_set = set() # used to verify all weight are loaded
         for entry in os.scandir(model_path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     if name.startswith('vision_tower.'):
                         state_dict[name.removeprefix('vision_tower.')].copy_(weight)
@@ -135,7 +137,7 @@ class LlavaLanguageModel(LanguageModel):
         loaded_set = set() # used to verify all weight are loaded
         for entry in os.scandir(model_path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     if name.startswith('language_model.'):
                         state_dict[name.removeprefix('language_model.')].copy_(weight)

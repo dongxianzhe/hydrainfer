@@ -16,6 +16,8 @@ from dxz.utils.torch_utils import str2dtype, str2device
 from dxz.transformers_utils.deepseek_vl2_config import MlpProjectorConfig, DeepseekVLV2Config
 from dxz.transformers_utils.deepseek_vl2_processor import DeepseekVLV2Processor
 from transformers import AutoProcessor, AutoTokenizer
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 class DeepSeekVL2ImageTokenCaculator(ImageTokenCaculator):
     def __init__(self, model_path: str):
@@ -136,7 +138,7 @@ class DeepSeekVL2VisionModel(VisionModel):
         projector_loaded_set = set()
         for entry in os.scandir(path):
             if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                print(f'load safetensor from {entry.path}')
+                logger.info(f'load safetensor from {entry.path}')
                 for name, weight in safetensors.torch.load_file(entry.path).items():
                     if name.startswith('vision.'):
                         vision_state_dict[name.removeprefix('vision.')].copy_(weight)

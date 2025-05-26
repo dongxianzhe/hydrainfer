@@ -10,6 +10,8 @@ from dxz.request.request import Request, RequestMetaData
 from dxz.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache, EPMigrate, PDMigrate
 from dxz.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 from dxz.model import ImageTokenCaculator
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
 
 
 @dataclass
@@ -174,7 +176,7 @@ class InstructionCreator(RequestProcessorComponent):
 
         instructions = builder.build_instruction_list()
         if self.config.debug:
-            print(f'{request.prompt[:10]} {instructions}')
+            logger.debug(f'{request.prompt[:10]} {instructions}')
 
         rcb.instructions = instructions
         rcb.request_metadata = RequestMetaData(

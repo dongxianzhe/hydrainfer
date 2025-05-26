@@ -1,10 +1,13 @@
 import torch
 from torch import nn, Tensor
 import math
+from dxz.utils.logger import getLogger
+logger = getLogger(__name__)
+
 try:
     from dxz._C.kernel.activation import silu as silu_kernel
 except ImportError:
-    print('silu kernel import failed')
+    logger.warning('silu kernel import failed')
     silu_kernel = None
 
 class NewGELUActivation(nn.Module):
