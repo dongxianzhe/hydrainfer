@@ -7,11 +7,11 @@ import torch
 from torch import Tensor
 import pytest
 from flash_attn import flash_attn_func, flash_attn_qkvpacked_func, flash_attn_with_kvcache, flash_attn_kvpacked_func
-from dxz._C.kernel.flash_attn import mha_varlen_fwd
-from dxz.memory.kv_cache import KVCache
-from dxz.memory.block_allocator import BlockAllocator
-from dxz.layer.attention import TorchCausalGroupedQueryPageAttention
-from dxz.model.parameters import InputParameters
+from hydrainfer._C.kernel.flash_attn import mha_varlen_fwd
+from hydrainfer.memory.kv_cache import KVCache
+from hydrainfer.memory.block_allocator import BlockAllocator
+from hydrainfer.layer.attention import TorchCausalGroupedQueryPageAttention
+from hydrainfer.model.parameters import InputParameters
 
 @pytest.mark.parametrize("batch_size", [1, 2, 3, 4, 8])
 @pytest.mark.parametrize("seq_len", [16, 576, 577])
@@ -449,7 +449,7 @@ def test_flash_infer_batch_prefill_mask_perf():
 
     workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=device)
 
-    from dxz.utils.profiler import profile
+    from hydrainfer.utils.profiler import profile
 
 
     with profile('full mask'):
@@ -511,7 +511,7 @@ def test_attention_param_creation_perf():
     k_seq_lens = [[random.randint(0, 10) for _ in range(batch_size)] for _ in range(n_layers)]
     
     device = torch.device('cuda:0')
-    from dxz.utils.profiler import profile
+    from hydrainfer.utils.profiler import profile
     with profile('many attention_param creation'):
         for _ in range(n_tokens):
             for layer_id in range(n_layers):

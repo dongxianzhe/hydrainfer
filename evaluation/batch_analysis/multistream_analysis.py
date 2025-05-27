@@ -2,12 +2,12 @@ import os
 import json
 import torch
 from typing import Any, Literal
-from dxz.memory import KVCache
+from hydrainfer.memory import KVCache
 from dataclasses import dataclass, asdict, field
 from concurrent.futures import ThreadPoolExecutor
 from batch_analysis import BatchDecode, BatchEncode, benchmark
-from dxz.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModel, VisionModelParameters, LanguageModel, LanguageModelParameters, LanguageModelConfig
-from dxz.layer.causal_attention import AttentionParameters, AttentionParametersBuilder
+from hydrainfer.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModel, VisionModelParameters, LanguageModel, LanguageModelParameters, LanguageModelConfig
+from hydrainfer.layer.causal_attention import AttentionParameters, AttentionParametersBuilder
 
 dtype = torch.half
 device = torch.device('cuda')

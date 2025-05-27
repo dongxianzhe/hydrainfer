@@ -1,5 +1,5 @@
-from dxz.engine.llm_engine import LLMEngine, Sequence
-from dxz.memory.block_allocator import BlockAllocator
+from hydrainfer.engine.llm_engine import LLMEngine, Sequence
+from hydrainfer.memory.block_allocator import BlockAllocator
 import torch
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
 from transformers import GPT2Tokenizer

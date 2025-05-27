@@ -1,7 +1,7 @@
 import copy
 import torch
 from torch import nn, Tensor
-from dxz.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
+from hydrainfer.layer.rotary_embedding import RotaryEmbedding, RotaryEmbeddingRef, compute_default_inv_freq
 import pytest
 from torch.nn import functional as F
 

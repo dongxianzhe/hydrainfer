@@ -4,11 +4,11 @@ from transformers import MixtralConfig
 from transformers import MixtralForCausalLM as MixtralForCausalLMRef
 from torch.nn import functional
 from typing import Optional
-from dxz.memory.kv_cache import KVCache
-from dxz.model.mixtral import MixtralForCausalLM
-from dxz.model.parameters import InputParameters
-from dxz.layer.rotary_embedding import compute_default_inv_freq, RotaryEmbedding
-from dxz.utils.model_utils import count_parameters, print_parameters
+from hydrainfer.memory.kv_cache import KVCache
+from hydrainfer.model.mixtral import MixtralForCausalLM
+from hydrainfer.model.parameters import InputParameters
+from hydrainfer.layer.rotary_embedding import compute_default_inv_freq, RotaryEmbedding
+from hydrainfer.utils.model_utils import count_parameters, print_parameters
 
 torch.set_grad_enabled(False)
 

@@ -1,5 +1,5 @@
 import pytest
-from dxz.memory.block_allocator import BlockAllocator
+from hydrainfer.memory.block_allocator import BlockAllocator
 import random
 
 def test_allocate():

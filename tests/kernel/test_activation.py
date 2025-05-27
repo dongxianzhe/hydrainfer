@@ -1,5 +1,5 @@
 import torch
-from dxz._C.kernel.activation import silu
+from hydrainfer._C.kernel.activation import silu
 from torch.nn.functional import silu as silu_torch
 import pytest
 

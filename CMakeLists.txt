@@ -48,7 +48,7 @@ else()
 endif()
 
 project(
-    "dxz"
+    "hydrainfer"
     LANGUAGES C CXX CUDA
 )
 

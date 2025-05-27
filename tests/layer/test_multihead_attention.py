@@ -12,21 +12,21 @@ from torch import nn
 @pytest.mark.parametrize("device", ["cuda:0" if torch.cuda.is_available() else "cpu"])
 @torch.inference_mode()
 def test_Qwenattention(batch_size, seq_lens, head_dim, n_heads,dtype ,device):
-    # 配置与 Handler
-    from dxz.layer.multihead_attention import MultiHeadAttentionConfig
-    from dxz.layer.multihead_attention import QwenTorchMultiHeadAttentionHandler
-    from dxz.layer.multihead_attention import QwenFlashAttentionMultiHeadAttentionHandler
-    from dxz.layer.multihead_attention import QwenFlashAttentionMutliHeadAttentionHandler2
+    # config Handler
+    from hydrainfer.layer.multihead_attention import MultiHeadAttentionConfig
+    from hydrainfer.layer.multihead_attention import QwenTorchMultiHeadAttentionHandler
+    from hydrainfer.layer.multihead_attention import QwenFlashAttentionMultiHeadAttentionHandler
+    from hydrainfer.layer.multihead_attention import QwenFlashAttentionMutliHeadAttentionHandler2
 
-    # 实例化两个 Handler
+    # Handler
     config = MultiHeadAttentionConfig(n_heads=n_heads, head_dim=head_dim)
 
     handler_flash2 = QwenFlashAttentionMutliHeadAttentionHandler2(config)
     handler_flash = QwenFlashAttentionMultiHeadAttentionHandler(config)
     handler_torch = QwenTorchMultiHeadAttentionHandler(config)
 
-    handler_flash.next_handler = handler_torch  # 兼容 flash_attn=None 情况
-    # 构造 packed q/k/v (seq_length, n_heads, head_dim)
+    handler_flash.next_handler = handler_torch
+    # packed q/k/v (seq_length, n_heads, head_dim)
     total_seqlen = sum(seq_lens)
     hidden_size = n_heads * head_dim
     hidden_states = torch.randn(total_seqlen, hidden_size, dtype=dtype, device=device)
@@ -39,7 +39,7 @@ def test_Qwenattention(batch_size, seq_lens, head_dim, n_heads,dtype ,device):
     # k = torch.randn(total_seqlen, n_heads, head_dim, dtype=dtype, device=device)
     # v = torch.randn(total_seqlen, n_heads, head_dim, dtype=dtype, device=device)
     
-    # 构造 cu_seqlens (cumulative sum, batch start index)
+    # cu_seqlens (cumulative sum, batch start index)
     cu_seqlens = [0]
     for l in seq_lens:
         cu_seqlens.append(cu_seqlens[-1] + l)
@@ -55,7 +55,6 @@ def test_Qwenattention(batch_size, seq_lens, head_dim, n_heads,dtype ,device):
     
     assert o_flash.shape == o_torch.shape
     assert o_flash2.shape == o_torch.shape
-    # 数值近似一致
     print("result judge")
     assert torch.allclose(o_flash, o_torch, atol=1e-2, rtol=1e-2), f"max diff={torch.max(torch.abs(o_flash - o_torch))}"
     assert torch.allclose(o_flash2, o_torch, atol=1e-2, rtol=1e-2), f"max diff={torch.max(torch.abs(o_flash2 - o_torch))}"

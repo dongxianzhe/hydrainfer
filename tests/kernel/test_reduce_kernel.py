@@ -1,5 +1,5 @@
 import torch
-from dxz._C.kernel.reduce import sum
+from hydrainfer._C.kernel.reduce import sum
 import pytest
 
 @pytest.mark.parametrize("n_elements", [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 333, 334])

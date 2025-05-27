@@ -1,6 +1,6 @@
 import torch
 import pytest
-from dxz.memory.kv_cache import KVCache
+from hydrainfer.memory.kv_cache import KVCache
 import copy
 
 @pytest.mark.parametrize("num_blocks", [100])

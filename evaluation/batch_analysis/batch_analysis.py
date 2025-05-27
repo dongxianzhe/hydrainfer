@@ -3,9 +3,9 @@ import json
 import time
 import torch
 from dataclasses import dataclass, field, asdict
-from dxz.memory import KVCache
-from dxz.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModel, VisionModelParameters, LanguageModel, LanguageModelParameters, LanguageModelConfig
-from dxz.layer.causal_attention import AttentionParameters, AttentionParametersBuilder
+from hydrainfer.memory import KVCache
+from hydrainfer.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModel, VisionModelParameters, LanguageModel, LanguageModelParameters, LanguageModelConfig
+from hydrainfer.layer.causal_attention import AttentionParameters, AttentionParametersBuilder
 
 
 dtype = torch.half

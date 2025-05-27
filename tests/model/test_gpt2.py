@@ -1,10 +1,10 @@
 import torch
 from transformers import GPT2Config, GPT2Tokenizer
-from dxz.model.gpt2 import GPT2LMHeadModel
+from hydrainfer.model.gpt2 import GPT2LMHeadModel
 from transformers import GPT2LMHeadModel as GPT2LMHeadModelRef
-from dxz.utils.model_utils import count_parameters, print_parameters
-from dxz.model.parameters import InputParameters
-from dxz.memory.kv_cache import KVCache
+from hydrainfer.utils.model_utils import count_parameters, print_parameters
+from hydrainfer.model.parameters import InputParameters
+from hydrainfer.memory.kv_cache import KVCache
 import pytest
 
 def test_params():

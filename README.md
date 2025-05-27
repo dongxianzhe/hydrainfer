@@ -1,18 +1,18 @@
-# dxz
+# hydrainfer
 a llm inference engine for academic research
 
 ## Getting Started
 
 You can install it from source code.
 ```
-conda create -n dxz_dev python=3.10
-conda activate dxz_dev
+conda create -n hydrainfer python=3.10
+conda activate hydrainfer
 pip install -r requirements.txt
 git submodule init
 git submodule update
 pip install -e .
 
-conda activate dxz_dev
+conda activate hydrainfer
 conda install -c anaconda cmake=3.26
 conda install -c conda-forge gcc_linux-64 gxx_linux-64 ninja
 ORIGINAL_DIR=$(pwd)
@@ -40,9 +40,9 @@ cmake --build . --target flash_attn
 
 You can uninstall it with the following code:
 ```
-pip uninstall dxz
+pip uninstall hydrainfer
 conda deactivate
-conda env remove -n dxz_dev
+conda env remove -n hydrainfer
 ```
 
 Before testing inference correctness, it's necessary to set up the vLLM environment for dataset preprocessing.

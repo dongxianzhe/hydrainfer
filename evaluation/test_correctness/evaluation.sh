@@ -25,8 +25,8 @@ for MODEL in "${!MODELS[@]}"; do
     
     echo "starting api server"
     RAY_DEDUP_LOGS=0 \
-        conda run -n dxz_dev --no-capture-output \
-        python -m dxz.entrypoint.entrypoint \
+        conda run -n hydrainfer --no-capture-output \
+        python -m hydrainfer.entrypoint.entrypoint \
         model.path=$MODEL_PATH \
         cluster.epdnode.executor.use_flash_infer=false \
         cluster.epdnode.executor.multi_streams_forward=false \
@@ -40,7 +40,7 @@ for MODEL in "${!MODELS[@]}"; do
     wait_api_server $host $port
 
     echo "start to send requests"
-    conda run -n dxz_dev --no-capture-output \
+    conda run -n hydrainfer --no-capture-output \
         python ${OUR_ROOT_PATH}/benchmark/benchmark.py \
         --num-requests=$NUM_REQUESTS \
         --model=${MODEL} \

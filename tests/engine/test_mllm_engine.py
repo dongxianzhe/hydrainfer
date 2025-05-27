@@ -1,6 +1,6 @@
 from PIL import Image
-from dxz.engine.mllm_engine import MLLMEngine, MLLMEngineConfig
-from dxz.utils.profiler import profile
+from hydrainfer.engine.mllm_engine import MLLMEngine, MLLMEngineConfig
+from hydrainfer.utils.profiler import profile
 
 def test_llava_engine():
     # 1. prepare input

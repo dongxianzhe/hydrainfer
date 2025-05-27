@@ -34,7 +34,7 @@ def get_cmake_dir():
     return cmake_dir
 
 def get_version() -> str:
-    version = os.getenv("DXZ_VERSION")
+    version = os.getenv("HYDRAINFER_VERSION")
     if not version:
         with open("version.txt", "r") as f:
             version = f.read().strip()
@@ -45,7 +45,7 @@ def get_version() -> str:
     if not version:
         raise RuntimeError("Unable to find version string.")
     
-    version_suffix = os.getenv("DXZ_VERSION_SUFFIX")
+    version_suffix = os.getenv("HYDRAINFER_VERSION_SUFFIX")
     if version_suffix:
         version += version_suffix
     return version
@@ -118,7 +118,7 @@ class CMakeBuild(build_ext):
         build_type = "Debug" if debug else "Release"
         print(f'build_type: {build_type}')
 
-        so_output_path = join_path(extdir, "dxz", "_C", "kernel")
+        so_output_path = join_path(extdir, "hydrainfer", "_C", "kernel")
         print(f'so_output_path: {so_output_path}')
         cuda_architectures = "80;89;90"
         cmake_args = [
@@ -178,7 +178,7 @@ class CMakeBuild(build_ext):
 
 if __name__ == '__main__':
     setup(
-        name='dxz',
+        name='hydrainfer',
         version=get_version(),
         license="Apache 2.0",
         author="Xianzhe Dong",
@@ -186,9 +186,9 @@ if __name__ == '__main__':
         description="a llm inference engine for academic research",
         long_description=read_readme(), 
         long_description_content_type="text/markdown",
-        url="https://github.com/dongxianzhe/dxz",
+        url="https://github.com/dongxianzhe/hydrainfer",
         project_url={
-            "Homepage": "https://github.com/dongxianzhe/dxz",
+            "Homepage": "https://github.com/dongxianzhe/hydrainfer",
         },
         classifiers=[
             "Development Status :: 3 - Alpha",
@@ -204,7 +204,7 @@ if __name__ == '__main__':
             "Topic :: Scientific/Engineering :: Artificial Intelligence",
         ], # classifiers will be displayed in PyPi website
         packages = find_packages(), 
-        # packages = find_packages() + ['dxz._C.kernel.flash_attn', 'dxz._C.kernel.flash_infer', 'dxz._C.kernel.kv_cache_kernels'], # find all directory with __init__.py
+        # packages = find_packages() + ['hydrainfer._C.kernel.flash_attn', 'hydrainfer._C.kernel.flash_infer', 'hydrainfer._C.kernel.kv_cache_kernels'], # find all directory with __init__.py
         # ext_modules=[CMakeExtension('_C', "csrc")],
         # cmdclass={"build_ext": CMakeBuild}, 
         zip_safe=False,  # package is not safe with zip format

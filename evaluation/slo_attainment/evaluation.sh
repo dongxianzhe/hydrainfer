@@ -5,31 +5,31 @@ source ../common.sh
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 MODEL="llava-hf/llava-1.5-7b-hf"
 MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
-CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
+CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/hydrainfer/chat_template/template_llava.jinja
 
 # MODEL="llava-hf/llava-v1.6-vicuna-7b-hf"
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
-# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/hydrainfer/chat_template/template_llava.jinja
 
 # MODEL="liuhaotian/llava-v1.5-7b"
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/liuhaotian/llava-v1.5-7b"
-# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/hydrainfer/chat_template/template_llava.jinja
 
 # MODEL="liuhaotian/llava-v1.6-vicuna-7b"
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/liuhaotian/llava-v1.6-vicuna-7b"
-# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_llava.jinja
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/hydrainfer/chat_template/template_llava.jinja
 
 # MODEL="Qwen/Qwen2-VL-7B"
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
-# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_qwen_vl_chat.jinja
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/hydrainfer/chat_template/template_qwen_vl_chat.jinja
 
 # MODEL="Qwen/Qwen2-7B-Instruct"
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/Qwen2-7B-Instruct"
-# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_qwen_vl_chat.jinja
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/hydrainfer/chat_template/template_qwen_vl_chat.jinja
 
 # MODEL="deepseek-ai/deepseek-vl2-tiny"
 # MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/deepseek-vl2-tiny"
-# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/dxz/chat_template/template_deepseek_vl2.jinja
+# CHAT_TEMPLATE_PATH=$OUR_ROOT_PATH/hydrainfer/chat_template/template_deepseek_vl2.jinja
 
 # cp /mnt/cfs/9n-das-admin/llm_models/lmms-lab/llama3-llava-next-8b/preprocessor_config.json /mnt/cfs/9n-das-admin/llm_models/liuhaotian/llava-v1.5-7b/preprocessor_config.json
 
@@ -70,7 +70,7 @@ methods=(
 echo "methods ${methods}"
 
 sendrequest (){
-    conda run -n dxz_dev --no-capture-output \
+    conda run -n hydrainfer --no-capture-output \
         python $OUR_ROOT_PATH/benchmark/benchmark.py \
         --host=$host \
         --port=$port \
@@ -110,8 +110,8 @@ benchmark_one_scenario(){
 
 start_our_server() {
     RAY_DEDUP_LOGS=0 \
-    conda run -n dxz_dev --no-capture-output \
-        python -m dxz.entrypoint.entrypoint \
+    conda run -n hydrainfer --no-capture-output \
+        python -m hydrainfer.entrypoint.entrypoint \
         model.name=$MODEL \
         model.path=${MODEL_PATH} \
         apiserver.host=$host \
@@ -175,8 +175,8 @@ start_our_server() {
 start_batch_policy_abligation_study_server() {
     num_gpu=8
     RAY_DEDUP_LOGS=0 \
-    conda run -n dxz_dev --no-capture-output \
-        python -m dxz.entrypoint.entrypoint \
+    conda run -n hydrainfer --no-capture-output \
+        python -m hydrainfer.entrypoint.entrypoint \
         model.name=$MODEL \
         model.path=${MODEL_PATH} \
         apiserver.host=$host \

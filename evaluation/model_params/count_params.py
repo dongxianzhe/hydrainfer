@@ -2,7 +2,7 @@
 python count_params.py --model llava-hf/llava-1.5-7b-hf
 """
 import argparse
-from dxz.utils.model_utils import count_parameters
+from hydrainfer.utils.model_utils import count_parameters
 from transformers import LlavaForConditionalGeneration
 
 def main(args: argparse.Namespace):

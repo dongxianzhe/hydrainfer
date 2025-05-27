@@ -3,9 +3,9 @@ from typing import List, Tuple
 import pytest
 import torch
 
-# from dxz._C.kernel.flash_infer import BatchPrefillWrapper
-# from dxz._C.kernel import flash_infer
-import dxz._C.kernel.flash_infer as flash_infer
+# from hydrainfer._C.kernel.flash_infer import BatchPrefillWrapper
+# from hydrainfer._C.kernel import flash_infer
+import hydrainfer._C.kernel.flash_infer as flash_infer
 # import scalellm._C.kernels as kernels
 
 from typing import List, Optional

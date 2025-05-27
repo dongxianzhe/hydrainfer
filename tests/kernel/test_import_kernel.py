@@ -1,6 +1,6 @@
 import torch
 
-from dxz.kernel.gemm import sgemm_naive_cpu
+from hydrainfer.kernel.gemm import sgemm_naive_cpu
 
 a = torch.ones(size=(3, 3))
 b = torch.ones(size=(3, 3))
@@ -10,5 +10,5 @@ print(a)
 print(b)
 print(c)
 
-from dxz.kernel.flash_attn import mha_varlen_fwd
+from hydrainfer.kernel.flash_attn import mha_varlen_fwd
 print(mha_varlen_fwd)

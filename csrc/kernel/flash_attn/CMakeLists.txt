@@ -7,8 +7,8 @@ configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/generate_instantiation_cu.py
   ${CMAKE_CURRENT_BINARY_DIR}/generate_instantiation_cu.py
 )
-# eg. CMAKE_CURRENT_SOURCE_DIR is /home/xzd/project/dxz/kernel/flash_attn
-# CMAKE_CURRENT_BINARY_DIR is /home/xzd/project/dxz/build/kernel/flash_attn
+# eg. CMAKE_CURRENT_SOURCE_DIR is /home/xzd/project/hydrainfer/kernel/flash_attn
+# CMAKE_CURRENT_BINARY_DIR is /home/xzd/project/hydrainfer/build/kernel/flash_attn
 
 # execute the script to generate the instantiation of the kernels
 execute_process(

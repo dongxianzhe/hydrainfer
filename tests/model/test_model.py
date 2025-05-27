@@ -1,6 +1,6 @@
 import torch
-from dxz.request import Request, SamplingParameters
-from dxz.entrypoint import OfflineSingleInstanceEntryPoint, OfflineSingleInstanceEntryPointConfig
+from hydrainfer.request import Request, SamplingParameters
+from hydrainfer.entrypoint import OfflineSingleInstanceEntryPoint, OfflineSingleInstanceEntryPointConfig
 from transformers import LlamaForCausalLM as LlamaForCausalLMRef
 from transformers import AutoTokenizer
 

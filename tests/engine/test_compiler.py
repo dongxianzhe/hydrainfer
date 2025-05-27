@@ -1,8 +1,8 @@
-from dxz.engine.isa import Compiler
+from hydrainfer.engine.isa import Compiler
 
 if __name__ == '__main__':
     model_name: str = 'llava-hf/llava-1.5-7b-hf'
-    from dxz.model.downloader import download_hf_model
+    from hydrainfer.model.downloader import download_hf_model
     model_path = download_hf_model(model_name)
     from transformers import AutoProcessor
     image_token_id = 32000
@@ -15,7 +15,7 @@ if __name__ == '__main__':
     from PIL import Image
     pixel_values = processor(
         text="", 
-        images= Image.open('/home/xzd/projects/dxz/benchmark/dataset/cherry_blossom.jpg'), 
+        images= Image.open('/home/xzd/projects/hydrainfer/benchmark/dataset/cherry_blossom.jpg'), 
         return_tensors="pt"
     )['pixel_values']
 

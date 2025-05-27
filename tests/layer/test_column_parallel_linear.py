@@ -2,9 +2,9 @@ import ray
 import torch
 from torch import Tensor, nn
 from dataclasses import dataclass
-from dxz.utils.ray_utils import launch_ray_cluster, get_ip_address
-from dxz.model_parallel.process_group import ProcessGroup, init_global_process_group
-from dxz.layer.linear import ColumnParallelLinear
+from hydrainfer.utils.ray_utils import launch_ray_cluster, get_ip_address
+from hydrainfer.model_parallel.process_group import ProcessGroup, init_global_process_group
+from hydrainfer.layer.linear import ColumnParallelLinear
 
 @dataclass
 class Config:
@@ -38,7 +38,7 @@ class ColumnParallelLinearWorker:
 
 class ColumnParallelLinearEngine:
     def __init__(self, config: Config):
-        launch_ray_cluster(is_head_node=True, head_node_ip=get_ip_address(), ray_cluster_port=8766, namespace='dxz')
+        launch_ray_cluster(is_head_node=True, head_node_ip=get_ip_address(), ray_cluster_port=8766, namespace='hydrainfer')
         world_size = 2
         self.workers = [ColumnParallelLinearWorker.remote(rank=rank, world_size=world_size, config=config) for rank in range(world_size)]
 

@@ -2,9 +2,9 @@ import pytest
 import torch
 from transformers import LlamaConfig, LlamaTokenizer
 from transformers import LlamaForCausalLM as LlamaForCausalLMRef
-from dxz.model.llama import LlamaForCausalLM
-from dxz.memory.kv_cache import KVCache
-from dxz.model.parameters import AttentionParameters, ModelParameters
+from hydrainfer.model.llama import LlamaForCausalLM
+from hydrainfer.memory.kv_cache import KVCache
+from hydrainfer.model.parameters import AttentionParameters, ModelParameters
 
 @torch.inference_mode()
 def test_llama2_7b_correctness():

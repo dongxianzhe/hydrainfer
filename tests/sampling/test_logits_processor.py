@@ -1,5 +1,5 @@
 import torch
-from dxz.sampling.logits_processor import process_logits
+from hydrainfer.sampling.logits_processor import process_logits
 
 def unique_randint(low, high, size):
     tensor = torch.empty(size, dtype=torch.int)

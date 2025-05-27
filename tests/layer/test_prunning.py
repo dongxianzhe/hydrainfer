@@ -1,5 +1,5 @@
 import torch
-from dxz.layer.token_prunning import FocalPrunning
+from hydrainfer.layer.token_prunning import FocalPrunning
 
 def test_focal_prunning():
     model = FocalPrunning(2 / 3, 'rank')

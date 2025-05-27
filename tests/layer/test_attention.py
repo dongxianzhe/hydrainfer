@@ -1,6 +1,6 @@
 import torch
-from dxz.memory.kv_cache import KVCache
-from dxz.model.parameters import InputParameters
+from hydrainfer.memory.kv_cache import KVCache
+from hydrainfer.model.parameters import InputParameters
 from typing import List, Tuple
 from itertools import accumulate
 import pytest
@@ -21,8 +21,8 @@ def test_attention(
     dtype: torch.dtype, 
     device: torch.device
 ):
-    from dxz.layer.attention import TorchMultiHeadAttention
-    from dxz.layer.attention import FlashMultiHeadAttention
+    from hydrainfer.layer.attention import TorchMultiHeadAttention
+    from hydrainfer.layer.attention import FlashMultiHeadAttention
     hidden_size = n_heads * head_dim
 
     attention_ref = TorchMultiHeadAttention(n_heads=n_heads, head_dim=head_dim)
@@ -56,8 +56,8 @@ def test_causal_attention(
     block_size: int,
     device: torch.device
 ):
-    from dxz.layer.attention import TorchCausalGroupedQueryPageAttention, FlashCausalGroupedQueryPageAttention
-    from dxz.memory.block_allocator import BlockAllocator
+    from hydrainfer.layer.attention import TorchCausalGroupedQueryPageAttention, FlashCausalGroupedQueryPageAttention
+    from hydrainfer.memory.block_allocator import BlockAllocator
     # compute some mesc things
     seed = 42  
     torch.manual_seed(seed)  
