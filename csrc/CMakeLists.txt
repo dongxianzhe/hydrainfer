@@ -12,11 +12,5 @@ set_target_properties(activation         PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${C
 
 if(FULL_COMPILE)
     add_subdirectory(benchmark)
-    add_subdirectory(memory)
-    add_subdirectory(model)
-    add_subdirectory(huggingface)
-    add_subdirectory(tokenizer)
     add_subdirectory(common)
-    add_subdirectory(engine)
-    add_subdirectory(model_loader)
 endif()
