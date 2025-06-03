@@ -16,16 +16,14 @@ from torch import nn, Tensor
 
 from transformers import AutoTokenizer
 from transformers.activations import ACT2FN
-from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from hydrainfer.transformers_utils.deepseek_vl2_config import DeepseekVLV2Config, DeepseekV2Config
 from hydrainfer.model.parameters import LanguageModelParameters, AttentionParameters
+from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from hydrainfer.utils.logger import getLogger
 logger = getLogger(__name__)
 
-class DeepseekV3RMSNorm(LlamaRMSNorm):
-    pass
 
 class DeepseekV3MLP(nn.Module):
     def __init__(self, config, hidden_size=None, intermediate_size=None):
@@ -215,8 +213,8 @@ class DeepseekV3DecoderLayer(nn.Module):
         else:
             self.mlp = DeepseekV3MLP(config)
 
-        self.input_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(
         self,
@@ -243,7 +241,7 @@ class DeepseekV3Model(nn.Module):
         self.layers = nn.ModuleList(
             [DeepseekV3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        self.norm = DeepseekV3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         if input_ids.dtype == torch.int:

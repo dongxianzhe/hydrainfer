@@ -14,7 +14,7 @@ from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.model.parameters import AttentionParameters, LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
 from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
 from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
-from hydrainfer.layer.norm import rmsnorm
+from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.layer.activation import silu
 from hydrainfer.layer.multihead_attention import MultiHeadAttentionConfig,QwenMultiHeadAttention
 from hydrainfer.utils.torch_utils import str2dtype, str2device
@@ -261,15 +261,6 @@ class Qwen2MLP(nn.Module):
         down_proj = self.down_proj(silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
         return down_proj
 
-class Qwen2RMSNorm(nn.Module):
-    def __init__(self, config: Qwen2VLConfig):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(config.hidden_size))
-        self.variance_epsilon = config.rms_norm_eps
-
-    def forward(self, hidden_states: Tensor) -> Tensor:
-        output = rmsnorm(hidden_states, self.weight, self.variance_epsilon)
-        return output
 
 class Qwen2VLDecoderLayer(nn.Module):
     def __init__(self, config: Qwen2VLConfig, layer_id: int):
@@ -278,8 +269,8 @@ class Qwen2VLDecoderLayer(nn.Module):
         self.n_layers = config.num_hidden_layers
         self.self_attn = Qwen2VLSdpaAttention(config)
         self.mlp = Qwen2MLP(config)
-        self.input_layernorm = Qwen2RMSNorm(config)
-        self.post_attention_layernorm = Qwen2RMSNorm(config)
+        self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         residual = hidden_states # (n_tokens, hidden_size)
@@ -308,7 +299,7 @@ class Qwen2VLModel(nn.Module):
         super().__init__()
         self.embed_tokens = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
         self.layers = nn.ModuleList([Qwen2VLDecoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
-        self.norm = Qwen2RMSNorm(config)
+        self.norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         if input_ids.dtype == torch.int:

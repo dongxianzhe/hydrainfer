@@ -21,3 +21,13 @@ def rmsnorm(h: Tensor, w: Tensor, eps: float) -> Tensor:
     o = normalized_x * w
     o = o.to(dtype)
     return o
+
+class RMSNorm(nn.Module):
+    def __init__(self, hidden_size: int, eps: float) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(hidden_size))
+        self.variance_epsilon = eps
+
+    def forward(self, hidden_states: Tensor) -> Tensor:
+        output = rmsnorm(hidden_states, self.weight, self.variance_epsilon)
+        return output

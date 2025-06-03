@@ -7,19 +7,8 @@ from hydrainfer.memory.kv_cache import KVCache
 from hydrainfer.model.parameters import InputParameters
 from hydrainfer.layer.rotary_embedding import compute_default_inv_freq, RotaryEmbedding
 from hydrainfer.layer.attention import TorchCausalGroupedQueryPageAttention
+from hydrainfer.layer.norm import RMSNorm
 
-class MixtralRMSNorm(nn.Module):
-    def __init__(self, hidden_size: int, eps: float=1e-6):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(hidden_size))
-        self.variance_epsilon = eps
-
-    def forward(self, hidden_states: Tensor) -> Tensor:
-        input_dtype = hidden_states.dtype
-        hidden_states = hidden_states.to(torch.float32)
-        variance = hidden_states.pow(2).mean(-1, keepdim=True)
-        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
-        return self.weight * hidden_states.to(input_dtype)
 
 class MixtralBlockSparseTop2MLP(nn.Module):
     def __init__(self, config: MixtralConfig):
@@ -135,8 +124,8 @@ class MixtralDecoderLayer(nn.Module):
         # todo
         self.self_attn = MixtralAttention(config)
         self.block_sparse_moe = MixtralSparseMoeBlock(config)
-        self.input_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
     def forward(self, h: Tensor, position_ids: Tensor, kv_cache: KVCache, input_params: InputParameters) -> Tensor: 
         r = h
@@ -155,7 +144,7 @@ class MixtralModel(nn.Module):
         super().__init__()
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, config.pad_token_id)
         self.layers = nn.ModuleList([MixtralDecoderLayer(config) for _ in range(config.num_hidden_layers)])
-        self.norm = MixtralRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, kv_caches: list[KVCache], input_params: InputParameters) -> dict[str, Tensor]:
         h = self.embed_tokens(input_ids)

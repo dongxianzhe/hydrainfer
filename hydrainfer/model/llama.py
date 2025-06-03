@@ -10,7 +10,7 @@ from hydrainfer.model.parameters import LanguageModelParameters, AttentionParame
 from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext
 from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
-from hydrainfer.layer.norm import rmsnorm
+from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.layer.activation import silu
 from hydrainfer.utils.torch_utils import str2dtype, str2device
 from hydrainfer.utils.logger import getLogger
@@ -65,15 +65,6 @@ class LlamaMLP(nn.Module):
         down_proj = self.down_proj(silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
         return down_proj
 
-class LlamaRMSNorm(nn.Module):
-    def __init__(self, config: LlamaConfig):
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(config.hidden_size))
-        self.variance_epsilon = config.rms_norm_eps
-
-    def forward(self, hidden_states: Tensor) -> Tensor:
-        output = rmsnorm(hidden_states, self.weight, self.variance_epsilon)
-        return output
 
 class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig, layer_id: int):
@@ -82,8 +73,8 @@ class LlamaDecoderLayer(nn.Module):
         self.n_layers = config.num_hidden_layers
         self.self_attn = LlamaSdpaAttention(config)
         self.mlp = LlamaMLP(config)
-        self.input_layernorm = LlamaRMSNorm(config)
-        self.post_attention_layernorm = LlamaRMSNorm(config)
+        self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         residual = hidden_states # (n_tokens, hidden_size)
@@ -106,7 +97,7 @@ class LlamaModel(nn.Module):
         super().__init__()
         self.embed_tokens = nn.Embedding(num_embeddings=config.vocab_size, embedding_dim=config.hidden_size)
         self.layers = nn.ModuleList([LlamaDecoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
-        self.norm = LlamaRMSNorm(config)
+        self.norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
     
     def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         if input_ids.dtype == torch.int:

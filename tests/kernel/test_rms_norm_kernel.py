@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 from hydrainfer._C.kernel.norm import rms_norm
-from hydrainfer.model.llama import LlamaRMSNorm
 import pytest
 
 @pytest.mark.parametrize("n_tokens", [1, 2, 4, 6, 8])
