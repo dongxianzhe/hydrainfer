@@ -97,7 +97,7 @@ class BatchFillExecutor(Executor):
         if config.use_flash_infer and flashinfer is not None:
             self.workspace_buffer = torch.empty(128 * 1024 * 1024, dtype=torch.uint8, device=self.device)
             self.batch_prefill_with_paged_kvcache_wrapper = flashinfer.BatchPrefillWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
-            self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD")
+            self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD", use_tensor_cores=True)
         self.print_text_output_token_processor = PrintTextOutputTokenProcessor(self.tokenizer)
 
     def _execute_image_embed(self, batch: BatchRequest) -> Tensor:
