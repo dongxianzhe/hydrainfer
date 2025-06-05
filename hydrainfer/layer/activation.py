@@ -27,3 +27,38 @@ def silu(h: Tensor):
     if silu_kernel is not None:
         return silu_kernel(h)
     return torch.nn.functional.silu(h)
+
+try:
+    import flashinfer
+except ImportError as e:
+    logger.warning('import flashinfer activation kernel failed')
+    flashinfer = None
+
+if flashinfer is not None:
+    try:
+        device = torch.device('cuda:0')
+        n_tokens = 1
+        hidden_size = 128
+        x = torch.randn(size=(1, hidden_size * 2), dtype=torch.half, device=device)
+        _ = flashinfer.activation.silu_and_mul(x)
+    except Exception as e:
+        logger.warning('flashinfer activation kernel pre forward failed')
+        flashinfer = None
+
+class SiluAndMul(nn.Module):
+    def __init__(
+        self, 
+        enable_flashinfer: bool = True, 
+    ):
+        super().__init__()
+        self.enable_flashinfer = enable_flashinfer
+    
+    def forward(self, x: Tensor) -> Tensor:
+        # x (n_tokens, hidden_size * 2)
+        hidden_size = x.shape[1] // 2
+        if x.is_cuda:
+            if self.enable_flashinfer and flashinfer is not None:
+                return flashinfer.activation.silu_and_mul(x)
+            return silu(x[:, :hidden_size]) * x[:, hidden_size:]
+        else:
+            return nn.functional.silu(x[:, :hidden_size]) * x[:, hidden_size:]
