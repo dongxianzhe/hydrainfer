@@ -24,7 +24,7 @@ conda install -c nvidia/label/cuda-12.4.0 cuda
 mkdir build
 cd build
 cmake .. -GNinja -DUSE_CXX11_ABI=OFF
-cmake --build . --target block_migration activation position_embedding kv_cache_kernels cache_kernels norm 
+cmake --build . --target block_migration activation position_embedding kv_cache_kernels cache_kernels norm moe
 ```
 
 If you want it to run faster, you may try to install the following library, or you may skip them.

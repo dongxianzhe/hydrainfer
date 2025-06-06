@@ -8,6 +8,7 @@ set_target_properties(kv_cache_kernels   PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${C
 set_target_properties(cache_kernels      PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/hydrainfer/_C/kernel)
 set_target_properties(norm               PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/hydrainfer/_C/kernel)
 set_target_properties(activation         PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/hydrainfer/_C/kernel)
+set_target_properties(moe                PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/hydrainfer/_C/kernel)
  
 
 if(FULL_COMPILE)
