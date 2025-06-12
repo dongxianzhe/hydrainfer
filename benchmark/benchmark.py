@@ -78,7 +78,7 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
     client = AsyncOpenAI(
         api_key=openai_api_key,
         base_url=openai_api_base,
-        timeout=httpx.Timeout(60.0), 
+        timeout=httpx.Timeout(args.timeout), 
     )
     results: list[BenchmarkResult] = []
     for request_rate in args.request_rate:
@@ -161,6 +161,7 @@ if __name__ == '__main__':
     parser.add_argument("--vizwiz_vqa", type=int, default=int(os.environ.get("VIZWIZ_VQA", 0)))
     parser.add_argument("--result-path", type=str)
     parser.add_argument("--method-name", type=str)
+    parser.add_argument("--timeout", type=float, default=60.0)
     args, remain_args = parser.parse_known_args()
     print(f'benchmark args {args}')
     main(args)

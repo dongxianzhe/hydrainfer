@@ -16,7 +16,7 @@ from hydrainfer.model_parallel.process_group import ParallelConfig, ProcessGroup
 class ImageTokenCaculator:
     def get_num_image_tokens(self, image_size: tuple[int, int]) -> int:
         # image_size (height, width)
-        raise NotImplemented
+        raise NotImplementedError
 
 
 @dataclass

@@ -7,7 +7,7 @@ from typing import Optional
 from torch import nn, Tensor
 from transformers import Qwen2VLConfig, AutoProcessor, AutoTokenizer
 from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
-from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel,PatchEmbed,PatchMerger,apply_rotary_pos_emb_vision
+from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel,PatchEmbed,PatchMerger
 from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig
 from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from hydrainfer.model.downloader import download_hf_model
@@ -40,8 +40,8 @@ class VisionRotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, seqlen: int) -> torch.Tensor:
-        seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
-        freqs = torch.outer(seq, self.inv_freq)
+        seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype) # (seq_len, )
+        freqs = torch.outer(seq, self.inv_freq) # (seq_len, head_dim // 4)
         return freqs
 
 
@@ -64,24 +64,33 @@ class VisionAttention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.attention = QwenMultiHeadAttention(MultiHeadAttentionConfig(self.num_heads, self.head_dim))
 
-    def forward(
-        self, hidden_states: torch.Tensor, cu_seqlens: torch.Tensor, rotary_pos_emb: torch.Tensor = None
-    ) -> torch.Tensor:
+    def rotate_half(self, x: Tensor):
+        """Rotates half the hidden dims of the input."""
+        x1 = x[..., : x.shape[-1] // 2]
+        x2 = x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+
+    def apply_rotary_pos_emb_vision(self, tensor: torch.Tensor, freqs: torch.Tensor) -> torch.Tensor:
+        orig_dtype = tensor.dtype
+        tensor = tensor.float()
+        cos = freqs.cos()
+        sin = freqs.sin()
+        cos = cos.unsqueeze(1).repeat(1, 1, 2).unsqueeze(0).float()
+        sin = sin.unsqueeze(1).repeat(1, 1, 2).unsqueeze(0).float()
+        output = (tensor * cos) + (self.rotate_half(tensor) * sin)
+        output = output.to(orig_dtype)
+        return output
+
+    def forward(self, hidden_states: Tensor, cu_seqlens: Tensor, rotary_pos_emb: Tensor) -> Tensor:
+        # hidden_states (total_patches, vision_model_hidden_size)
+        # cu_seqlens (total_times + 1, )
+        # rotary_pos_emb (total_patches, head_dim // 2)
         seq_length = hidden_states.shape[0]
         q, k, v = self.qkv(hidden_states).reshape(seq_length, 3, self.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
-        q = apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
-        k = apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
-
-        # attention_mask = torch.zeros([1, seq_length, seq_length], device=q.device, dtype=torch.bool)
-        # for i in range(1, len(cu_seqlens)):
-        #     attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = True
-        # q = q.transpose(0, 1)
-        # k = k.transpose(0, 1)
-        # v = v.transpose(0, 1)cu_seqlenscu_seqlens
-        # attn_output = nn.functional.scaled_dot_product_attention(q, k, v, attention_mask, dropout_p=0.0)
-        # attn_output = attn_output.transpose(0, 1)
-        # attn_output = attn_output.reshape(seq_length, -1)
-        attn_output = self.attention(q,k,v,seq_length,cu_seqlens)
+        # q k v (total_patches, n_heads, head_dim)
+        q = self.apply_rotary_pos_emb_vision(q.unsqueeze(0), rotary_pos_emb).squeeze(0)
+        k = self.apply_rotary_pos_emb_vision(k.unsqueeze(0), rotary_pos_emb).squeeze(0)
+        attn_output = self.attention(q, k, v, seq_length, cu_seqlens)
         attn_output = self.proj(attn_output)
         return attn_output
 
@@ -96,11 +105,12 @@ class Qwen2VLVisionBlock(nn.Module):
 
         self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
 
-    def forward(self, hidden_states, cu_seqlens, rotary_pos_emb) -> torch.Tensor:
-        hidden_states = hidden_states + self.attn(
-            self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb
-        )
-        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states))
+    def forward(self, hidden_states: Tensor, cu_seqlens: Tensor, rotary_pos_emb: Tensor) -> Tensor:
+        # hidden_states (total_patches, vision_model_hidden_size)
+        # cu_seqlens (total_times + 1, )
+        # rotary_pos_emb (total_patches, head_dim // 2)
+        hidden_states = hidden_states + self.attn(self.norm1(hidden_states), cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb) # (total_patches, vision_model_hidden_size)
+        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states)) # (total_patches, vision_model_hidden_size)
         return hidden_states
 
 class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
@@ -127,18 +137,19 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
             dim=config.hidden_size, context_dim=config.embed_dim, spatial_merge_size=config.spatial_merge_size
         )
 
-    def rot_pos_emb(self, grid_thw):
+    def rot_pos_emb(self, grid_thw: Tensor) -> Tensor:
+        # grid_thw (n_images, 3)
         pos_ids = []
         for t, h, w in grid_thw:
-            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w)
+            hpos_ids = torch.arange(h).unsqueeze(1).expand(-1, w) # (height, width) eg. [[0, 0, 0], [1, 1, 1]] when height=2, width=3
             hpos_ids = hpos_ids.reshape(
                 h // self.spatial_merge_size,
                 self.spatial_merge_size,
                 w // self.spatial_merge_size,
                 self.spatial_merge_size,
-            )
-            hpos_ids = hpos_ids.permute(0, 2, 1, 3)
-            hpos_ids = hpos_ids.flatten()
+            ) # (height / spatial_merge_size, spatial_merge_size, width / spatial_merge_size, spatial_merge_size)
+            hpos_ids = hpos_ids.permute(0, 2, 1, 3) # (height / spatial_merge_size, width / spatial_merge_size, spatial_merge_size, spatial_merge_size)
+            hpos_ids = hpos_ids.flatten() # (n_patches, )
 
             wpos_ids = torch.arange(w).unsqueeze(0).expand(h, -1)
             wpos_ids = wpos_ids.reshape(
@@ -148,29 +159,31 @@ class Qwen2VisionTransformerPretrainedModelMock(nn.Module):
                 self.spatial_merge_size,
             )
             wpos_ids = wpos_ids.permute(0, 2, 1, 3)
-            wpos_ids = wpos_ids.flatten()
-            pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1))
-        pos_ids = torch.cat(pos_ids, dim=0)
-        max_grid_size = grid_thw[:, 1:].max()
-        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size)
-        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1)
+            wpos_ids = wpos_ids.flatten() # (n_patches, )
+            pos_ids.append(torch.stack([hpos_ids, wpos_ids], dim=-1).repeat(t, 1)) # (n_patches * t, 2)
+        pos_ids = torch.cat(pos_ids, dim=0) # (n_patches all times all images, 2)
+        max_grid_size = grid_thw[:, 1:].max().item() # max height and width of all images
+        rotary_pos_emb_full = self.rotary_pos_emb(max_grid_size) # (max_grid_size, head_dim // 4)
+        rotary_pos_emb = rotary_pos_emb_full[pos_ids].flatten(1) # (n_patches all times all images, head_dim // 2)
         return rotary_pos_emb
     
     def forward(self, hidden_states: Tensor, grid_thw: Tensor) -> VisionModelOutput:
-        # assert pixel_values.dim() == 2, f'pixel value shape should be 2 dim but got {pixel_values.shape}'
-        hidden_states = self.patch_embed(hidden_states)
-        rotary_pos_emb = self.rot_pos_emb(grid_thw)
+        # hidden_states (total_patches, 1176)
+        hidden_states = self.patch_embed(hidden_states) # (total_patch, vision_model_hidden_size)
+        rotary_pos_emb = self.rot_pos_emb(grid_thw) # (total_patch, vision_model_hidden_size)
 
-        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
-            dim=0, dtype=torch.int32
-        )
-        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0)
+        cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(dim=0, dtype=torch.int32)
+        # after interleave [n_patches1, n_patches1, ... n_patches1, n_patches2, ...]
+        # cu_seqlens (total times, )
+        cu_seqlens = torch.nn.functional.pad(cu_seqlens, (1, 0), value=0) # insert one 0 before and zero 0 after in last dim
+        # cu_seqlens (total times + 1, )
 
-        cu_seqlens=cu_seqlens.to(hidden_states.device)
+        cu_seqlens = cu_seqlens.to(hidden_states.device)
         for blk in self.blocks:
             hidden_states = blk(hidden_states, cu_seqlens=cu_seqlens, rotary_pos_emb=rotary_pos_emb)
+        # hidden_states (n_patches, vision_model_hidden_size)
 
-        return self.merger(hidden_states)
+        return self.merger(hidden_states) # (n_patches // 4, vision_model_hidden_size)
 
 class Qwen2VisionModel(VisionModel):
     def __init__(self, path: str, dtype: torch.dtype, device: torch.device):
@@ -195,6 +208,7 @@ class Qwen2VisionModel(VisionModel):
 
 
     def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
+        # pixel_values a list of (n_patches=(height + 13) // 14 * (width + 13) / 14 , 1176=2*3*14*14)
         pixel_values_list: list[Tensor] = []
         grid_thws: list[Tensor] = []
         for i, pixel_values_per_request in enumerate(pixel_values):
@@ -205,11 +219,11 @@ class Qwen2VisionModel(VisionModel):
             # thws: (1, 3) i.e. [[1, height, width]]
             grid_thws.append(torch.tensor([[1, height // 14, width // 14]], dtype=torch.int64))
 
-        pixel_values = torch.cat(pixel_values, dim=0)
-        grid_thws = torch.cat(grid_thws, dim=0)
+        pixel_values = torch.cat(pixel_values, dim=0) # (total_patches, 1176)
+        grid_thws: Tensor = torch.cat(grid_thws, dim=0) # (n_image, 3)
 
         output = VisionModelOutput()
-        output.image_features = self.visual.forward(pixel_values, grid_thws)
+        output.image_features = self.visual.forward(pixel_values, grid_thws) # (total_patches / 4, hidden_size of language model)
         return output
 
 class Qwen2VLSdpaAttention(nn.Module):
@@ -463,53 +477,3 @@ class Qwen2VLModelFactory(ModelFactory):
 
     def getTokenizer(self) -> Tokenizer:
         return Qwen2VLTokenizer(self.path)
-
-if __name__ == '__main__':
-    device = torch.device('cuda:0')
-    config = ModelFactoryConfig(
-        name = "Qwen/Qwen2-VL-7B", 
-        path = "/mnt/cfs/9n-das-admin/llm_models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024", 
-        dtype = "fp16", 
-        device = "cuda:0", 
-    )
-    context = ModelFactoryContext()
-    factory = Qwen2VLModelFactory(config, context)
-    
-    vision_config = factory.getVisionModelConfig()
-    language_config = factory.getLanguageModelConfig()
-    tokenizer = factory.getTokenizer()
-    print(f'vision_config {vision_config}')
-    print(f'language_config {language_config}')
-
-    from PIL import Image
-    import numpy as np
-    height, width, n_channel = 1024, 1024, 3
-    random_array = np.random.randint(0, 256, (height, width, n_channel), dtype=np.uint8)
-    image = Image.fromarray(random_array)
-    processor = factory.getProcessor()
-    images_tensor = processor(
-        text="", 
-        images = image, 
-        return_tensors="pt"
-    )['pixel_values']
-    print(f'images_tensor.shape {images_tensor.shape}')
-    images_tensor = images_tensor.to(torch.half)
-    images_tensor = images_tensor.to(device)
-    width, height = image.size
-    image_size = (height, width)
-    print(f'image_size {image_size}')
-    n_image_tokens = vision_config.image_token_caculator.get_num_image_tokens(image_size)
-    print(f'n_image_tokens {n_image_tokens}')
-    vision_model = factory.getVisionModel()
-
-    pixel_values = [images_tensor]
-    vision_model_params = VisionModelParameters(
-        return_last_layer_attention = False, 
-        original_image_sizes = [image_size], 
-    )
-    vision_output = vision_model.forward(
-        pixel_values=pixel_values, 
-        model_params=vision_model_params
-    )
-    image_features = vision_output.image_features
-    print(f'image_features.shape {image_features.shape}')
