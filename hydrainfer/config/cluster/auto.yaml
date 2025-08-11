@@ -1,0 +1,17 @@
+defaults:
+  - ../node/e@enode
+  - ../node/ep@epnode
+  - ../node/ed@ednode
+  - ../node/epd@epdnode
+  - ../node/p@pnode
+  - ../node/pd@pdnode
+  - ../node/d@dnode
+
+cluster_type: "auto"
+n_enode: 0
+n_epnode: 0
+n_ednode: 0
+n_epdnode: 0
+n_pnode: 0
+n_pdnode: 0
+n_dnode: 0

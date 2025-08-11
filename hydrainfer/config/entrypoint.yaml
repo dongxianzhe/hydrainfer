@@ -1,5 +1,5 @@
 defaults:
-  - cluster: hybrid
+  - cluster: auto
   - _self_
 
 model:

@@ -1,3 +1,4 @@
+import torch
 import ray
 from dataclasses import dataclass, field
 from typing import Optional, Literal
@@ -17,7 +18,7 @@ class ClusterConfig:
     zmq: ZMQConfig
     ebalancer: LoadBalancerConfig = field(default_factory= LoadBalancerConfig)
     pbalancer: LoadBalancerConfig = field(default_factory= LoadBalancerConfig)
-    cluster_type: Literal['general', 'hybrid', 'single'] = 'hybrid'
+    cluster_type: Literal['auto', 'general', 'hybrid', 'single'] = 'hybrid'
     enode: Optional[NodeConfig] = None
     epnode: Optional[NodeConfig] = None
     ednode: Optional[NodeConfig] = None
@@ -45,6 +46,16 @@ class Cluster:
                     "env_vars": {"RAY_DEBUG_POST_MORTEM": "1"},
                 }
             )
+        if config.cluster_type == 'auto':
+            num_gpus = torch.cuda.device_count()
+            assert num_gpus >= 1, "no gpu is available"
+            # todo check available memory and profiler
+            if num_gpus == 1:
+                config.n_epdnode = 1
+            else:
+                config.n_epnode = num_gpus // 2
+                config.n_dnode = num_gpus - config.n_epnode
+            logger.info(f"auto set node n_enode={config.n_enode} n_epnode={config.n_epnode} n_ednode={config.n_ednode} n_epdnode={config.n_epdnode} n_pnode={config.n_pnode} n_pdnode={config.n_pdnode} n_dnode={config.n_dnode}")
 
         self.config = config
         nodes_list = [
