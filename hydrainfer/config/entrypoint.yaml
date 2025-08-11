@@ -10,7 +10,7 @@ model:
 mode: "online"
 
 zmq:
-  host: "127.0.0.1"
+  host: "auto"
   port: -1
 
 apiserver:
@@ -21,7 +21,7 @@ apiserver:
   chat_template: null
 
 nccl_communicator:
-  host: "127.0.0.1"
+  host: "auto"
   port: -1
 
 cluster: 

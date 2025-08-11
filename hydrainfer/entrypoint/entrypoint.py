@@ -11,7 +11,7 @@ from hydrainfer.cluster import Cluster, ClusterConfig, NCCLCommunicatorConfig
 from hydrainfer.request import OfflineInferenceOutput
 from hydrainfer.entrypoint.api_server import APIServer, APIServerConfig
 from hydrainfer.utils.zmq_utils import ZMQConfig, init_zmq_recv
-from hydrainfer.utils.socket_utils import parse_port
+from hydrainfer.utils.socket_utils import parse_network_config
 from hydrainfer.utils.counter import Counter
 from hydrainfer.utils.logger import getLogger
 logger = getLogger(__name__)
@@ -29,8 +29,8 @@ class EntryPointConfig:
 class EntryPoint:
     def __init__(self, config: EntryPointConfig):
         self.config = config
-        self.config.zmq.port = parse_port(self.config.zmq.port)
-        self.config.nccl_communicator.port = parse_port(self.config.nccl_communicator.port)
+        self.config.zmq = parse_network_config(self.config.zmq, log_name='zmq')
+        self.config.nccl_communicator = parse_network_config(self.config.nccl_communicator, log_name='nccl_communicator')
         self.cluster = Cluster(config.cluster)
         if self.config.mode == 'online':
             self.api_server = APIServer(config.apiserver)
