@@ -28,4 +28,3 @@ class NodeConfig:
     intranode_migrate_backend: Literal['ipc', 'nccl'] = 'ipc'
     internode_migrate_backend: Literal['nccl'] = 'nccl'
     log_latency_breakdown: bool = False
-    auto_compute_cache_memory: bool = True

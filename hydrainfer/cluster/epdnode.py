@@ -119,33 +119,32 @@ class AsyncEPDNode:
             dtype = self.config.model.dtype, 
             device = self.config.model.device, 
         )
-        if self.config.auto_compute_cache_memory:
-            total_memory = torch.cuda.get_device_properties(torch.device('cuda:0')).total_memory
-            model_memory = torch.cuda.max_memory_allocated()
-            reserved_memory = total_memory - model_memory
-            activation_memory_utilization = 0.
-            if self.has_vision_model:
-                activation_memory_utilization += 0.1
-            if self.has_language_model:
-                activation_memory_utilization += 0.1
-            cache_memory_utilization = 1 - activation_memory_utilization
-            if self.has_image_cache and self.has_kv_cache:
-                image_cache_memory_utilization = cache_memory_utilization * 0.1
-                kv_cache_memory_utilization = cache_memory_utilization * 0.8
-            elif self.has_image_cache and not self.has_kv_cache:
-                image_cache_memory_utilization = cache_memory_utilization
-                kv_cache_memory_utilization = 0.
-            elif not self.has_image_cache and self.has_kv_cache:
-                image_cache_memory_utilization = 0.
-                kv_cache_memory_utilization = cache_memory_utilization
-            else:
-                raise Exception('no cache pool is allocated')
-            kv_cache_memory = int(reserved_memory * kv_cache_memory_utilization)
-            image_cache_memory = int(reserved_memory * image_cache_memory_utilization)
-            logger.info(f'auto compute cache memory: model_memory {model_memory} kv_cache_memory {kv_cache_memory} image_cache_memory {image_cache_memory}')
-            kv_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory)
-            image_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory)
-            logger.info(f'set kv cache n_blocks to {kv_cache_config.n_blocks} image cache n_blocks to {image_cache_config.n_blocks}')
+        total_memory = torch.cuda.get_device_properties(torch.device(self.config.model.device)).total_memory
+        model_memory = torch.cuda.max_memory_allocated()
+        reserved_memory = total_memory - model_memory
+        activation_memory_utilization = 0.
+        if self.has_vision_model:
+            activation_memory_utilization += 0.1
+        if self.has_language_model:
+            activation_memory_utilization += 0.1
+        cache_memory_utilization = 1 - activation_memory_utilization
+        if self.has_image_cache and self.has_kv_cache:
+            image_cache_memory_utilization = cache_memory_utilization * 0.1
+            kv_cache_memory_utilization = cache_memory_utilization * 0.8
+        elif self.has_image_cache and not self.has_kv_cache:
+            image_cache_memory_utilization = cache_memory_utilization
+            kv_cache_memory_utilization = 0.
+        elif not self.has_image_cache and self.has_kv_cache:
+            image_cache_memory_utilization = 0.
+            kv_cache_memory_utilization = cache_memory_utilization
+        else:
+            raise Exception('no cache pool is allocated')
+        kv_cache_memory = int(reserved_memory * kv_cache_memory_utilization)
+        image_cache_memory = int(reserved_memory * image_cache_memory_utilization)
+        logger.info(f'auto compute cache memory: model_memory {model_memory} kv_cache_memory {kv_cache_memory}B image_cache_memory {image_cache_memory}B')
+        kv_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory)
+        image_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory)
+        logger.info(f'auto set kv cache n_blocks to {kv_cache_config.n_blocks} image cache n_blocks to {image_cache_config.n_blocks}')
 
         self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
         self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None

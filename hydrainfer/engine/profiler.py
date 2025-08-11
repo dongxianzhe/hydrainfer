@@ -150,11 +150,11 @@ class BatchSchedulerProfiler:
             total_dur += dur
         avg_dur = total_dur / self.n_profile_iter
         self._free_cache(batch)
-        logger.info(f'{name} binary search [{mid}] profile_avg_dur: {avg_dur} target_tpot_slo {self.config.tpot_slo}')
+        logger.debug(f'{name} binary search [{mid}] profile_avg_dur: {avg_dur} target_tpot_slo {self.config.tpot_slo}')
         return avg_dur < self.config.tpot_slo - 0.01
 
     def profile_image_budgets(self) -> int:
-        logger.info(f'start profile_image_budgets')
+        logger.debug(f'start profile_image_budgets')
         image_budgets = self._binary_search_max_batch_size(
             left=1, 
             right=8, 
