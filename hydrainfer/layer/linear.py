@@ -46,14 +46,15 @@ class RowParallelLinear(nn.Module):
         
 
     def forward(self, input: Tensor) -> Tensor:
+        # input (n_tokens, input_features=hidden_size)
         if not self.input_is_parallelized:
-            input = self.process_group.scatter_to_tensor_parallel_region(input)
-        output = torch.nn.functional.linear(input, self.weight, bias=None)
+            input = self.process_group.scatter_to_tensor_parallel_region(input) # (n_tokens, in_features_per_partition=hidden_size / tp_size)
+        output = torch.nn.functional.linear(input, self.weight, bias=None) # (n_tokens, output_features=hidden_size)
         if self.tp_size > 1:
-            output = self.process_group.reduce_from_tensor_parallel_region(output)
+            output = self.process_group.reduce_from_tensor_parallel_region(output) # (n_tokens, output_features=hidden_size)
         # N.B. need to apply bias after the reduce
         if self.bias is not None:
-            output.add_(self.bias)
+            output.add_(self.bias) # (n_tokens, hidden_size)
         return output
 
     def load_state_dict(self, state_dict: dict[str, Tensor]):
