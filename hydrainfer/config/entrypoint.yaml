@@ -4,8 +4,8 @@ defaults:
 
 model:
   path: null
-  dtype: "fp16"
-  device: "cuda"  
+  dtype: "auto"
+  device: "auto"  
 
 mode: "online"
 

@@ -11,6 +11,8 @@ from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.utils.torch_utils import str2dtype, str2device
 from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
 from hydrainfer.model_parallel.process_group import ParallelConfig, ProcessGroup
+from hydrainfer.utils.logger import getLogger
+logger = getLogger(__name__)
 
 
 class ImageTokenCaculator:
@@ -88,8 +90,8 @@ class ModelFactory:
 @dataclass
 class ModelFactoryConfig:
     path: str = "llava-hf/llava-1.5-7b-hf"
-    dtype: str = "fp16"
-    device: str = "cuda:0"
+    dtype: str = "auto"
+    device: str = "auto"
 
 
 @dataclass
@@ -98,8 +100,19 @@ class ModelFactoryContext:
 
 
 def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) -> ModelFactory:
+    if config.dtype == 'auto':
+        config.dtype = 'fp16'
+        logger.info(f"auto set model dtype to {config.dtype}")
+    if config.device == "auto":
+        if torch.cuda.is_available():
+            config.device = 'cuda:0'
+        else:
+            config.device = 'cpu'
+        logger.info(f"auto set model device to {config.device}")
+
     if not os.path.isdir(config.path):
         config.path = download_hf_model(repo_id=config.path)
+        logger.info(f"auto set model path to {config.path}")
 
     with open(os.path.join(config.path, "config.json"), "r", encoding="utf-8") as file:
         json_config = json.load(file)
