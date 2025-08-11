@@ -1,8 +1,0 @@
-use_ray: False
-init_method: "tcp://localhost:9876"
-has_vision_model: True
-has_language_model: True
-parallel_config:
-  tp_size: 1
-  pp_size: 1
-model: ${model}

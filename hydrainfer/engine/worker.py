@@ -105,7 +105,4 @@ class RayWorkers(Worker):
 def getWorker(config: WorkerConfig, context: WorkerContext) -> Worker:
     if config.use_ray:
         return RayWorkers(config, context)
-    # todo the yaml config does not has property function
-    # if config.parallel_config.is_parallel:
-    #     return RayWorkers(config, context)
     return VanillaWorker(config, context)
