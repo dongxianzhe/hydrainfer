@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from hydrainfer.utils.socket_utils import parse_address
 from hydrainfer.request import Request
 from hydrainfer.model import getModelFactory, ModelFactoryContext
-from hydrainfer.engine import RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
+from hydrainfer.engine import RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerConfig, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
 from hydrainfer.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig
 from hydrainfer.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
 from hydrainfer.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
@@ -89,7 +89,13 @@ class AsyncEPDNode:
         self.has_language_model = self.config.enable_prefill or self.config.enable_decode
         self.has_kv_cache = self.config.enable_prefill or self.config.enable_decode
         self.has_image_cache = self.config.enable_encode or self.config.enable_prefill 
-        self.worker = getWorker(self.config.worker, WorkerContext())
+
+        worker_config = WorkerConfig(
+            has_vision_model=self.has_vision_model, 
+            has_language_model=self.has_language_model, 
+            model=self.config.model
+        )
+        self.worker = getWorker(worker_config, WorkerContext())
 
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         language_config = model_factory.getLanguageModelConfig()

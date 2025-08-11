@@ -2,7 +2,6 @@ defaults:
   - ../engine/request_processor@request_processor
   - ../engine/batch_scheduler@batch_scheduler
   - ../engine/executor@executor
-  - ../engine/worker@worker
   - ../engine/batch_scheduler_profiler@batch_scheduler_profiler
 model: ${model}
 enable_encode: True

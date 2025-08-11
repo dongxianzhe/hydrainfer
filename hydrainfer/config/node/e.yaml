@@ -17,6 +17,3 @@ batch_scheduler_profiler:
   profile_image_budgets: True
   profile_token_budgets: False
   profile_interference_encode_decode: False
-worker:
-  has_vision_model: True
-  has_language_model: False
