@@ -10,12 +10,17 @@ class NetworkAddressConfig:
     host: str = "127.0.0.1"
     port: int = -1
 
-
+_free_port_used = set()
 def find_free_port() -> int:
     "return a port that is not used"
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('0.0.0.0', 0))
-        return s.getsockname()[1]
+    for _ in range(100000):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(('0.0.0.0', 0))
+            port = s.getsockname()[1]
+            if not port in _free_port_used:
+                _free_port_used.add(port)
+                return port
+    raise Exception('find free port failed')
 
 
 def parse_port(port_config: int) -> int:
