@@ -1,8 +1,3 @@
-profile_batch_config: True
-tpot_slo: 0.4
 model: ${model}
-profile_image_budgets: True
-profile_token_budgets: True
-profile_interference_encode_decode: True
-interference_encode_decode_analysis: False
-interference_encode_prefill_analysis: False
+tpot_slo: 0.4
+debug: False

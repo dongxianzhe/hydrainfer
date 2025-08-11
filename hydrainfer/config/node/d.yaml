@@ -6,6 +6,3 @@ enable_prefill: False
 enable_decode: True
 batch_scheduler_profiler:
   tpot_slo: 0.04
-  profile_image_budgets: False
-  profile_token_budgets: True
-  profile_interference_encode_decode: False

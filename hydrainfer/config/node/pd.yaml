@@ -9,6 +9,3 @@ request_processor:
   pd_migrate: False
 batch_scheduler_profiler:
   tpot_slo: 0.08
-  profile_image_budgets: False
-  profile_token_budgets: True
-  profile_interference_encode_decode: False
