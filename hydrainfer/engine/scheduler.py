@@ -2,7 +2,7 @@ from collections import deque
 import time
 import queue
 from queue import Queue
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 from dataclasses import dataclass, fields
 from hydrainfer.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest, PullCache
 from hydrainfer.utils.allocate import IncreaingAllocator
@@ -16,10 +16,7 @@ class BatchSchedulerConfig:
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
     max_overload_requests: int = 0
-    chunked_prefill: bool = False
-    max_batch_fill_tokens: int = 1024
-    max_batch_embed_images: int = 3
-    batch_embed_prefill: bool = False
+    chunked_prefill: bool = True
     debug: bool = False
 
 
@@ -32,16 +29,8 @@ class BatchScheduler:
     def __init__(self, config: BatchSchedulerConfig, context: BatchSchedulerContext):
         self.config = config
         self.profiler = context.profiler
-        output = self.profiler.profile()
-        if output.image_budgets is not None:
-            self.image_budgets = output.image_budgets
-        else:
-            self.image_budgets = self.config.max_batch_embed_images
-
-        if output.token_budgets is not None:
-            self.token_budgets = output.token_budgets
-        else:
-            self.token_budgets = self.config.max_batch_fill_tokens
+        self.image_budgets = self.profiler.profile_image_budgets()
+        self.token_budgets = self.profiler.profile_image_budgets()
 
         # self.waiting = Queue()
         self.waiting = deque()
@@ -147,15 +136,12 @@ class BatchScheduler:
                 this_step.append(seq)
 
         # 2. batch image embed
-        if len(prefill_seqs) > 0 and not self.config.batch_embed_prefill:
-            next_step += embed_seqs
-        else:
-            for seq in embed_seqs:
-                if batch_embed_images < self.image_budgets:
-                    this_step.append(seq)
-                    batch_embed_images += 1 # todo cope with multi image
-                else:
-                    next_step.append(seq)
+        for seq in embed_seqs:
+            if batch_embed_images < self.image_budgets:
+                this_step.append(seq)
+                batch_embed_images += 1 # todo cope with multi image
+            else:
+                next_step.append(seq)
 
         # 3. batch prefill and decode
         fill_seqs = prefill_seqs + decode_seqs if self.config.priority == 'prefill' else decode_seqs + prefill_seqs

@@ -19,8 +19,8 @@ logger = getLogger(__name__)
 @dataclass
 class BatchSchedulerProfilerConfig:
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
-    profile_batch_config: bool = False
     tpot_slo: float = 0.4
+    debug: bool = False
 
 
 @dataclass
@@ -28,11 +28,6 @@ class BatchSchedulerProfilerContext:
     executor: InstructionExecutor
     kv_cache_block_manager: TokenCacheBlockManager
     image_cache_block_manager: TokenCacheBlockManager
-
-@dataclass
-class ProfileOutput:
-    image_budgets: Optional[int] = None
-    token_budgets: Optional[int] = None
 
 
 class BatchSchedulerProfiler:
@@ -120,11 +115,16 @@ class BatchSchedulerProfiler:
     def _binary_search_max_batch_size(self, left: int, right: int, criterion: Callable[[int], bool]):
         while left < right:
             mid = (left + right + 1) // 2
-            if criterion(mid):
-                # because latency is not increacing with batchsize strictly, we set left = mid + 1 to avoid dead loop
-                left = mid + 1 
-            else:
+            try:
+                if criterion(mid):
+                    # because latency is not increacing with batchsize strictly, we set left = mid + 1 to avoid dead loop
+                    left = mid + 1 
+                else:
+                    right = mid - 1
+            except Exception as e:
                 right = mid - 1
+                if self.config.debug:
+                    logger.debug(e)
         return left
 
     def _free_cache(self, batch: BatchRequest):
@@ -165,7 +165,7 @@ class BatchSchedulerProfiler:
                 name='image budgets', 
             )
         )
-        logger.info(f'finish profile_image_budgets {image_budgets}')
+        logger.info(f'auto set image budgets {image_budgets}')
         return image_budgets
 
     def profile_token_budgets(self) -> int:
@@ -180,10 +180,11 @@ class BatchSchedulerProfiler:
                 name='token budgets', 
             )
         )
-        logger.info(f'finish profile_token_budgets {token_budgets}')
+        logger.info(f'auto set token budgets {token_budgets}')
         return token_budgets
 
     def interference_analysis(self, mode='ep'):
+        assert mode in ['ep', 'ed']
         logger.info(f'start analysis interference {mode}')
         # loop image number
         for n_encode in range(10):
@@ -228,28 +229,3 @@ class BatchSchedulerProfiler:
                 # caculate throughput
                 throughput = n_tokens / avg_dur
                 logger.info('encode, n_tokens, latency, throughput:', n_encode, n_tokens, avg_dur, throughput)
-
-    def profile(self) -> ProfileOutput:
-        if self.config.interference_encode_decode_analysis:
-            self.interference_analysis('ed')
-
-        if self.config.interference_encode_prefill_analysis:
-            self.interference_analysis('ep')
-
-        if not self.config.profile_batch_config:
-            return ProfileOutput()
-
-        if self.config.profile_image_budgets:
-            image_budgets = self.profile_image_budgets()
-        else:
-            image_budgets = None
-
-        if self.config.profile_token_budgets:
-            token_budgets = self.profile_token_budgets()
-        else:
-            token_budgets = None
-
-        return ProfileOutput(
-            image_budgets = image_budgets, 
-            token_budgets = token_budgets, 
-        )
