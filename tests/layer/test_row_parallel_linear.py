@@ -1,11 +1,14 @@
+import time
 import ray
 import torch
 from torch import Tensor, nn
 import torch.distributed as dist
 from dataclasses import dataclass
-from hydrainfer.utils.ray_utils import launch_ray_cluster, get_ip_address
+from hydrainfer.utils.ray_utils import launch_ray_cluster, get_ip_address, stop_ray_process
 from hydrainfer.model_parallel.process_group import ProcessGroup, init_global_process_group
 from hydrainfer.layer.linear import RowParallelLinear, Linear
+from hydrainfer.utils.profiler import profile
+import nvtx
 
 
 @dataclass
@@ -13,8 +16,28 @@ class Config:
     hidden_size: int = 4096
     intermediate_size: int = 10084
     
+@torch.inference_mode
+def benchmark(forward_fn, warmup=3, n_iter=100):
+    for _ in range(warmup):
+        forward_fn()
+        torch.cuda.synchronize()
 
-@ray.remote(num_cpus=0, num_gpus=1)
+    start = time.time()
+    for _ in range(n_iter):
+        forward_fn()
+        torch.cuda.synchronize()
+    end = time.time()
+
+    latency = (end - start) / n_iter
+    return latency
+
+import os
+@ray.remote(num_cpus=0, num_gpus=1, runtime_env={"nsight": {
+    "t": "cuda,cudnn,cublas,nvtx",
+    "o": "'worker_process_%p'",
+    "stop-on-exit": "true",
+    "gpu-metrics-devices": "all", 
+}})
 class RowParallelLinearWorker:
     def __init__(self, rank: int, world_size: int, config: Config):
         self.config = config
@@ -62,7 +85,7 @@ class RowParallelLinearEngine:
 
 if __name__ == '__main__':
     # 1. settings
-    n_tokens = 16
+    n_tokens = 4096
     config = Config()
     dtype: torch.dtype = torch.half
     device: torch.device = torch.device('cuda:0')
@@ -89,6 +112,18 @@ if __name__ == '__main__':
     x = torch.randn((n_tokens, config.hidden_size), dtype=dtype, device=device)
     o = engine.forward(x)
     o_ref = model_ref(x)
+    print('===============test correctness===============')
     print(torch.allclose(o, o_ref, atol=1e-1, rtol=1e-2))
     print(f'o.view(-1)[:8]: {o.view(-1)[:8]}')
     print(f'o_ref.view(-1)[:8]: {o_ref.view(-1)[:8]}')
+    print('===============test performance===============')
+    def row_parallel_forward():
+        return engine.forward(x)
+
+    def ref_forward():
+        return model_ref(x)
+    
+    # with profile(context_name='tp=2'):
+    #     benchmark(row_parallel_forward)
+    with profile(context_name='tp=1'):
+        benchmark(ref_forward)
