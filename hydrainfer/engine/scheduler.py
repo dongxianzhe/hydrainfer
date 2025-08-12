@@ -30,7 +30,7 @@ class BatchScheduler:
         self.config = config
         self.profiler = context.profiler
         self.image_budgets = self.profiler.profile_image_budgets()
-        self.token_budgets = self.profiler.profile_image_budgets()
+        self.token_budgets = self.profiler.profile_token_budgets()
 
         # self.waiting = Queue()
         self.waiting = deque()

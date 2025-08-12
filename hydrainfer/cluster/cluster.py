@@ -108,7 +108,9 @@ class Cluster:
                 if "d" in node_type:
                     has_decode = True
 
-        assert has_prefill and has_decode, "node type is not enough to inference"
+        assert has_prefill and has_decode, "node type is not enough to inference for inference only text request"
+        if not has_encode and has_prefill and has_decode: 
+            logger.info("node type is not enough to inference for inference request with image")
 
         migrate_graph: MigrateGraph = graph_builder.build_graph()
         logger.info(f'{migrate_graph}')
