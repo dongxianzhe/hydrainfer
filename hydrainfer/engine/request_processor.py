@@ -16,7 +16,6 @@ logger = getLogger(__name__)
 
 @dataclass
 class RequestProcessorConfig:
-    multi_thread_request_process: bool = False
     num_request_process_workers: int = 32
     disaggregate_embed_prefill: bool = True
     ep_migrate: bool = False
@@ -235,7 +234,7 @@ class RequestProcessor:
         super().__init__()
         self.config = config
 
-        if config.multi_thread_request_process:
+        if config.num_request_process_workers > 1:
             self.lock = threading.Lock()
             self.executor = ThreadPoolExecutor(max_workers=config.num_request_process_workers)
 
@@ -251,7 +250,7 @@ class RequestProcessor:
         self.request_process_observer.append(observer)
 
     def process(self, request: Request, params: RequestProcessParameters) -> None:
-        if self.config.multi_thread_request_process:
+        if self.config.num_request_process_workers > 1:
             self.executor.submit(self._request_process_lock_wrapper, request, params)
         else:
             self._request_process(request, params)

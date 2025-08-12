@@ -169,7 +169,7 @@ class BatchSchedulerProfiler:
         return image_budgets
 
     def profile_token_budgets(self) -> int:
-        logger.info(f'start profile_token_budgets')
+        logger.debug(f'start profile_token_budgets')
         token_budgets = self._binary_search_max_batch_size(
             left=1, 
             right=2048, 
