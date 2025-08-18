@@ -3,7 +3,7 @@ import torch
 import argparse
 from torch import Tensor
 from typing import Optional
-from hydrainfer.model.model_factory import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput, ModelFactoryConfig, ModelFactoryContext, ModelFactory, getModelFactory
+from hydrainfer.model.model_factory import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput, ModelFactoryConfig, ModelFactoryContext, ModelFactory, getModelFactory, VisionModel, LanguageModel
 from hydrainfer.model_parallel.process_group import init_global_process_group, ParallelConfig
 from dataclasses import dataclass, field, fields
 from hydrainfer.utils.logger import getLogger
@@ -14,15 +14,14 @@ logger = getLogger(__name__)
 class WorkerConfig:
     use_ray: bool = False
     init_method: str = 'tcp://localhost:9876'
-    has_vision_model: bool = True
-    has_language_model: bool = True
     parallel_config: ParallelConfig = field(default_factory=ParallelConfig)
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
 
 
 @dataclass
 class WorkerContext:
-    pass
+    has_vision_model: bool = True
+    has_language_model: bool = True
 
 
 class Worker:
@@ -30,17 +29,28 @@ class Worker:
         raise NotImplementedError
 
     def execute_vision_model(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
-        raise NotImplementedError
+        raise NotImplementedError()
+
+    def update(self, context: WorkerContext):
+        raise NotImplementedError()
 
 
 class VanillaWorker(Worker):
     def __init__(self, config: WorkerConfig, context: WorkerContext):
+        self.config = config
+        self.context = context
         model_factory_context = ModelFactoryContext(process_group=None)
-        model_factory: ModelFactory = getModelFactory(config.model, model_factory_context)
-        if config.has_vision_model:
-            self.vision_model = model_factory.getVisionModel() 
-        if config.has_language_model:
-            self.language_model = model_factory.getLanguageModel() 
+        self.model_factory: ModelFactory = getModelFactory(config.model, model_factory_context)
+        self.vision_model: Optional[VisionModel] = self.model_factory.getVisionModel() if context.has_vision_model else None
+        self.language_model: Optional[LanguageModel] = self.model_factory.getLanguageModel() if context.has_language_model else None
+
+    def update(self, context: WorkerContext):
+        if context.has_vision_model != self.context.has_vision_model:
+            self.vision_model: Optional[VisionModel] = self.model_factory.getVisionModel() if context.has_vision_model else None
+        if context.has_language_model != self.context.has_language_model:
+            self.language_model: Optional[LanguageModel] = self.model_factory.getLanguageModel() if context.has_language_model else None
+        self.context = context
+        torch.cuda.empty_cache()
 
     @torch.inference_mode()
     def execute_language_model(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
@@ -103,6 +113,7 @@ class RayWorkers(Worker):
 
 
 def getWorker(config: WorkerConfig, context: WorkerContext) -> Worker:
+    assert not config.use_ray, "multi process worker is not supported"
     if config.use_ray:
         return RayWorkers(config, context)
     return VanillaWorker(config, context)
