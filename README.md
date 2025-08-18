@@ -1,5 +1,5 @@
 # hydrainfer
-a llm inference engine for academic research
+a MLLM (Multimodal Large Language Models) inference engine for academic research.
 
 ## Getting Started
 
@@ -58,8 +58,21 @@ cd evaluation/dataset_analysis
 ./preprocess.sh
 ```
 
-You can use script to test inference correctness:
+You can use script to test inference correctness. The inference results will be in the evaluation/test_correctness/result directory.:
 ```
 cd evaluation/test_correctness
 ./evaluation.sh
+```
+# Citation
+If you use hydrainfer for your research, please cite our [paper](https://arxiv.org/abs/2505.12658): 
+```
+@misc{dong2025hydrainferhybriddisaggregatedscheduling,
+      title={HydraInfer: Hybrid Disaggregated Scheduling for Multimodal Large Language Model Serving}, 
+      author={Xianzhe Dong and Tongxuan Liu and Yuting Zeng and Liangyu Liu and Yang Liu and Siyu Wu and Yu Wu and Hailong Yang and Ke Zhang and Jing Li},
+      year={2025},
+      eprint={2505.12658},
+      archivePrefix={arXiv},
+      primaryClass={cs.DC},
+      url={https://arxiv.org/abs/2505.12658}, 
+}
 ```
