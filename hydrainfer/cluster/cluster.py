@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Literal
 from hydrainfer.request import Request
 from hydrainfer.engine import RequestProcessParameters
-from hydrainfer.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph, NodeContext
+from hydrainfer.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph, NodeContext, NodeType
 from hydrainfer.utils.zmq_utils import ZMQConfig
 from hydrainfer.utils.socket_utils import parse_port
 from hydrainfer.utils.allocate import IncreaingAllocator
@@ -26,18 +26,32 @@ class ClusterConfig:
     pnode: Optional[NodeConfig] = None
     pdnode: Optional[NodeConfig] = None
     dnode: Optional[NodeConfig] = None
-    n_enode: int = 1
-    n_epnode: int = 1
-    n_ednode: int = 1
-    n_epdnode: int = 1
-    n_pnode: int = 1
-    n_pdnode: int = 1
-    n_dnode: int = 1
+    n_enode: Optional[int] = 1
+    n_epnode: Optional[int] = 1
+    n_ednode: Optional[int] = 1
+    n_epdnode: Optional[int] = 1
+    n_pnode: Optional[int] = 1
+    n_pdnode: Optional[int] = 1
+    n_dnode: Optional[int] = 1
     ray_cluster_port: int = 6379
     debug: bool = False
 
+
+class DisaggregationMethodProfiler:
+    def __init__(self):
+        pass
+
+
+@dataclass
+class InstanceDataParallelConfig:
+    node_type: Literal["E", "P", "D", "EP", "ED", "PD", "EPD"]
+    node_config: Optional[NodeConfig] = None
+    n_replicas: int = 0
+
+
 class Cluster:
     def __init__(self, config: ClusterConfig):
+        self.config = config
         if config.debug:
             config.ray_cluster_port = parse_port(config.ray_cluster_port)
             start_head_node(ray_cluster_port=config.ray_cluster_port)
@@ -57,78 +71,94 @@ class Cluster:
                 config.n_dnode = num_gpus - config.n_epnode
             logger.info(f"auto set node n_enode={config.n_enode} n_epnode={config.n_epnode} n_ednode={config.n_ednode} n_epdnode={config.n_epdnode} n_pnode={config.n_pnode} n_pdnode={config.n_pdnode} n_dnode={config.n_dnode}")
 
-        self.config = config
-        nodes_list = [
-            (getattr(self.config, "n_enode", 0),   getattr(self.config, "enode", None), "e"), 
-            (getattr(self.config, "n_epnode", 0),  getattr(self.config, "epnode", None), "ep"), 
-            (getattr(self.config, "n_ednode", 0),  getattr(self.config, "ednode", None), "ed"), 
-            (getattr(self.config, "n_epdnode", 0), getattr(self.config, "epdnode", None), "epd"), 
-            (getattr(self.config, "n_pnode", 0),   getattr(self.config, "pnode", None), "p"), 
-            (getattr(self.config, "n_pdnode", 0),  getattr(self.config, "pdnode", None), "pd"), 
-            (getattr(self.config, "n_dnode", 0),   getattr(self.config, "dnode", None), "d"), 
+        instance_data_parallel_config_list: list[InstanceDataParallelConfig] = [
+            InstanceDataParallelConfig(n_replicas=getattr(config, "n_enode", 0),   node_config=getattr(config, "enode", None),   node_type="E"), 
+            InstanceDataParallelConfig(n_replicas=getattr(config, "n_epnode", 0),  node_config=getattr(config, "epnode", None),  node_type="EP"), 
+            InstanceDataParallelConfig(n_replicas=getattr(config, "n_ednode", 0),  node_config=getattr(config, "ednode", None),  node_type="ED"), 
+            InstanceDataParallelConfig(n_replicas=getattr(config, "n_epdnode", 0), node_config=getattr(config, "epdnode", None), node_type="EPD"), 
+            InstanceDataParallelConfig(n_replicas=getattr(config, "n_pnode", 0),   node_config=getattr(config, "pnode", None),   node_type="P"), 
+            InstanceDataParallelConfig(n_replicas=getattr(config, "n_pdnode", 0),  node_config=getattr(config, "pdnode", None),  node_type="PD"), 
+            InstanceDataParallelConfig(n_replicas=getattr(config, "n_dnode", 0),   node_config=getattr(config, "dnode", None),   node_type="D"), 
         ]
 
-        self.nodes: AsyncEPDNode = []
-        self.ebalancer = LoadBalancer(config.ebalancer)
-        self.pbalancer = LoadBalancer(config.pbalancer)
-        graph_builder = MigrateGraphBuilder()
+        # 1. world_size
+        world_size = sum([data_parallel_config.n_replicas for data_parallel_config in instance_data_parallel_config_list])
 
-        world_size = sum([n_node for n_node, _, _ in nodes_list])
-        rank_allocator = IncreaingAllocator()
+        # 2. verify disaggregation method is valid
         has_encode: bool = False
         has_prefill: bool = False
         has_decode: bool = False
-        for replicas, node_config, node_type in nodes_list:
-            for i in range(replicas):
-                node = ray.remote(
-                    num_cpus=0,
-                    num_gpus=1,
-                    max_restarts=1,
-                    name=f"{node_type}{i}",
-                    namespace='hydrainfer',
-                    lifetime='detached'
-                )(AsyncEPDNode).remote(node_config, NodeContext(
-                    rank = rank_allocator.allocate(), 
-                    world_size = world_size, 
-                    is_ray_actor=True,
-                ))
-                self.nodes.append(node)
-                for ty in node_type:
-                    graph_builder.add_node(
-                        actor = node, 
-                        tpot_slo = node_config.batch_scheduler_profiler.tpot_slo, 
-                        node_type = ty,
-                    )
-                if "e" in node_type:
-                    self.ebalancer.register_worker(node)
-                    has_encode = True
-                if "p" in node_type:
-                    has_prefill = True
-                    self.pbalancer.register_worker(node)
-                if "d" in node_type:
-                    has_decode = True
-
+        for data_parallel_config in instance_data_parallel_config_list:
+            if "E" in data_parallel_config.node_type:
+                has_encode = True
+            if "P" in data_parallel_config.node_type:
+                has_prefill = True
+            if "D" in data_parallel_config.node_type:
+                has_decode = True
         assert has_prefill and has_decode, "node type is not enough to inference for inference only text request"
         if not has_encode and has_prefill and has_decode: 
             logger.info("node type is not enough to inference for inference request with image")
 
+        # 3. create node and build migrate graph
+        rank_allocator = IncreaingAllocator()
+        self.nodes: AsyncEPDNode = []
+        self.node_configs: list[NodeConfig] = []
+        self.node_contexts: list[NodeContext] = []
+        for data_parallel_config in instance_data_parallel_config_list:
+            for i in range(data_parallel_config.n_replicas):
+                rank = rank_allocator.allocate()
+                context = NodeContext(
+                    rank = rank, 
+                    world_size = world_size, 
+                    node_type = NodeType(data_parallel_config.node_type), 
+                )
+                self.node_contexts.append(context)
+                node = ray.remote(
+                    num_cpus=0,
+                    num_gpus=1,
+                    max_restarts=1,
+                    name=f"Node{rank}",
+                    namespace='hydrainfer',
+                    lifetime='detached'
+                )(AsyncEPDNode).remote(data_parallel_config.node_config, context)
+                self.nodes.append(node)
+                self.node_configs.append(data_parallel_config.node_config)
+        self._run_nodes_remote_method(nodes=self.nodes, method_name="init", wait=True)
+
+        # 4. update migrate graph
+        self.ebalancer = LoadBalancer(config.ebalancer)
+        self.pbalancer = LoadBalancer(config.pbalancer)
+
+        graph_builder = MigrateGraphBuilder()
+        for node, config, context in zip(self.nodes, self.node_configs, self.node_contexts):
+            graph_builder.add_node(
+                actor = node, 
+                tpot_slo = config.batch_scheduler_profiler.tpot_slo,
+                node_type = context.node_type,
+            )
+            if context.node_type.enable_encode:
+                self.ebalancer.register_worker(node)
+            if context.node_type.enable_prefill:
+                self.pbalancer.register_worker(node)
         migrate_graph: MigrateGraph = graph_builder.build_graph()
         logger.info(f'{migrate_graph}')
-
-        objs = []
-        for node in self.nodes:
-            obj = node.init.remote()
+        for context in self.node_contexts:
+            context.migrate_graph = migrate_graph
+        objs = [] 
+        for node, context in zip(self.nodes, self.node_contexts):
+            obj = node.update.remote(context)
             objs.append(obj)
         ray.get(objs)
+        self._run_nodes_remote_method(nodes=self.nodes, method_name="loop", wait=False)
 
+    def _run_nodes_remote_method(self, nodes: list[AsyncEPDNode], method_name: str, wait: bool=True, *args, **kwargs):
         objs = []
-        for node in self.nodes:
-            obj = node.register_migrate_graph.remote(migrate_graph)
+        for node in nodes:
+            method = getattr(node, method_name)
+            obj = method.remote(*args, **kwargs)
             objs.append(obj)
-        ray.get(objs)
-
-        for node in self.nodes:
-            node.loop.remote()
+        if wait:
+            ray.get(objs)
 
     def add_request(self, request: Request, params: RequestProcessParameters):
         has_image: bool = request.image is not None or request.image_base64 is not None

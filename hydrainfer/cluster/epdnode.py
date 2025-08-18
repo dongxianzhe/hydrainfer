@@ -5,10 +5,10 @@ import time
 import torch
 import asyncio
 import ray.actor
-from typing import Optional
+from typing import Optional, Literal
 import torch.distributed as dist
 from torch.distributed import P2POp, batch_isend_irecv
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from concurrent.futures import ThreadPoolExecutor
 from hydrainfer.utils.socket_utils import parse_address
 from hydrainfer.request import Request
@@ -19,18 +19,18 @@ from hydrainfer.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyIn
 from hydrainfer.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
 
 from hydrainfer.utils.zmq_utils import init_zmq_send
-from hydrainfer.cluster import MigrateGraph, MigrateNode
+from hydrainfer.cluster import MigrateGraph, MigrateNode, NodeType
 from hydrainfer.cluster.node_config import NodeConfig
 from hydrainfer.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig, CompositeLoadBlancer
 from hydrainfer.utils.logger import getLogger
 logger = getLogger(__name__)
 
-
 @dataclass
 class NodeContext:
     rank: int # each engine has a rank
     world_size: int # number of engines
-    is_ray_actor: bool = False
+    node_type: NodeType = field(default_factory=NodeType)
+    migrate_graph: MigrateGraph = field(default_factory=MigrateGraph)
 
 
 class BatchSchedulerObserver(RequestProcessorObserver):
@@ -44,18 +44,135 @@ class AsyncEPDNode:
     def __init__(self, config: NodeConfig, context: NodeContext):
         self.config = config
         self.context = context
-        if context.is_ray_actor:
+        try:
             self.actor_id = ray.get_runtime_context().get_actor_id()
             self.actor_handle = ray.get_runtime_context().current_actor
+        except Exception as e:
+            raise Exception("AsyncEPDNode should be used as an ray actor")
+        self._update_actor_name(context)
+
+    def _update_actor_name(self, context: NodeContext):
         # the name is used in __repr__ which is used to log actor names
-        self.name = ""
-        if self.config.enable_encode:
-            self.name += "E"
-        if self.config.enable_prefill:
-            self.name += "P"
-        if self.config.enable_decode:
-            self.name += "D"
-        self.name += f"NodeRank{self.context.rank}"
+        self.name = f"{context.node_type}NodeRank{context.rank}"
+
+    def _update_migrate_graph(self, context: NodeContext):
+        self.ep_loadbalancer = CompositeLoadBlancer()
+        self.pd_loadbalancer = CompositeLoadBlancer()
+        for scenario_type in range(len(ScenarioType)):
+            self.ep_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
+            self.pd_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
+
+        assert context.migrate_graph is not None
+        for table, loadbalancer in [
+            (context.migrate_graph.ep_table.get(self.actor_id, []), self.ep_loadbalancer), 
+            (context.migrate_graph.pd_table.get(self.actor_id, []), self.pd_loadbalancer), 
+        ]:
+            for migrate_node in table:
+                if migrate_node.tpot_slo < 0.05:
+                    loadbalancer.register_worker(key=ScenarioType.Strict, worker=migrate_node)
+                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
+                else:
+                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
+        logger.info(f'ep_loadbalancer {self.ep_loadbalancer}')
+        logger.info(f'pd_loadbalancer {self.pd_loadbalancer}')
+
+    def _update_cache(self, context: NodeContext):
+        model_factory = getModelFactory(self.config.model, ModelFactoryContext())
+        language_config = model_factory.getLanguageModelConfig()
+        kv_cache_config = TokenCacheBlockManagerConfig(
+            n_layers = language_config.n_layers, 
+            n_tokens = 2, 
+            n_blocks = -1, 
+            block_size = 16, 
+            n_heads = language_config.n_kv_heads, 
+            head_size = language_config.head_dim, 
+            dtype = self.config.model.dtype, 
+            device = self.config.model.device, 
+        )
+        image_cache_config = TokenCacheBlockManagerConfig(
+            n_layers = 1, 
+            n_tokens = 1, 
+            n_blocks = -1, 
+            block_size = 576, 
+            n_heads = language_config.n_qo_heads, 
+            head_size = language_config.head_dim, 
+            dtype = self.config.model.dtype, 
+            device = self.config.model.device, 
+        )
+        total_memory = torch.cuda.get_device_properties(torch.device(self.config.model.device)).total_memory
+        model_memory = torch.cuda.max_memory_allocated()
+        reserved_memory = total_memory - model_memory
+        activation_memory_utilization = 0.
+        if context.node_type.has_vision_model:
+            activation_memory_utilization += 0.1
+        if context.node_type.has_language_model:
+            activation_memory_utilization += 0.1
+        cache_memory_utilization = 1 - activation_memory_utilization
+        if context.node_type.has_image_cache and context.node_type.has_kv_cache:
+            image_cache_memory_utilization = cache_memory_utilization * 0.1
+            kv_cache_memory_utilization = cache_memory_utilization * 0.8
+        elif context.node_type.has_image_cache and not context.node_type.has_kv_cache:
+            image_cache_memory_utilization = cache_memory_utilization
+            kv_cache_memory_utilization = 0.
+        elif not context.node_type.has_image_cache and context.node_type.has_kv_cache:
+            image_cache_memory_utilization = 0.
+            kv_cache_memory_utilization = cache_memory_utilization
+        else:
+            raise Exception('no cache pool is allocated')
+        kv_cache_memory = int(reserved_memory * kv_cache_memory_utilization)
+        image_cache_memory = int(reserved_memory * image_cache_memory_utilization)
+        logger.info(f'auto compute cache memory: model_memory {model_memory} kv_cache_memory {kv_cache_memory}B image_cache_memory {image_cache_memory}B')
+        kv_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory)
+        image_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory)
+        logger.info(f'auto set kv cache n_blocks to {kv_cache_config.n_blocks} image cache n_blocks to {image_cache_config.n_blocks}')
+        self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=context.rank)) if context.node_type.has_kv_cache else None
+        self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=context.rank)) if context.node_type.has_image_cache else None
+
+    def _update_worker(self, context: NodeContext):
+        worker_config = WorkerConfig(model=self.config.model)
+        self.worker = getWorker(worker_config, WorkerContext(has_vision_model=context.node_type.has_vision_model, has_language_model=context.node_type.has_language_model))
+
+    def _update_engine(self, context: NodeContext):
+        self._update_worker(context)
+        self._update_cache(context)
+
+        self.executor = InstructionExecutor(
+            self.config.executor, 
+            ExecutorContext(
+                kv_cache_block_manager = self.kv_cache_block_manager, 
+                image_cache_block_manager = self.image_cache_block_manager, 
+                worker = self.worker, 
+                zmq_send = self.zmq_send
+            ))
+
+        self.profiler = BatchSchedulerProfiler(
+            self.config.batch_scheduler_profiler, 
+            BatchSchedulerProfilerContext(
+                executor=self.executor, 
+                kv_cache_block_manager=self.kv_cache_block_manager, 
+                image_cache_block_manager=self.image_cache_block_manager
+            ))
+
+        self.batch_scheduler = BatchScheduler(
+            self.config.batch_scheduler, 
+            BatchSchedulerContext(
+                profiler = self.profiler, 
+            ))
+
+        self.request_processor = RequestProcessor(self.config.request_processor)
+        self.request_processor.register_output_observer(BatchSchedulerObserver(self.batch_scheduler))
+
+    async def update(self, context: NodeContext):
+        try:
+            self._update_actor_name(context)
+            assert self.context.rank == context.rank, "auto scale and rank change dynamically is not supported"
+            assert self.context.world_size == context.world_size, "auto scale and rank change dynamically is not supported"
+            if context.node_type != context.node_type:
+                self._update_engine(context)
+            self._update_migrate_graph(context)
+            self.context = context
+        except: 
+            traceback.print_exc()
 
     def _init_nccl(self):
         if not self.config.nccl_communicator:
@@ -84,125 +201,17 @@ class AsyncEPDNode:
     def _init_zmq(self):
         self.zmq_send = init_zmq_send(self.config.zmq) if self.config.zmq else None
 
-    def _init_engine(self):
-        self.has_vision_model = self.config.enable_encode
-        self.has_language_model = self.config.enable_prefill or self.config.enable_decode
-        self.has_kv_cache = self.config.enable_prefill or self.config.enable_decode
-        self.has_image_cache = self.config.enable_encode or self.config.enable_prefill 
-
-        worker_config = WorkerConfig(model=self.config.model)
-        self.worker = getWorker(worker_config, WorkerContext(has_vision_model=self.has_vision_model, has_language_model=self.has_language_model))
-
-        model_factory = getModelFactory(self.config.model, ModelFactoryContext())
-        language_config = model_factory.getLanguageModelConfig()
-        kv_cache_config = TokenCacheBlockManagerConfig(
-            n_layers = language_config.n_layers, 
-            n_tokens = 2, 
-            n_blocks = -1, 
-            block_size = 16, 
-            n_heads = language_config.n_kv_heads, 
-            head_size = language_config.head_dim, 
-            dtype = self.config.model.dtype, 
-            device = self.config.model.device, 
-        )
-        image_cache_config = TokenCacheBlockManagerConfig(
-            n_layers = 1, 
-            n_tokens = 1, 
-            n_blocks = -1, 
-            block_size = 576, 
-            n_heads = language_config.n_qo_heads, 
-            head_size = language_config.head_dim, 
-            dtype = self.config.model.dtype, 
-            device = self.config.model.device, 
-        )
-        total_memory = torch.cuda.get_device_properties(torch.device(self.config.model.device)).total_memory
-        model_memory = torch.cuda.max_memory_allocated()
-        reserved_memory = total_memory - model_memory
-        activation_memory_utilization = 0.
-        if self.has_vision_model:
-            activation_memory_utilization += 0.1
-        if self.has_language_model:
-            activation_memory_utilization += 0.1
-        cache_memory_utilization = 1 - activation_memory_utilization
-        if self.has_image_cache and self.has_kv_cache:
-            image_cache_memory_utilization = cache_memory_utilization * 0.1
-            kv_cache_memory_utilization = cache_memory_utilization * 0.8
-        elif self.has_image_cache and not self.has_kv_cache:
-            image_cache_memory_utilization = cache_memory_utilization
-            kv_cache_memory_utilization = 0.
-        elif not self.has_image_cache and self.has_kv_cache:
-            image_cache_memory_utilization = 0.
-            kv_cache_memory_utilization = cache_memory_utilization
-        else:
-            raise Exception('no cache pool is allocated')
-        kv_cache_memory = int(reserved_memory * kv_cache_memory_utilization)
-        image_cache_memory = int(reserved_memory * image_cache_memory_utilization)
-        logger.info(f'auto compute cache memory: model_memory {model_memory} kv_cache_memory {kv_cache_memory}B image_cache_memory {image_cache_memory}B')
-        kv_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory)
-        image_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory)
-        logger.info(f'auto set kv cache n_blocks to {kv_cache_config.n_blocks} image cache n_blocks to {image_cache_config.n_blocks}')
-
-        self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_kv_cache else None
-        self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=self.context.rank)) if self.has_image_cache else None
-        self.executor = InstructionExecutor(
-            self.config.executor, 
-            ExecutorContext(
-                kv_cache_block_manager = self.kv_cache_block_manager, 
-                image_cache_block_manager = self.image_cache_block_manager, 
-                worker = self.worker, 
-                zmq_send = self.zmq_send
-            ))
-
-        self.profiler = BatchSchedulerProfiler(
-            self.config.batch_scheduler_profiler, 
-            BatchSchedulerProfilerContext(
-                executor=self.executor, 
-                kv_cache_block_manager=self.kv_cache_block_manager, 
-                image_cache_block_manager=self.image_cache_block_manager
-            ))
-
-        self.batch_scheduler = BatchScheduler(
-            self.config.batch_scheduler, 
-            BatchSchedulerContext(
-                profiler = self.profiler, 
-            ))
-
-        self.request_processor = RequestProcessor(self.config.request_processor)
-        self.request_processor.register_output_observer(BatchSchedulerObserver(self.batch_scheduler))
-
-    def _init_migrate(self):
-        self.migrate_graph: Optional[MigrateGraph] = None
-        self.ep_loadbalancer = CompositeLoadBlancer()
-        self.pd_loadbalancer = CompositeLoadBlancer()
-        for scenario_type in range(len(ScenarioType)):
-            self.ep_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
-            self.pd_loadbalancer.register_loadbalancer(key=scenario_type, loadbalancer=LoadBalancer(LoadBalancerConfig(policy='round')))
-
-        self.migrate_lock = asyncio.Lock()
-        self.migrate_pool = ThreadPoolExecutor(max_workers=1)
-
     async def init(self):
-        logger.info(f'init {self.name} actor_id {getattr(self, "actor_id", None)} rank {self.context.rank} world_size {self.context.world_size}')
-        self._init_nccl()
-        self._init_zmq()
-        self._init_engine()
-        self._init_migrate()
-
-    async def register_migrate_graph(self, graph: MigrateGraph):
-        assert self.migrate_graph is None
-        self.migrate_graph = graph
-        for table, loadbalancer in [
-            (graph.ep_table.get(self.actor_id, []), self.ep_loadbalancer), 
-            (graph.pd_table.get(self.actor_id, []), self.pd_loadbalancer), 
-        ]:
-            for migrate_node in table:
-                if migrate_node.tpot_slo < 0.05:
-                    loadbalancer.register_worker(key=ScenarioType.Strict, worker=migrate_node)
-                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
-                else:
-                    loadbalancer.register_worker(key=ScenarioType.Relaxed, worker=migrate_node)
-        logger.info(f'ep_loadbalancer {self.ep_loadbalancer}')
-        logger.info(f'pd_loadbalancer {self.pd_loadbalancer}')
+        try:
+            logger.info(f'init {self.name} actor_id {getattr(self, "actor_id", None)} rank {self.context.rank} world_size {self.context.world_size}')
+            self._init_nccl()
+            self._init_zmq()
+            logger.info("init engine start")
+            self._update_engine(self.context)
+            logger.info("init engine finished")
+        except Exception as e:
+            traceback.print_exc()
+            
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
@@ -317,7 +326,6 @@ class AsyncEPDNode:
                 await self.step()
                 await asyncio.sleep(0.001)
         except Exception as e:
-            import traceback
             traceback.print_exc()
     
     async def perf_monitor_loop(self):
@@ -364,11 +372,11 @@ class AsyncEPDNode:
                 rcb.metric.pd_transfer.append(time.perf_counter())
             
             old_rcb = copy.copy(rcb)
-            if rcb.virtual_kv_cache and self.has_kv_cache:
+            if rcb.virtual_kv_cache and self.context.node_type.has_kv_cache:
                 rcb.virtual_kv_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
             else:
                 rcb.virtual_kv_cache = None
-            if rcb.virtual_image_cache and self.has_image_cache:
+            if rcb.virtual_image_cache and self.context.node_type.has_image_cache:
                 rcb.virtual_image_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
             else:
                 rcb.virtual_image_cache = None

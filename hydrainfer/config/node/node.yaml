@@ -4,9 +4,6 @@ defaults:
   - ../engine/executor@executor
   - ../engine/batch_scheduler_profiler@batch_scheduler_profiler
 model: ${model}
-enable_encode: True
-enable_prefill: True
-enable_decode: True
 zmq: ${zmq}
 debug_migrate: False
 nccl_communicator: ${nccl_communicator}

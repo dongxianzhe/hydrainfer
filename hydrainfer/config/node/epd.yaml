@@ -1,9 +1,6 @@
 defaults:
   - node
 
-enable_encode: True
-enable_prefill: True
-enable_decode: True
 request_processor:
   ep_migrate: False
   pd_migrate: False
