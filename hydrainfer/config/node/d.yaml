@@ -1,8 +1,5 @@
 defaults:
   - node
 
-enable_encode: False
-enable_prefill: False
-enable_decode: True
 batch_scheduler_profiler:
   tpot_slo: 0.04

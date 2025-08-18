@@ -1,9 +1,6 @@
 defaults:
   - node
 
-enable_encode: True
-enable_prefill: False
-enable_decode: False
 batch_scheduler:
   max_running_requests: 6144
   max_overload_requests: 0
