@@ -90,12 +90,8 @@ class AsyncEPDNode:
         self.has_kv_cache = self.config.enable_prefill or self.config.enable_decode
         self.has_image_cache = self.config.enable_encode or self.config.enable_prefill 
 
-        worker_config = WorkerConfig(
-            has_vision_model=self.has_vision_model, 
-            has_language_model=self.has_language_model, 
-            model=self.config.model
-        )
-        self.worker = getWorker(worker_config, WorkerContext())
+        worker_config = WorkerConfig(model=self.config.model)
+        self.worker = getWorker(worker_config, WorkerContext(has_vision_model=self.has_vision_model, has_language_model=self.has_language_model))
 
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         language_config = model_factory.getLanguageModelConfig()
