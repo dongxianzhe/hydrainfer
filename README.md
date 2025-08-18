@@ -76,3 +76,11 @@ If you use hydrainfer for your research, please cite our [paper](https://arxiv.o
       url={https://arxiv.org/abs/2505.12658}, 
 }
 ```
+# Acknowledgements
+We would like to sincerely acknowledge the following open-source projects, which have been used in this project, either in their original form or modified to meet our needs.
+- [ScaleLLM](https://github.com/vectorch-ai/ScaleLLM)
+- [vLLM](https://github.com/vllm-project/vllm)
+- [DistServe](https://github.com/LLMServe/DistServe)
+- [SGLang](https://github.com/sgl-project/sglang)
+- [transformers](https://github.com/huggingface/transformers)
+- [sarathi-serve](https://github.com/microsoft/sarathi-serve)
