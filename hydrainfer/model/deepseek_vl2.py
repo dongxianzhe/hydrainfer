@@ -16,6 +16,8 @@ from hydrainfer.utils.torch_utils import str2dtype, str2device
 from hydrainfer.transformers_utils.deepseek_vl2_config import MlpProjectorConfig, DeepseekVLV2Config
 from hydrainfer.transformers_utils.deepseek_vl2_processor import DeepseekVLV2Processor
 from transformers import AutoProcessor, AutoTokenizer
+from hydrainfer.model import ModelProfiler
+from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.utils.logger import getLogger
 logger = getLogger(__name__)
 
@@ -352,3 +354,6 @@ class DeepSeekVL2ModelFactory(ModelFactory):
 
     def getTokenizer(self) -> Tokenizer:
         return DeepSeekVL2Tokenizer(self.path)
+
+    def getModelProfiler(self) -> ModelProfiler:
+        return VisionLanguageModelProfiler(self.path, vision_model_prefixes=['vision.', 'projector.', 'image_newline', 'view_seperator'], language_model_prefixes=['language.'])
