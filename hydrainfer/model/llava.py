@@ -8,7 +8,8 @@ from typing import Optional
 from hydrainfer.model.llama import LlamaForCausalLM
 from hydrainfer.model.clip import CLIPVisionModel
 from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
-from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
+from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer, ModelProfiler, ModelParamsConfig
+from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.utils.logger import getLogger
@@ -240,3 +241,6 @@ class LlavaModelFactory(ModelFactory):
 
     def getTokenizer(self) -> Tokenizer:
         return LlavaTokenizer(self.path)
+
+    def getModelProfiler(self) -> ModelProfiler:
+        return VisionLanguageModelProfiler(self.path, vision_model_prefixes=['vision_tower.', 'multi_modal_projector.'], language_model_prefixes=['language_model.'])

@@ -10,9 +10,10 @@ from transformers.models.qwen2_vl.image_processing_qwen2_vl import smart_resize
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VisionTransformerPretrainedModel,PatchEmbed,PatchMerger
 from transformers.models.qwen2_vl.configuration_qwen2_vl import Qwen2VLVisionConfig
 from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
+from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.model.parameters import AttentionParameters, LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
-from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
+from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer, ModelProfiler
 from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.layer.activation import silu
@@ -477,3 +478,6 @@ class Qwen2VLModelFactory(ModelFactory):
 
     def getTokenizer(self) -> Tokenizer:
         return Qwen2VLTokenizer(self.path)
+
+    def getModelProfiler(self) -> ModelProfiler:
+        return VisionLanguageModelProfiler(self.path, vision_model_prefixes=['visual.'], language_model_prefixes=['model.', 'lm_head.'])

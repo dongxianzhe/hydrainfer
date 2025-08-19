@@ -26,7 +26,7 @@ class VisionModelConfig:
     image_token: str # llava: "<image>", qwenvl2: "<|vision_start|><|image_pad|><|vision_end|>"
     image_token_id: int # llava: token id of "<image>", qwenvl2: token id of "<|image_pad|>"
     image_token_caculator: ImageTokenCaculator # used to determine number of image tokens per image in llavanext model which is caculated based on image resolution
-    
+
 
 
 @dataclass
@@ -67,6 +67,18 @@ class Tokenizer:
         """
         raise NotImplementedError
 
+
+@dataclass
+class ModelParamsConfig: 
+    vision_model_params: int
+    language_model_parmas: int
+
+
+class ModelProfiler:
+    def profile_model_params(self) -> ModelParamsConfig:
+        raise NotImplementedError
+
+
 class ModelFactory:
     def getVisionModel(self) -> VisionModel:
         raise NotImplementedError
@@ -84,6 +96,9 @@ class ModelFactory:
         raise NotImplementedError
 
     def getTokenizer(self) -> Tokenizer:
+        raise NotImplementedError
+
+    def getModelProfiler(self) -> ModelProfiler:
         raise NotImplementedError
 
 
