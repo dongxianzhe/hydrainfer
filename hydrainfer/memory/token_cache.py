@@ -76,7 +76,6 @@ class VirtualTokenCache:
 class TokenCacheBlockManagerConfig:
     n_layers: int = 32
     n_tokens: int = 2
-    n_blocks: int = 1024
     block_size: int = 16
     n_heads: int = 32
     head_size: int = 128
@@ -86,27 +85,33 @@ class TokenCacheBlockManagerConfig:
 
 @dataclass
 class TokenCacheBlockManagerContext:
+    n_blocks: int
     rank: int
 
 
 class TokenCacheBlockManager:
     def __init__(self, config: TokenCacheBlockManagerConfig, context: TokenCacheBlockManagerContext):
         self.config = config
-        self.context = context
         self.n_layers   = config.n_layers
         self.n_tokens   = config.n_tokens 
-        self.n_blocks   = config.n_blocks
         self.block_size = config.block_size
         self.n_heads    = config.n_heads
         self.head_size  = config.head_size
         self.dtype      = str2dtype(config.dtype)
         self.device     = str2device(config.device)
+        self.migrate_stream:torch.cuda.Stream = torch.cuda.Stream()
+
+        self.update(context)
+    
+    def update(self, context: TokenCacheBlockManagerContext):
         self.rank = context.rank
+        self.n_blocks = context.n_blocks
 
-        self.cache_tensor = torch.randn(size=(self.n_layers, self.n_tokens, self.n_blocks, self.block_size, self.n_heads, self.head_size), dtype=self.dtype, device=self.device)
-
+        self.cache_tensor: Optional[Tensor] = None # free tensor
         # we create a list of list of tensor to store the block tensors view for migration because tensor slice is very slow
         self.migrate_block_tensors_view: list[list[Tensor]] = [[] for block_id in range(self.n_blocks)]
+
+        self.cache_tensor: Optional[Tensor] = torch.randn(size=(self.n_layers, self.n_tokens, self.n_blocks, self.block_size, self.n_heads, self.head_size), dtype=self.dtype, device=self.device)
         for block_id in range(self.n_blocks):
             for layer_id in range(self.n_layers):
                 for token_id in range(self.n_tokens):
@@ -116,7 +121,7 @@ class TokenCacheBlockManager:
         self.block_allocator = BlockAllocator(self.n_blocks)
         self.vid_allocator = IncreaingAllocator(first_value=1)
 
-        self.migrate_stream:torch.cuda.Stream = torch.cuda.Stream()
+        self.context = context
 
     def allocate_virtual_cache(self) -> VirtualTokenCache:
         return VirtualTokenCache(
@@ -210,5 +215,5 @@ class TokenCacheBlockManager:
         self.migrate_stream.synchronize()
 
     @classmethod
-    def compute_n_blocks(cls, config: TokenCacheBlockManagerConfig, memory: int):
+    def compute_n_blocks(cls, config: TokenCacheBlockManagerConfig, memory: int) -> int:
         return memory // (config.n_layers * config.n_tokens * config.block_size * config.n_heads * config.head_size * get_dtype_size(str2dtype(config.dtype)))
