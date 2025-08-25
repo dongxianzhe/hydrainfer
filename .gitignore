@@ -31,3 +31,4 @@ outputs/
 **/out/**
 **/hydra_log/**
 **/*.json
+csrc/a.cpp
