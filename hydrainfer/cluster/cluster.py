@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Optional, Literal
 from hydrainfer.request import Request
 from hydrainfer.engine import RequestProcessParameters
-from hydrainfer.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph, NodeContext, NodeType
+from hydrainfer.cluster import AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph, NodeContext, NodeType, NodeConfig, InstanceDataParallelConfig
 from hydrainfer.utils.zmq_utils import ZMQConfig
 from hydrainfer.utils.socket_utils import parse_port
 from hydrainfer.utils.allocate import IncreaingAllocator
@@ -35,18 +35,6 @@ class ClusterConfig:
     n_dnode: Optional[int] = 1
     ray_cluster_port: int = 6379
     debug: bool = False
-
-
-class DisaggregationMethodProfiler:
-    def __init__(self):
-        pass
-
-
-@dataclass
-class InstanceDataParallelConfig:
-    node_type: Literal["E", "P", "D", "EP", "ED", "PD", "EPD"]
-    node_config: Optional[NodeConfig] = None
-    n_replicas: int = 0
 
 
 class Cluster:
@@ -149,6 +137,36 @@ class Cluster:
             obj = node.update.remote(context)
             objs.append(obj)
         ray.get(objs)
+
+        # 5. change node type
+        for i, (config, context) in enumerate(zip(self.node_configs, self.node_contexts)):
+            self.node_configs[i] = self.config.epdnode
+            context.node_type = NodeType("EPD")
+
+        self.ebalancer = LoadBalancer(self.config.ebalancer)
+        self.pbalancer = LoadBalancer(self.config.pbalancer)
+
+        graph_builder = MigrateGraphBuilder()
+        for node, config, context in zip(self.nodes, self.node_configs, self.node_contexts):
+            graph_builder.add_node(
+                actor = node, 
+                tpot_slo = config.batch_scheduler_profiler.tpot_slo,
+                node_type = context.node_type,
+            )
+            if context.node_type.enable_encode:
+                self.ebalancer.register_worker(node)
+            if context.node_type.enable_prefill:
+                self.pbalancer.register_worker(node)
+        migrate_graph: MigrateGraph = graph_builder.build_graph()
+        logger.info(f'{migrate_graph}')
+        for context in self.node_contexts:
+            context.migrate_graph = migrate_graph
+        objs = [] 
+        for node, context in zip(self.nodes, self.node_contexts):
+            obj = node.update.remote(context)
+            objs.append(obj)
+        ray.get(objs)
+
         self._run_nodes_remote_method(nodes=self.nodes, method_name="loop", wait=False)
 
     def _run_nodes_remote_method(self, nodes: list[AsyncEPDNode], method_name: str, wait: bool=True, *args, **kwargs):

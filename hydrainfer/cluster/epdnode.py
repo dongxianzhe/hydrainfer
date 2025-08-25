@@ -9,21 +9,43 @@ from typing import Optional, Literal
 import torch.distributed as dist
 from torch.distributed import P2POp, batch_isend_irecv
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor
 from hydrainfer.utils.socket_utils import parse_address
 from hydrainfer.request import Request
-from hydrainfer.model import getModelFactory, ModelFactoryContext
-from hydrainfer.engine import RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerConfig, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
+from hydrainfer.model import getModelFactory, ModelFactoryConfig, ModelFactoryContext
 from hydrainfer.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig
+from hydrainfer.engine import RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerConfig, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
 from hydrainfer.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
 from hydrainfer.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
-
-from hydrainfer.utils.zmq_utils import init_zmq_send
+from hydrainfer.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, BatchSchedulerProfilerConfig
+from hydrainfer.utils.zmq_utils import ZMQConfig, init_zmq_send
 from hydrainfer.cluster import MigrateGraph, MigrateNode, NodeType
-from hydrainfer.cluster.node_config import NodeConfig
 from hydrainfer.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig, CompositeLoadBlancer
+from hydrainfer.model import ModelProfiler, ModelParamsConfig
 from hydrainfer.utils.logger import getLogger
+from hydrainfer.utils.torch_utils import get_dtype_size
 logger = getLogger(__name__)
+
+
+@dataclass
+class NCCLCommunicatorConfig:
+    host: str
+    port: int
+
+
+@dataclass
+class NodeConfig:
+    request_processor: RequestProcessorConfig = field(default_factory=RequestProcessorConfig)
+    model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
+    batch_scheduler: BatchSchedulerConfig = field(default_factory=BatchSchedulerConfig)
+    executor: ExecutorConfig = field(default_factory=ExecutorConfig)
+    batch_scheduler_profiler: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)
+    zmq: Optional[ZMQConfig] = None
+    debug_migrate: bool = True
+    nccl_communicator: Optional[NCCLCommunicatorConfig] = None
+    intranode_migrate_backend: Literal['ipc', 'nccl'] = 'ipc'
+    internode_migrate_backend: Literal['nccl'] = 'nccl'
+    log_latency_breakdown: bool = False
+
 
 @dataclass
 class NodeContext:
@@ -40,6 +62,7 @@ class BatchSchedulerObserver(RequestProcessorObserver):
     def update(self, rcb: RequestControlBlock):
         self.batch_scheduler.schedule_new(rcb)
 
+
 class AsyncEPDNode:
     def __init__(self, config: NodeConfig, context: NodeContext):
         self.config = config
@@ -53,7 +76,7 @@ class AsyncEPDNode:
 
     def _update_actor_name(self, context: NodeContext):
         # the name is used in __repr__ which is used to log actor names
-        self.name = f"{context.node_type}NodeRank{context.rank}"
+        self.name = f"{context.node_type.node_type}NodeRank{context.rank}"
 
     def _update_migrate_graph(self, context: NodeContext):
         self.ep_loadbalancer = CompositeLoadBlancer()
@@ -77,30 +100,30 @@ class AsyncEPDNode:
         logger.info(f'pd_loadbalancer {self.pd_loadbalancer}')
 
     def _update_cache(self, context: NodeContext):
-        model_factory = getModelFactory(self.config.model, ModelFactoryContext())
-        language_config = model_factory.getLanguageModelConfig()
         kv_cache_config = TokenCacheBlockManagerConfig(
-            n_layers = language_config.n_layers, 
+            n_layers = self.language_config.n_layers, 
             n_tokens = 2, 
-            n_blocks = -1, 
             block_size = 16, 
-            n_heads = language_config.n_kv_heads, 
-            head_size = language_config.head_dim, 
+            n_heads = self.language_config.n_kv_heads, 
+            head_size = self.language_config.head_dim, 
             dtype = self.config.model.dtype, 
             device = self.config.model.device, 
         )
         image_cache_config = TokenCacheBlockManagerConfig(
             n_layers = 1, 
             n_tokens = 1, 
-            n_blocks = -1, 
             block_size = 576, 
-            n_heads = language_config.n_qo_heads, 
-            head_size = language_config.head_dim, 
+            n_heads = self.language_config.n_qo_heads, 
+            head_size = self.language_config.head_dim, 
             dtype = self.config.model.dtype, 
             device = self.config.model.device, 
         )
         total_memory = torch.cuda.get_device_properties(torch.device(self.config.model.device)).total_memory
-        model_memory = torch.cuda.max_memory_allocated()
+        model_memory: int = 0
+        if context.node_type.has_language_model:
+            model_memory += self.model_params_config.language_model_parmas * get_dtype_size(self.config.model.dtype)
+        if context.node_type.has_vision_model:
+            model_memory += self.model_params_config.vision_model_params * get_dtype_size(self.config.model.dtype)
         reserved_memory = total_memory - model_memory
         activation_memory_utilization = 0.
         if context.node_type.has_vision_model:
@@ -122,15 +145,28 @@ class AsyncEPDNode:
         kv_cache_memory = int(reserved_memory * kv_cache_memory_utilization)
         image_cache_memory = int(reserved_memory * image_cache_memory_utilization)
         logger.info(f'auto compute cache memory: model_memory {model_memory} kv_cache_memory {kv_cache_memory}B image_cache_memory {image_cache_memory}B')
-        kv_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory)
-        image_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory)
-        logger.info(f'auto set kv cache n_blocks to {kv_cache_config.n_blocks} image cache n_blocks to {image_cache_config.n_blocks}')
-        self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=context.rank)) if context.node_type.has_kv_cache else None
-        self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=context.rank)) if context.node_type.has_image_cache else None
+        kv_cache_context = TokenCacheBlockManagerContext(
+            rank = context.rank, 
+            n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory), 
+        )
+        image_cache_context = TokenCacheBlockManagerContext(
+            rank = context.rank, 
+            n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory), 
+        )
+        logger.info(f'auto set kv cache n_blocks to {kv_cache_context.n_blocks} image cache n_blocks to {image_cache_context.n_blocks}')
+        if self.kv_cache_block_manager is None:
+            self.kv_cache_block_manager: Optional[TokenCacheBlockManager] = TokenCacheBlockManager(kv_cache_config, kv_cache_context) if context.node_type.has_kv_cache else None
+        elif context.node_type.has_kv_cache:
+            self.kv_cache_block_manager.update(kv_cache_context)
+
+        if self.image_cache_block_manager is None:
+            self.image_cache_block_manager: Optional[TokenCacheBlockManager] = TokenCacheBlockManager(image_cache_config, image_cache_context) if context.node_type.has_image_cache else None
+        elif context.node_type.has_image_cache:
+            self.image_cache_block_manager.update(image_cache_context)
 
     def _update_worker(self, context: NodeContext):
-        worker_config = WorkerConfig(model=self.config.model)
-        self.worker = getWorker(worker_config, WorkerContext(has_vision_model=context.node_type.has_vision_model, has_language_model=context.node_type.has_language_model))
+        if context.node_type != self.context.node_type:
+            self.worker.update(WorkerContext(has_vision_model=context.node_type.has_vision_model, has_language_model=context.node_type.has_language_model))
 
     def _update_engine(self, context: NodeContext):
         self._update_worker(context)
@@ -165,9 +201,10 @@ class AsyncEPDNode:
     async def update(self, context: NodeContext):
         try:
             self._update_actor_name(context)
+            logger.info(f'convert type from {self.context.node_type.node_type} to {context.node_type.nodetype}')
             assert self.context.rank == context.rank, "auto scale and rank change dynamically is not supported"
             assert self.context.world_size == context.world_size, "auto scale and rank change dynamically is not supported"
-            if context.node_type != context.node_type:
+            if context.node_type != self.context.node_type:
                 self._update_engine(context)
             self._update_migrate_graph(context)
             self.context = context
@@ -206,9 +243,19 @@ class AsyncEPDNode:
             logger.info(f'init {self.name} actor_id {getattr(self, "actor_id", None)} rank {self.context.rank} world_size {self.context.world_size}')
             self._init_nccl()
             self._init_zmq()
-            logger.info("init engine start")
+
+            self.model_factory = getModelFactory(self.config.model, ModelFactoryContext())
+            self.language_config = self.model_factory.getLanguageModelConfig()
+            self.model_profiler = self.model_factory.getModelProfiler()
+            self.model_params_config = self.model_profiler.profile_model_params()
+
+            self.kv_cache_block_manager: Optional[TokenCacheBlockManager] = None
+            self.image_cache_block_manager: Optional[TokenCacheBlockManager] = None
+
+            worker_config = WorkerConfig(model=self.config.model)
+            self.worker = getWorker(worker_config, WorkerContext(has_vision_model=self.context.node_type.has_vision_model, has_language_model=self.context.node_type.has_language_model))
+
             self._update_engine(self.context)
-            logger.info("init engine finished")
         except Exception as e:
             traceback.print_exc()
             

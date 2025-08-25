@@ -2,7 +2,7 @@ import os
 import safetensors.torch
 from dataclasses import dataclass
 from hydrainfer.utils.logger import getLogger
-from model_factory import ModelProfiler, ModelParamsConfig
+from hydrainfer.model import ModelProfiler, ModelParamsConfig
 logger = getLogger(__name__)
 
 

@@ -1,4 +1,5 @@
 import torch
+from typing import Union
 
 def str2device(device_type: str) -> torch.device:
     if device_type == 'cuda':
@@ -17,5 +18,7 @@ def str2dtype(dtype: str) -> torch.dtype:
         return torch.float
     raise Exception(f'dtype {dtype} is not supported')
 
-def get_dtype_size(dtype: torch.dtype) -> int:
+def get_dtype_size(dtype: Union[torch.dtype, str]) -> int:
+    if isinstance(dtype, str):
+        dtype = str2dtype(dtype)
     return torch.tensor([], dtype=dtype).element_size()
