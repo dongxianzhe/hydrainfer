@@ -9,7 +9,7 @@ from hydrainfer.layer.causal_attention import AttentionParameters, AttentionPara
 
 
 dtype = torch.half
-device = torch.device('cuda')
+device = torch.device('cuda:0')
 
 
 result_path = os.path.join('result', 'batchsize_analsis.json')
@@ -113,7 +113,7 @@ class BatchDecode:
         self.input_ids = torch.ones(size=(batch_size, ), dtype=torch.int, device=device)
         self.language_model
         self.image_features = None
-        self.position_ids = tensor = torch.full((batch_size,), decode_kv_cache_tokens, dtype=torch.int, device=device)
+        self.position_ids = torch.full((batch_size,), decode_kv_cache_tokens, dtype=torch.int, device=device)
         selected_token_ids = torch.tensor(list(range(batch_size)), dtype=torch.int, device=device)
         n_layers = self.language_config.n_layers
         n_tokens = 2
@@ -141,7 +141,7 @@ class BatchDecode:
             block_table = list(range(n_blocks))
             builder.add_request(
                 q_seq_len = 1, 
-                kv_seq_len = 0, 
+                kv_seq_len = decode_kv_cache_tokens, 
                 new_cache_slots = [i], 
                 block_table = block_table, 
             )
@@ -160,53 +160,53 @@ if __name__ == '__main__':
     max_prefill_batch_size = 8
     decode_batch_size_list = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]
     prefill_prompt_tokens = 1024
-    decode_kv_cache_tokens = 1024
-    model_name = "llava-hf/llava-1.5-7b-hf"
+    # decode_kv_cache_tokens = 1024
     model_path = "/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
-    model_factory = getModelFactory(ModelFactoryConfig(name=model_name, path=model_path), ModelFactoryContext())
+    model_factory = getModelFactory(ModelFactoryConfig(path=model_path), ModelFactoryContext())
     vision_model = model_factory.getVisionModel()
     language_model = model_factory.getLanguageModel()
     language_config = model_factory.getLanguageModelConfig()
 
     results = BatchSizeAnalysis()
-    for batch_size in range(1, max_encode_batch_size + 1):
-        op = BatchEncode(vision_model, batch_size)
-        latency = benchmark(op)
-        throughput = batch_size * 576 / latency
-        metric = BatchSizeBenchmarkMetric(
-            name = 'encode', 
-            batch_size = batch_size, 
-            latency = latency, 
-            throughput = throughput, 
-        )
-        print(f'encode {batch_size} {latency} s {throughput} token / s')
-        results.encode.append(metric)
+    # for batch_size in range(1, max_encode_batch_size + 1):
+    #     op = BatchEncode(vision_model, batch_size)
+    #     latency = benchmark(op)
+    #     throughput = batch_size * 576 / latency
+    #     metric = BatchSizeBenchmarkMetric(
+    #         name = 'encode', 
+    #         batch_size = batch_size, 
+    #         latency = latency, 
+    #         throughput = throughput, 
+    #     )
+    #     print(f'encode {batch_size} {latency} s {throughput} token / s')
+    #     results.encode.append(metric)
 
-    for batch_size in range(1, max_prefill_batch_size + 1):
-        op = BatchPrefill(language_model, language_config, batch_size, prefill_prompt_tokens)
-        latency = benchmark(op)
-        throughput = batch_size * prefill_prompt_tokens / latency
-        metric = BatchSizeBenchmarkMetric(
-            name = 'prefill', 
-            batch_size = batch_size, 
-            latency = latency, 
-            throughput = throughput, 
-        )
-        print(f'prefill {batch_size} {latency} s {throughput} token / s')
-        results.prefill.append(metric)
+    # for batch_size in range(1, max_prefill_batch_size + 1):
+    #     op = BatchPrefill(language_model, language_config, batch_size, prefill_prompt_tokens)
+    #     latency = benchmark(op)
+    #     throughput = batch_size * prefill_prompt_tokens / latency
+    #     metric = BatchSizeBenchmarkMetric(
+    #         name = 'prefill', 
+    #         batch_size = batch_size, 
+    #         latency = latency, 
+    #         throughput = throughput, 
+    #     )
+    #     print(f'prefill {batch_size} {latency} s {throughput} token / s')
+    #     results.prefill.append(metric)
 
     for batch_size in decode_batch_size_list:
-        op = BatchDecode(language_model, language_config, batch_size, decode_kv_cache_tokens)
-        latency = benchmark(op)
-        throughput = batch_size / latency
-        metric = BatchSizeBenchmarkMetric(
-            name = 'decode', 
-            batch_size = batch_size, 
-            latency = latency, 
-            throughput = throughput, 
-        )
-        results.decode.append(metric)
-        print(f'decode {batch_size} {latency} s {throughput} token / s')
+        for decode_kv_cache_tokens in [512, 1024, 2048, 2048 + 1024]:
+            op = BatchDecode(language_model, language_config, batch_size, decode_kv_cache_tokens)
+            latency = benchmark(op)
+            throughput = batch_size / latency
+            metric = BatchSizeBenchmarkMetric(
+                name = 'decode', 
+                batch_size = batch_size, 
+                latency = latency, 
+                throughput = throughput, 
+            )
+            results.decode.append(metric)
+            print(f'decode {batch_size} n_kv_cache_tokens {decode_kv_cache_tokens} {latency} s {throughput} token / s')
 
     os.makedirs(os.path.dirname(result_path), exist_ok=True)
     with open(result_path, "w") as file:
