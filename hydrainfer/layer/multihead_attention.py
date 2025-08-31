@@ -23,6 +23,7 @@ except ImportError:
 class MultiHeadAttentionConfig:
     n_heads: int
     head_dim: int
+    causal: bool = False
 
 
 @dataclass
