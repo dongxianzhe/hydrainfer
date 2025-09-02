@@ -13,6 +13,7 @@ from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.utils.logger import getLogger
+from hydrainfer.model.model_loader import load_safetensor
 logger = getLogger(__name__)
 
 class LlavaTokenCaculator(ImageTokenCaculator):
@@ -58,20 +59,10 @@ class LlavaForConditionalGeneration(nn.Module):
         torch.set_default_dtype(torch.float)
 
         # 2. load weights
-        state_dict = model.state_dict()
-        loaded_set = set() # used to verify all weight are loaded
-        for entry in os.scandir(model_weights_path):
-            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                logger.info(f'load safetensor from {entry.path}')
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    state_dict[name].data.copy_(weight)
-                    loaded_set.add(name)
-        
+        load_safetensor(model_with_prefix_list=[(model, '')], param_with_name_list=[], model_weights_path=model_weights_path),
+
         model.to(dtype) # to ensure that all tensor data type are correct such as non persistent rope inv freq, becuase it is created with float dtype specifically and will not be affected by set_default_dtype
         model.eval()
-
-        # 3. verify
-        assert len(loaded_set) == len(state_dict)
 
         return model
 
@@ -89,26 +80,19 @@ class LlavaVisionModel(VisionModel):
             self.multi_modal_projector = LlavaMultiModalProjector(config)
         torch.set_default_dtype(torch.float)
         # 3. load vision_tower state dict
-        state_dict = self.vision_tower.state_dict()
-        state_dict.update(self.multi_modal_projector.state_dict())
-        loaded_set = set() # used to verify all weight are loaded
-        for entry in os.scandir(model_path):
-            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                logger.info(f'load safetensor from {entry.path}')
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('vision_tower.'):
-                        state_dict[name.removeprefix('vision_tower.')].copy_(weight)
-                        loaded_set.add(name)
-                    elif name.startswith('multi_modal_projector.'):
-                        state_dict[name.removeprefix('multi_modal_projector.')].copy_(weight)
-                        loaded_set.add(name)
+        load_safetensor(
+            model_with_prefix_list=[
+                (self.vision_tower, 'vision_tower.'), 
+                (self.multi_modal_projector, 'multi_modal_projector.'), 
+            ], 
+            param_with_name_list=[], 
+            model_weights_path=model_path, 
+        )
 
         self.vision_tower.to(dtype)
         self.vision_tower.eval()
         self.multi_modal_projector.to(dtype)
         self.multi_modal_projector.eval()
-        # 4. verify
-        assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
 
     
     def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
@@ -134,21 +118,11 @@ class LlavaLanguageModel(LanguageModel):
             self.language_model = LlamaForCausalLM(config.text_config)
         torch.set_default_dtype(torch.float)
         # 3. load vision_tower state dict
-        state_dict = self.language_model.state_dict()
-        loaded_set = set() # used to verify all weight are loaded
-        for entry in os.scandir(model_path):
-            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                logger.info(f'load safetensor from {entry.path}')
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('language_model.'):
-                        state_dict[name.removeprefix('language_model.')].copy_(weight)
-                        loaded_set.add(name)
+        load_safetensor(model_with_prefix_list=[(self.language_model, 'language_model.')], param_with_name_list=[], model_weights_path=model_path)
 
         # to ensure that all tensor data type are correct such as non persistent rope inv freq, becuase it is created with float dtype specifically and will not be affected by set_default_dtype
         self.language_model.to(dtype)
         self.language_model.eval()
-        # 4. verify
-        assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
     
     def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
         # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
