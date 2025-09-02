@@ -9,10 +9,10 @@ port="8891"
 
 export CUDA_VISIBLE_DEVICES=1
 declare -A MODELS=(
-    ["llava-hf/llava-1.5-7b-hf"]="/mnt/cfs/9n-das-admin/llm_models/llava-1.5-7b-hf"
-    ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
-    ["Qwen/Qwen2-VL-7B"]="/mnt/cfs/9n-das-admin/llm_models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
-    ["deepseek-ai/deepseek-vl2-tiny"]="/mnt/cfs/9n-das-admin/llm_models/deepseek-vl2-tiny"
+    ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
+    # ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
+    # ["Qwen/Qwen2-VL-7B"]="/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
+    # ["deepseek-ai/deepseek-vl2-tiny"]="/models/deepseek-vl2-tiny"
 )
 
 for MODEL in "${!MODELS[@]}"; do

@@ -12,6 +12,7 @@ from hydrainfer.model.parameters import LanguageModelParameters, LanguageModelOu
 from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.model.llava import LlavaVisionModel, LlavaLanguageModel, LlavaTokenizer
+from hydrainfer.model.model_loader import load_safetensor
 
 
 class LlavaNextImageTokenCaculator(ImageTokenCaculator):
@@ -62,15 +63,8 @@ class LlavaNextVisionModel(VisionModel):
         self.config = LlavaNextConfig.from_pretrained(path)
         self.vision_model = LlavaVisionModel(path, dtype, device)
         self.image_newline = nn.Parameter(torch.empty(self.config.text_config.hidden_size, dtype=dtype, device=device), requires_grad=False)
+        load_safetensor(model_with_prefix_list=[], param_with_name_list=[(self.image_newline, 'image_newline')], model_weights_path=path)
 
-        loaded_set = set()
-        for entry in os.scandir(path):
-            if entry.is_file and os.path.splitext(entry.name)[1] == '.safetensors':
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name == 'image_newline':
-                        self.image_newline.copy_(weight)
-                        loaded_set.add(name)
-        assert len(loaded_set) == 1
 
     def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
         n_patches_list: list[int] = []

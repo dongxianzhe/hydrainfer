@@ -21,6 +21,7 @@ from hydrainfer.layer.multihead_attention import MultiHeadAttentionConfig,QwenMu
 from hydrainfer.utils.torch_utils import str2dtype, str2device
 from functools import partial
 from hydrainfer.utils.logger import getLogger
+from hydrainfer.model.model_loader import load_safetensor
 logger = getLogger(__name__)
 
 smart_resize = partial(smart_resize, max_pixels=3584 * 3584)
@@ -192,20 +193,9 @@ class Qwen2VisionModel(VisionModel):
         with torch.device(device):
             self.visual = Qwen2VisionTransformerPretrainedModelMock(path, dtype, device)
 
-        state_dict = self.visual.state_dict()
-        loaded_set = set() # used to verify all weight are loaded
-        for entry in os.scandir(path):
-            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                logger.info(f'load safetensor from {entry.path}')
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('visual.'):
-                        state_dict[name.removeprefix('visual.')].copy_(weight)
-                        loaded_set.add(name)
-        self.visual.load_state_dict(state_dict)
+        load_safetensor(model_with_prefix_list=[(self.visual, 'visual.')], param_with_name_list=[], model_weights_path=path)
         self.visual.to(dtype)
         self.visual.eval()
-        # 4. verify
-        assert len(state_dict) == len(loaded_set), f'{len(state_dict)} {len(loaded_set)}'
 
 
     def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
@@ -364,22 +354,10 @@ class Qwen2VLForConditionalGeneration(nn.Module):
         torch.set_default_dtype(torch.float)
 
         # 2. load weights
-        state_dict = model.state_dict()
-        loaded_set = set()
-        for entry in os.scandir(model_weights_path):
-            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                logger.info(f'load safetensor from {entry.path}')
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('visual'):
-                        continue
-                    state_dict[name].data.copy_(weight)
-                    loaded_set.add(name)
-        model.load_state_dict(state_dict)
+        load_safetensor(model_with_prefix_list=[(model, '')], param_with_name_list=[], model_weights_path=model_weights_path)
+
         model.to(dtype)
         model.eval()
-
-        # 3. verify
-        assert len(loaded_set) == len(state_dict)
 
         return model
 

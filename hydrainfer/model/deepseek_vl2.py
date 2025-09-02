@@ -19,6 +19,7 @@ from transformers import AutoProcessor, AutoTokenizer
 from hydrainfer.model import ModelProfiler
 from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.utils.logger import getLogger
+from hydrainfer.model.model_loader import load_safetensor
 logger = getLogger(__name__)
 
 class DeepSeekVL2ImageTokenCaculator(ImageTokenCaculator):
@@ -129,42 +130,21 @@ class DeepSeekVL2VisionModel(VisionModel):
                 # This is a typo in original implementation
                 self.view_seperator = torch.randn(self.projector_config.n_embed) * embed_std
 
-        # load weights of:
-        # 1. vision model
-        # 2. projector
-        # 3. image_newline
-        # 4. view_seperator
-        vision_state_dict = self.vision.state_dict()
-        projector_state_dict = self.projector.state_dict()
-        vision_loaded_set = set()
-        projector_loaded_set = set()
-        for entry in os.scandir(path):
-            if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-                logger.info(f'load safetensor from {entry.path}')
-                for name, weight in safetensors.torch.load_file(entry.path).items():
-                    if name.startswith('vision.'):
-                        vision_state_dict[name.removeprefix('vision.')].copy_(weight)
-                        vision_loaded_set.add(name)
-                    if name.startswith('projector.'):
-                        projector_state_dict[name.removeprefix('projector.')].copy_(weight)
-                        projector_loaded_set.add(name)
-                    if name == "image_newline":
-                        self.image_newline.copy_(weight)
-                        image_newline_load = True
-                    if name == "view_seperator":
-                        self.view_seperator.copy_(weight)
-                        view_seperator_load = True
-        self.vision.load_state_dict(vision_state_dict)
+        load_safetensor(
+            model_with_prefix_list=[
+                (self.vision, 'vision.'),  
+                (self.projector, 'projector.'), 
+            ], 
+            param_with_name_list=[
+                (self.image_newline, 'image_newline'), 
+                (self.view_seperator, 'view_seperator'), 
+            ],
+            model_weights_path=path, 
+        )
         self.vision.to(dtype)
         self.vision.eval()
-        self.projector.load_state_dict(projector_state_dict)
         self.projector.to(dtype)
         self.projector.eval()
-        assert len(vision_state_dict) == len(vision_loaded_set), f'{len(vision_state_dict)} {len(vision_loaded_set)}'
-        assert len(projector_state_dict) == len(projector_loaded_set), f'{len(projector_state_dict)} {len(projector_loaded_set)}'
-        assert image_newline_load, "image_newline not loaded"
-        assert view_seperator_load, "view_seperator not loaded"
-                        
 
 
     def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
