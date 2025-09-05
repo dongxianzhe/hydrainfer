@@ -229,6 +229,13 @@ class SamplingParamsProcess(RequestProcessorComponent):
             rcb.sampling_params.eos_token_ids.append(self.eos_token_id)
         return rcb
 
+class PriorityProcessor(RequestProcessorComponent):
+    def __init__(self, config: RequestProcessorConfig):
+        super().__init__()
+    def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
+        rcb.user = request.user
+        return rcb
+
 class RequestProcessor:
     def __init__(self, config: RequestProcessorConfig):
         super().__init__()
@@ -243,6 +250,7 @@ class RequestProcessor:
             InstructionCreator(config), 
             ScenarioPredictor(config), 
             OutputTokenProcessorComponent(config), 
+            PriorityProcessor(config), 
         ]
         self.request_process_observer: list[RequestProcessorObserver] = []
 

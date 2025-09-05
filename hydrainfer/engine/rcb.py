@@ -20,6 +20,7 @@ class RequestControlBlock:
         self.output_token_ids: list[int] = []
         self.scenario_type: Optional[ScenarioType] = None
         self.metric = RequestMetric()
+        self.user: str = ""
 
     def current_instruction(self) -> Instruction:
         return self.instructions.curr

@@ -26,6 +26,7 @@ class Request:
     image_base64: str = ""
     sampling_params: SamplingParameters = field(default_factory=SamplingParameters)
     token_params: TokenParameters = field(default_factory=TokenParameters)
+    user: str = ""
 
 
 @dataclass

@@ -32,6 +32,7 @@ async def openai_compitable_server_proxy(model_path: str, entry: SyntheticDataEn
             model=model_path,
             temperature=0., 
             stream=True, 
+            user=entry.dataset, # used for priority schedule
         )
         output.success = True
         async for chunk in response:

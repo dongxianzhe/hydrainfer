@@ -49,6 +49,25 @@ class BatchScheduler:
         return self.scheduler.step()
 
 
+import heapq
+
+class PriorityQueue:
+    def __init__(self):
+        self._queue = []
+        self._index = 0
+
+    def push(self, item, priority):
+        heapq.heappush(self._queue, (priority, self._index, item))
+        self._index += 1
+
+    def pop(self):
+        # pop the item with minimum priority value
+        return heapq.heappop(self._queue)[-1]
+
+    def is_empty(self):
+        return len(self._queue) == 0
+
+
 class STEPBatchScheduler:
     def __init__(self, config: BatchSchedulerConfig, context: BatchSchedulerContext):
         self.config = config
@@ -57,7 +76,7 @@ class STEPBatchScheduler:
         self.token_budgets = self.profiler.profile_token_budgets()
 
         # self.waiting = Queue()
-        self.waiting = deque()
+        self.waiting = PriorityQueue()
 
         self.running: list[RequestControlBlock] = []
         self.step_cnt = 0
@@ -65,76 +84,31 @@ class STEPBatchScheduler:
 
         self.migrating_cnt = 0
 
-    def migrating_acquire(self):
-        # migrating_acquire and migrating_release are used to count how many request need to be pulled
-        # we need this count because avoid sender OOM when there are too many waiting migrate requests and running requests
-        assert self.migrating_cnt < self.config.max_running_requests + self.config.max_overload_requests, f'invalid acquire'
-        self.migrating_cnt += 1
-
-    def migrating_release(self):
-        assert self.migrating_cnt > 0, f'invalid release'
-        self.migrating_cnt -= 1
-
-    def _stamp_queuing_begin_time(self, rcb: RequestControlBlock):
-        if isinstance(rcb.current_instruction(), ImageEmbed):
-            rcb.metric.encode_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.prefill_queueing) == 0:
-            rcb.metric.prefill_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.decode_queueing) == 0:
-            rcb.metric.decode_queueing.append(time.perf_counter())
-            return
-
-    def _stamp_queuing_end_time(self, rcb: RequestControlBlock):
-        if len(rcb.metric.encode_queueing) == 1:
-            rcb.metric.encode_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.prefill_queueing) == 1:
-            rcb.metric.prefill_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.decode_queueing) == 1:
-            rcb.metric.decode_queueing.append(time.perf_counter())
-            return
+        self.user_priority_map = {
+            "lmms-lab/TextCaps" : 3, 
+            "lmms-lab/POPE" : 2, 
+            "lmms-lab/MME" : 1, 
+            "lmms-lab/textvqa" : 2, 
+            "lmms-lab/VizWiz-VQA" : 3, 
+        }
 
     def schedule_new(self, rcb: RequestControlBlock):
+        priority = self.user_priority_map.get(rcb.user, 4)
+        logger.info(f'rcb.user {rcb.user}')
         rcb.sid = self.sid_allocator.allocate()
-        if isinstance(rcb.current_instruction(), PullCache):
-            self.waiting.appendleft(rcb)
-        else:
-            self.waiting.append(rcb)
 
-        self._stamp_queuing_begin_time(rcb)
+        self.waiting.push(rcb, priority)
 
     def schedule_running(self, rcb: RequestControlBlock):
         self.running.append(rcb)
-        self._stamp_queuing_end_time(rcb)
 
     def step(self) -> BatchRequest:
         self.step_cnt += 1
         schedule_time = time.perf_counter()
         # 1. get enough requests to participate in the batch
-        if self.config.batch_policy == 'nobatch':
-            raise NotImplementedError
-            if len(self.running) == 0:
-                if not self.waiting.empty():
-                    rcb = self.waiting.get()
-                    self.schedule_running(rcb)
-        elif self.config.batch_policy == 'requestlevel':
-            raise NotImplementedError
-            if len(self.running) == 0:
-                while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
-                    rcb = self.waiting.get()
-                    self.schedule_running(rcb)
-        elif self.config.batch_policy == 'continuousbatch':
-            while len(self.running) < self.config.max_running_requests - self.migrating_cnt and len(self.waiting) > 0:
-                rcb = self.waiting.popleft()
-                self.schedule_running(rcb)
-            # we are risking dead pull cache lock when ED Node' all requests are waiting P Node pull and P Node's all requests are waiting ED Node pull cache
-            # so we need to limit the number of new requests
-            while len(self.running) < self.config.max_running_requests - self.migrating_cnt + self.config.max_overload_requests and len(self.waiting) > 0 and isinstance(self.waiting[0].current_instruction(), PullCache):
-                rcb = self.waiting.popleft()
-                self.schedule_running(rcb)
+        while len(self.running) < self.config.max_running_requests and not self.waiting.is_empty():
+            rcb = self.waiting.pop()
+            self.schedule_running(rcb)
 
         if len(self.running) == 0:
             return []

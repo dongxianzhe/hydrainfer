@@ -106,7 +106,8 @@ class APIServer:
                     prompt = prompt, 
                     image = None, 
                     image_base64 = image_base64_list[0], 
-                    sampling_params = SamplingParameters(max_tokens=request.max_tokens)
+                    sampling_params = SamplingParameters(max_tokens=request.max_tokens), 
+                    user = request.user, 
                 ), RequestProcessParameters(
                     outout_token_parmas = OutputTokenParams(
                         print_output_text = False, 

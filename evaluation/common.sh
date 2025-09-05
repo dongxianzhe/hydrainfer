@@ -18,11 +18,16 @@ trap clean_up EXIT
 wait_api_server() {
     local ip=$1
     local port=$2
+    local pid=$3
     local name="api server at $ip $port"
     local retry=0
     while ! nc -z $ip $port; do
         echo "Waiting for $name to start..."
         retry=$((retry + 1))
+        if ! kill -0 $pid 2>/dev/null; then
+            echo "Backend process with PID $pid has exited."
+            return 1
+        fi
         if [ $retry -gt 50 ]; then
             echo "$name failed to start after 50 attempts. Exiting."
             return 1

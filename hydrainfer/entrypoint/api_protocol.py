@@ -25,6 +25,7 @@ class ChatCompletionRequest(BaseModel):
     max_tokens: Optional[int] = 16
     stream: Optional[bool] = False
     temperature: float = 0.
+    user: str = ""
 
 
 class ChatMessage(BaseModel):
