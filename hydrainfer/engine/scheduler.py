@@ -172,3 +172,26 @@ class BatchScheduler:
 
         self.running = next_step
         return BatchRequest(this_step)
+
+
+class RequestLevelBatchScheduler:
+    def __init__(self, config: BatchSchedulerConfig, context: BatchSchedulerContext):
+        self.config = config
+        self.waiting = queue.Queue()
+        self.running: list[RequestControlBlock] = []
+        self.sid_allocator = IncreaingAllocator(first_value=1)
+
+    def schedule_new(self, rcb: RequestControlBlock):
+        rcb.sid = self.sid_allocator.allocate()
+        self.waiting.put(rcb)
+
+    def schedule_running(self, rcb: RequestControlBlock):
+        self.running.append(rcb)
+
+    def step(self, rcb: RequestControlBlock) -> BatchRequest:
+        if len(self.running == 0):
+            while not self.waiting.empty():
+                self.running.append(self.waiting.get())
+        batch = BatchRequest(self.running)
+        self.running = []
+        return batch
