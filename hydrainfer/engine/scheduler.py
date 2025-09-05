@@ -195,3 +195,27 @@ class RequestLevelBatchScheduler:
         batch = BatchRequest(self.running)
         self.running = []
         return batch
+
+
+class PrefillPrioritizeBatchScheduler:
+    def __init__(self, config: BatchSchedulerConfig, context: BatchSchedulerContext):
+        self.config = config
+        self.waiting = queue.Queue()
+
+    def schedule_new(self, rcb: RequestControlBlock):
+        rcb.sid = self.sid_allocator.allocate()
+        self.waiting.put(rcb)
+
+    def schedule_running(self, rcb: RequestControlBlock):
+        self.running.append(rcb)
+
+    def step(self, rcb: RequestControlBlock) -> BatchRequest:
+        if self.waiting:
+            this_step: list[RequestControlBlock] = []
+            while not self.waiting.empty():
+                this_step.append(self.waiting.get())
+            return BatchRequest(this_step)
+        else:
+            batch = BatchRequest(self.running)
+            self.running = []
+            return batch
