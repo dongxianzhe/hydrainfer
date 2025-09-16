@@ -28,6 +28,10 @@ def silu(h: Tensor):
         return silu_kernel(h)
     return torch.nn.functional.silu(h)
 
+class Silu(nn.Module):
+    def forward(self, h: Tensor) -> Tensor:
+        return silu(h)
+
 try:
     import flashinfer
 except ImportError as e:
