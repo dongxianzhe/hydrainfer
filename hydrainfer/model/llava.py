@@ -14,6 +14,7 @@ from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.utils.logger import getLogger
 from hydrainfer.model.model_loader import load_safetensor
+from hydrainfer.model.model_forward import UpDownMLP
 logger = getLogger(__name__)
 
 class LlavaTokenCaculator(ImageTokenCaculator):
@@ -30,14 +31,13 @@ class LlavaMultiModalProjector(nn.Module):
         super().__init__()
         self.linear_1 = nn.Linear(config.vision_config.hidden_size, config.text_config.hidden_size, bias=True)
         self.linear_2 = nn.Linear(config.text_config.hidden_size, config.text_config.hidden_size, bias=True)
-        self.act = nn.GELU()
+
+        self.projector = UpDownMLP(up_proj = self.linear_1, down_proj = self.linear_2, activation = nn.GELU())
+        
     
     def forward(self, image_features: Tensor) -> Tensor:
         # image_features (n_images, n_tokens, vision_hidden_size)
-        hidden_states = self.linear_1(image_features)
-        hidden_states = self.act(hidden_states)
-        hidden_states = self.linear_2(hidden_states)
-        return hidden_states
+        return self.projector.forward(image_features)
 
 
 class LlavaForConditionalGeneration(nn.Module):
