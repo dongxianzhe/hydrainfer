@@ -1,6 +1,7 @@
 from torch import nn, Tensor
-from hydrainfer.layer.rotary_embedding import RotaryEmbedding
+from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from hydrainfer.layer.causal_attention import AttentionParameters, CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
+from hydrainfer.model.parameters import LanguageModelParameters
 
 
 class UpDownMLP:
@@ -71,3 +72,23 @@ class ROPECausalGroupedQueryPageAttention:
         query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
         hidden_states = self.attention(query, key, value, attention_param).o # (n_tokens, hidden_size)
         return self.o_proj(hidden_states) # (n_tokens, hidden_size)
+
+
+class DecoderLayer:
+    def __init__(self, attention: nn.Module, mlp: nn.Module, norm_1: nn.Module, norm_2: nn.Module, layer_id: int, n_layers: int):
+        self.attention = attention
+        self.mlp = mlp
+        self.norm_1 = norm_1
+        self.norm_2 = norm_2
+        self.layer_id = layer_id
+        self.n_layers = n_layers
+
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        hidden_states = hidden_states + self.attention(self.norm_1(hidden_states), position_ids, model_params.attention_params[self.layer_id]) # (n_tokens, hidden_size)
+
+        # if it is last layer we discared tokens which is not sampled to reduce redundent computation in the last ffn layer
+        if not model_params.all_sequences_decode and self.layer_id == self.n_layers - 1:
+            hidden_states = hidden_states[model_params.selected_token_ids, :]
+
+        hidden_states = hidden_states + self.mlp(self.norm_2(hidden_states))
+        return hidden_states

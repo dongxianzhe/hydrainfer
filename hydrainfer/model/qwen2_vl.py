@@ -22,6 +22,8 @@ from hydrainfer.utils.torch_utils import str2dtype, str2device
 from functools import partial
 from hydrainfer.utils.logger import getLogger
 from hydrainfer.model.model_loader import load_safetensor
+from hydrainfer.layer.activation import Silu
+from hydrainfer.model.model_forward import GateUpDownMLP, UpDownMLP, ROPECausalGroupedQueryPageAttention, DecoderLayer
 logger = getLogger(__name__)
 
 smart_resize = partial(smart_resize, max_pixels=3584 * 3584)
@@ -51,11 +53,12 @@ class VisionMlp(nn.Module):
     def __init__(self, dim: int, hidden_dim: int, hidden_act: str) -> None:
         super().__init__()
         self.fc1 = nn.Linear(dim, hidden_dim)
-        self.act = silu
+        self.act = Silu()
         self.fc2 = nn.Linear(hidden_dim, dim)
+        self.mlp = UpDownMLP(up_proj=self.fc1, down_proj=self.fc2, activation=self.act)
 
-    def forward(self, x) -> torch.Tensor:
-        return self.fc2(self.act(self.fc1(x)))
+    def forward(self, h: Tensor) -> torch.Tensor:
+        return self.mlp.forward(h)
 
 class VisionAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int = 16) -> None:
@@ -102,9 +105,7 @@ class Qwen2VLVisionBlock(nn.Module):
         self.norm1 = nn.LayerNorm(config.embed_dim, eps=1e-6)
         self.norm2 = nn.LayerNorm(config.embed_dim, eps=1e-6)
         mlp_hidden_dim = int(config.embed_dim * config.mlp_ratio)
-
         self.attn = VisionAttention(config.embed_dim,num_heads=config.num_heads)
-
         self.mlp = VisionMlp(dim=config.embed_dim, hidden_dim=mlp_hidden_dim, hidden_act=config.hidden_act)
 
     def forward(self, hidden_states: Tensor, cu_seqlens: Tensor, rotary_pos_emb: Tensor) -> Tensor:
@@ -225,7 +226,6 @@ class Qwen2VLSdpaAttention(nn.Module):
         self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=True)
         self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=True)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-
         self.rotary_emb = RotaryEmbedding(
             rotary_dim=config.head_dim,
             max_position_embeddings=config.max_position_embeddings,
@@ -234,25 +234,22 @@ class Qwen2VLSdpaAttention(nn.Module):
                 theta=config.rope_theta
                 ),
             interleaved=False
-            )
-        self.attention = CausalGroupedQueryPageAttention(CausalGroupedQueryPageAttentionConfig(
-            n_qo_heads=config.num_attention_heads,
-            n_kv_heads=config.num_key_value_heads,
-            head_dim=config.head_dim
-        ))
+        )
+
+        self.attention = ROPECausalGroupedQueryPageAttention(
+            q_proj = self.q_proj, 
+            k_proj = self.k_proj, 
+            v_proj = self.v_proj, 
+            o_proj = self.o_proj, 
+            rotary_emb = self.rotary_emb, 
+            n_qo_heads = config.num_attention_heads, 
+            n_kv_heads = config.num_key_value_heads, 
+            head_dim = config.head_dim, 
+        )
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
-        # hidden_states (n_tokens, hidden_size)
-        # position_ids (n_tokens, )
-        query = self.q_proj(hidden_states) # (n_tokesn, hidden_size)
-        key   = self.k_proj(hidden_states) # (n_tokesn, hidden_size)
-        value = self.v_proj(hidden_states) # (n_tokesn, hidden_size)
-        query = query.view(-1, self.config.num_attention_heads, self.config.head_dim) # (n_tokens, n_qo_heads, head_size)
-        key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
-        value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
-        query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
-        hidden_states = self.attention(query, key, value, attention_param).o # (n_tokens, hidden_size)
-        return self.o_proj(hidden_states) # (n_tokens, hidden_size)
+        return self.attention.forward(hidden_states, position_ids, attention_param)
+
 
 class Qwen2MLP(nn.Module):
     def __init__(self, config: Qwen2VLConfig):
@@ -260,38 +257,27 @@ class Qwen2MLP(nn.Module):
         self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.up_proj   = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        self.activation = Silu()
+        self.mlp = GateUpDownMLP(gate_proj=self.gate_proj, up_proj=self.up_proj, down_proj=self.down_proj, activation=self.activation)
     
-    def forward(self, hidden_states: Tensor) -> Tensor:
-        # hidden_states (n_tokens, hidden_size)
-        down_proj = self.down_proj(silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
-        return down_proj
+    def forward(self, h: Tensor) -> Tensor:
+        return self.mlp.forward(h)
 
 
 class Qwen2VLDecoderLayer(nn.Module):
     def __init__(self, config: Qwen2VLConfig, layer_id: int):
         super().__init__()
         self.layer_id = layer_id
-        self.n_layers = config.num_hidden_layers
         self.self_attn = Qwen2VLSdpaAttention(config)
         self.mlp = Qwen2MLP(config)
         self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
+
+        self.decoder_layer = DecoderLayer(attention=self.self_attn, mlp=self.mlp, norm_1=self.input_layernorm, norm_2=self.post_attention_layernorm, layer_id=layer_id, n_layers= config.num_hidden_layers)
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
-        residual = hidden_states # (n_tokens, hidden_size)
-        hidden_states = self.input_layernorm(hidden_states) # (n_tokens, hidden_size)
-        hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id]) # (n_tokens, hidden_size)
-        hidden_states = residual + hidden_states # (n_tokens, hidden_size)
+        return self.decoder_layer.forward(hidden_states, position_ids, model_params)
 
-        # if it is last layer we discared tokens which is not sampled to reduce redundent computation in the last ffn layer
-        if not model_params.all_sequences_decode and self.layer_id == self.n_layers - 1:
-            hidden_states = hidden_states[model_params.selected_token_ids, :]
-
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
-        return hidden_states
 
 class Qwen2VLModel(nn.Module):
     """
