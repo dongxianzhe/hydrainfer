@@ -4,6 +4,7 @@ from transformers import CLIPVisionConfig
 from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput
 from hydrainfer.layer.activation import QuickGELUActivation
 from hydrainfer.layer.multihead_attention import MultiHeadAttentionConfig, MultiHeadAttentionParameters, MultiHeadAttention
+from hydrainfer.model.model_forward import UpDownMLP
 
 
 class CLIPSdpaAttention(nn.Module):
@@ -35,13 +36,12 @@ class CLIPMLP(nn.Module):
         self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size, bias=True)
         self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size, bias=True)
         self.activation_fn = QuickGELUActivation()
+        self.mlp = UpDownMLP(up_proj = self.fc1, down_proj = self.fc2, activation = QuickGELUActivation())
+        
     
-    def forward(self, hidden_states: Tensor) -> Tensor:
+    def forward(self, h: Tensor) -> Tensor:
         # hidden_states (batch_size, num_tokens_per_image, hidden_size)
-        hidden_states = self.fc1(hidden_states) # (batch_size, num_tokens_per_image, hidden_size)
-        hidden_states = self.activation_fn(hidden_states) # (batch_size, num_tokens_per_image, hidden_size)
-        hidden_states = self.fc2(hidden_states) # (batch_size, num_tokens_per_image, hidden_size)
-        return hidden_states
+        return self.mlp.forward(h)
 
 
 class CLIPEncoderLayer(nn.Module):

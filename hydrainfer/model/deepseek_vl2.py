@@ -36,10 +36,8 @@ class DeepSeekVL2ImageTokenCaculator(ImageTokenCaculator):
         downsample_ratio = self.downsample_ratio
 
         if cropping:
-            best_width, best_height = self.processor.select_best_resolution(
-                (width, height))
-            num_width_tiles, num_height_tiles = (best_width // image_size,
-                                                best_height // image_size)
+            best_width, best_height = self.processor.select_best_resolution((width, height))
+            num_width_tiles, num_height_tiles = (best_width // image_size, best_height // image_size)
         else:
             num_width_tiles = num_height_tiles = 1
 
@@ -73,7 +71,6 @@ class MlpProjector(nn.Module):
             modules.append(nn.GELU())
             modules.append(nn.Linear(cfg.n_embed * mlp_ratio, cfg.n_embed))
             modules = nn.Sequential(*modules)
-
         else:
             raise NotImplementedError(
                 f"Unsupported projector type: {cfg.projector_type}")

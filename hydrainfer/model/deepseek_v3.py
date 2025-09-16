@@ -4,16 +4,12 @@ Deepseek V3 model with shared experts.
 Adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/deepseek_v3/modular_deepseek_v3.py#L328
 Apache-2.0 license
 """
-
 from typing import Optional
-
 import os
 import safetensors
-
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-
 from transformers import AutoTokenizer
 from transformers.activations import ACT2FN
 from hydrainfer.transformers_utils.deepseek_vl2_config import DeepseekVLV2Config, DeepseekV2Config
@@ -22,6 +18,7 @@ from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from hydrainfer.utils.logger import getLogger
+from hydrainfer.model.model_forward import DecoderLayer, ROPECausalGroupedQueryPageAttention, GateUpDownMLP
 logger = getLogger(__name__)
 
 
@@ -35,11 +32,10 @@ class DeepseekV3MLP(nn.Module):
         self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
         self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size, bias=False)
         self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size, bias=False)
-        self.act_fn = ACT2FN[config.hidden_act]
+        self.mlp = GateUpDownMLP(gate_proj = self.gate_proj, up_proj = self.up_proj, down_proj = self.down_proj, activation = ACT2FN[config.hidden_act])
 
-    def forward(self, x):
-        down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
-        return down_proj
+    def forward(self, h: Tensor) -> Tensor:
+        return self.mlp.forward(h)
 
 class MoEGate(nn.Module):
     def __init__(self, config):
@@ -179,58 +175,29 @@ class DeepseekV3Attention(nn.Module):
                 ),
             interleaved=False
             )
-        self.attention = CausalGroupedQueryPageAttention(CausalGroupedQueryPageAttentionConfig(
-            n_qo_heads=config.num_attention_heads,
-            n_kv_heads=config.num_key_value_heads,
-            head_dim=config.head_dim
-        ))
+        self.attention = ROPECausalGroupedQueryPageAttention(q_proj = self.q_proj, k_proj = self.k_proj, v_proj = self.v_proj, o_proj = self.o_proj, rotary_emb = self.rotary_emb, n_qo_heads = config.num_attention_heads, n_kv_heads = config.num_key_value_heads, head_dim = config.head_dim)
+        
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
-        # hidden_states (n_tokens, hidden_size)
-        # position_ids (n_tokens, )
-        query = self.q_proj(hidden_states) # (n_tokesn, hidden_size)
-        key   = self.k_proj(hidden_states) # (n_tokesn, hidden_size)
-        value = self.v_proj(hidden_states) # (n_tokesn, hidden_size)
-        query = query.view(-1, self.config.num_attention_heads, self.config.head_dim) # (n_tokens, n_qo_heads, head_size)
-        key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
-        value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
-        query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
-        hidden_states = self.attention(query, key, value, attention_param).o # (n_tokens, hidden_size)
-        return self.o_proj(hidden_states) # (n_tokens, hidden_size)
+        return self.attention.forward(hidden_states, position_ids, attention_param)
 
 
 class DeepseekV3DecoderLayer(nn.Module):
     def __init__(self, config: DeepseekV2Config, layer_idx: int):
         super().__init__()
-
         self.hidden_size = config.hidden_size
         self.layer_id = layer_idx
-
         self.self_attn = DeepseekV3Attention(config=config)
-
-        if layer_idx >= config.first_k_dense_replace:
-            self.mlp = DeepseekV3MoE(config)
-        else:
-            self.mlp = DeepseekV3MLP(config)
-
+        self.mlp = DeepseekV3MoE(config) if layer_idx >= config.first_k_dense_replace else DeepseekV3MLP(config)
         self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        position_ids: torch.Tensor,
-        model_params: LanguageModelParameters,
-    ) -> Tensor:
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id])
-        hidden_states = residual + hidden_states
+        self.decoder_layer = DecoderLayer(attention = self.self_attn, mlp = self.mlp, norm_1 = self.input_layernorm, norm_2 = self.post_attention_layernorm, layer_id = self.layer_id, n_layers = config.num_hidden_layers)
 
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        return hidden_states + residual
+
+    def forward(self, hidden_states: torch.Tensor, position_ids: torch.Tensor, model_params: LanguageModelParameters) -> Tensor:
+        return self.decoder_layer.forward(hidden_states, position_ids, model_params)
+
 
 class DeepseekV3Model(nn.Module):
     def __init__(self, config: DeepseekV2Config):

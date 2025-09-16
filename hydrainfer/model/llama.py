@@ -14,6 +14,7 @@ from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.layer.activation import silu
 from hydrainfer.utils.torch_utils import str2dtype, str2device
 from hydrainfer.utils.logger import getLogger
+from hydrainfer.model.model_forward import ROPECausalGroupedQueryPageAttention, GateUpDownMLP, DecoderLayer
 logger = getLogger(__name__)
 
 class LlamaSdpaAttention(nn.Module):
@@ -24,7 +25,6 @@ class LlamaSdpaAttention(nn.Module):
         self.k_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=False)
         self.v_proj = nn.Linear(config.hidden_size, config.num_key_value_heads * config.head_dim, bias=False)
         self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-
         self.rotary_emb = RotaryEmbedding(
             rotary_dim=config.head_dim,
             max_position_embeddings=config.max_position_embeddings,
@@ -34,24 +34,12 @@ class LlamaSdpaAttention(nn.Module):
                 ),
             interleaved=False
             )
-        self.attention = CausalGroupedQueryPageAttention(CausalGroupedQueryPageAttentionConfig(
-            n_qo_heads=config.num_attention_heads,
-            n_kv_heads=config.num_key_value_heads,
-            head_dim=config.head_dim
-        ))
+
+        self.attention = ROPECausalGroupedQueryPageAttention(q_proj = self.q_proj, k_proj = self.k_proj, v_proj = self.v_proj, o_proj = self.o_proj, rotary_emb = self.rotary_emb, n_qo_heads = config.num_attention_heads, n_kv_heads = config.num_key_value_heads, head_dim = config.head_dim )
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
-        # hidden_states (n_tokens, hidden_size)
-        # position_ids (n_tokens, )
-        query = self.q_proj(hidden_states) # (n_tokesn, hidden_size)
-        key   = self.k_proj(hidden_states) # (n_tokesn, hidden_size)
-        value = self.v_proj(hidden_states) # (n_tokesn, hidden_size)
-        query = query.view(-1, self.config.num_attention_heads, self.config.head_dim) # (n_tokens, n_qo_heads, head_size)
-        key   = key  .view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
-        value = value.view(-1, self.config.num_key_value_heads, self.config.head_dim) # (n_tokens, n_kv_heads, head_size)
-        query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
-        hidden_states = self.attention(query, key, value, attention_param).o # (n_tokens, hidden_size)
-        return self.o_proj(hidden_states) # (n_tokens, hidden_size)
+        # hidden_states (n_tokens, hidden_size) position_ids (n_tokens, )
+        return self.attention.forward(hidden_states, position_ids, attention_param)
 
 class LlamaMLP(nn.Module):
     def __init__(self, config: LlamaConfig):
@@ -59,38 +47,28 @@ class LlamaMLP(nn.Module):
         self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.up_proj   = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+
+        self.mlp = GateUpDownMLP(gate_proj = self.gate_proj, up_proj = self.up_proj, down_proj = self.down_proj, activation = silu)
     
     def forward(self, hidden_states: Tensor) -> Tensor:
         # hidden_states (n_tokens, hidden_size)
-        down_proj = self.down_proj(silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states))
-        return down_proj
+        return self.mlp.forward(hidden_states)
 
 
 class LlamaDecoderLayer(nn.Module):
     def __init__(self, config: LlamaConfig, layer_id: int):
         super().__init__()
         self.layer_id = layer_id
-        self.n_layers = config.num_hidden_layers
         self.self_attn = LlamaSdpaAttention(config)
         self.mlp = LlamaMLP(config)
         self.input_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
+
+        self.decoder_layer = DecoderLayer(attention = self.self_attn, mlp = self.mlp, norm_1 = self.input_layernorm, norm_2 = self.post_attention_layernorm, layer_id = self.layer_id, n_layers = config.num_hidden_layers)
+        
     
     def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
-        residual = hidden_states # (n_tokens, hidden_size)
-        hidden_states = self.input_layernorm(hidden_states) # (n_tokens, hidden_size)
-        hidden_states = self.self_attn(hidden_states, position_ids, model_params.attention_params[self.layer_id]) # (n_tokens, hidden_size)
-        hidden_states = residual + hidden_states # (n_tokens, hidden_size)
-
-        # if it is last layer we discared tokens which is not sampled to reduce redundent computation in the last ffn layer
-        if not model_params.all_sequences_decode and self.layer_id == self.n_layers - 1:
-            hidden_states = hidden_states[model_params.selected_token_ids, :]
-
-        residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = residual + hidden_states
-        return hidden_states
+        return self.decoder_layer.forward(hidden_states, position_ids, model_params)
 
 class LlamaModel(nn.Module):
     def __init__(self, config: LlamaConfig):
