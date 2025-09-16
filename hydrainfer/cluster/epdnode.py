@@ -53,7 +53,7 @@ class AsyncEPDNode:
 
     def _update_actor_name(self, context: NodeContext):
         # the name is used in __repr__ which is used to log actor names
-        self.name = f"{context.node_type}NodeRank{context.rank}"
+        self.name = f"{context.node_type.node_type}NodeRank{context.rank}"
 
     def _update_migrate_graph(self, context: NodeContext):
         self.ep_loadbalancer = CompositeLoadBlancer()
