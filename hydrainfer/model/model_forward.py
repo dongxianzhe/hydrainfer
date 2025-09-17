@@ -1,4 +1,5 @@
 from torch import nn, Tensor
+from typing import Optional
 from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from hydrainfer.layer.causal_attention import AttentionParameters, CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from hydrainfer.model.parameters import LanguageModelParameters
@@ -38,19 +39,21 @@ class GateUpDownMLP:
 class ROPECausalGroupedQueryPageAttention:
     def __init__(
         self, 
-        q_proj: nn.Linear, 
-        k_proj: nn.Linear, 
-        v_proj: nn.Linear, 
-        o_proj: nn.Linear, 
-        rotary_emb: RotaryEmbedding, 
         n_qo_heads: int, 
         n_kv_heads: int, 
         head_dim: int, 
+        rotary_emb: Optional[RotaryEmbedding] = None, 
+        q_proj: Optional[nn.Linear] = None, 
+        k_proj: Optional[nn.Linear] = None, 
+        v_proj: Optional[nn.Linear] = None, 
+        qkv_proj: Optional[nn.Linear] = None, 
+        o_proj: Optional[nn.Linear] = None, 
     ):
         self.q_proj = q_proj
         self.k_proj = k_proj
         self.v_proj = v_proj
         self.o_proj = o_proj
+        self.qkv_proj = qkv_proj
         self.rotary_emb = rotary_emb
         self.n_qo_heads = n_qo_heads
         self.n_kv_heads = n_kv_heads
@@ -63,15 +66,24 @@ class ROPECausalGroupedQueryPageAttention:
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters):
         # hidden_states (n_tokens, hidden_size)
         # position_ids (n_tokens, )
-        query = self.q_proj(hidden_states) # (n_tokesn, hidden_size)
-        key   = self.k_proj(hidden_states) # (n_tokesn, hidden_size)
-        value = self.v_proj(hidden_states) # (n_tokesn, hidden_size)
+        if self.qkv_proj is not None:
+            qkv = self.qkv_proj(hidden_states)
+            query = qkv[:, :, :self.n_qo_heads * self.head_dim]
+            key = qkv[:, :, self.n_qo_heads * self.head_dim:self.n_qo_heads * self.head_dim + self.n_kv_heads * self.head_dim]
+            value = qkv[:, :, self.n_qo_heads * self.head_dim + self.n_kv_heads * self.head_dim:]
+        else:
+            query = self.q_proj(hidden_states) # (n_tokesn, hidden_size)
+            key   = self.k_proj(hidden_states) # (n_tokesn, hidden_size)
+            value = self.v_proj(hidden_states) # (n_tokesn, hidden_size)
         query = query.view(-1, self.n_qo_heads, self.head_dim) # (n_tokens, n_qo_heads, head_size)
         key   = key  .view(-1, self.n_kv_heads, self.head_dim) # (n_tokens, n_kv_heads, head_size)
         value = value.view(-1, self.n_kv_heads, self.head_dim) # (n_tokens, n_kv_heads, head_size)
-        query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
+        if self.rotary_emb is not None:
+            query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
         hidden_states = self.attention(query, key, value, attention_param).o # (n_tokens, hidden_size)
-        return self.o_proj(hidden_states) # (n_tokens, hidden_size)
+        if self.o_proj is not None:
+            hidden_states = self.o_proj(hidden_states) # (n_tokens, hidden_size)
+        return hidden_states
 
 
 class DecoderLayer:
