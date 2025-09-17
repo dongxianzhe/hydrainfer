@@ -5,6 +5,7 @@ import os
 import safetensors.torch
 from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.model.model_forward import UpDownMLP
+from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput
 
 
 def load_safetensor_strict_equal(model: nn.Module, model_weights_path: str):
@@ -28,6 +29,9 @@ class InternVisionModelConfig:
     num_hidden_layers: int
     drop_path_rate: float
     hidden_act: str
+    patch_size: int
+    image_size: int
+    num_channels: int
 
 @dataclass
 class InternLM2ForCausalLMConfig:
@@ -47,15 +51,33 @@ class InternVLChatModelConfig:
 class InternVisionEmbeddings(nn.Module):
     def __init__(self, config: InternVisionModelConfig):
         super().__init__()
-        self.patch_embedding = nn.Conv2d(in_channels=3, out_channels=config.hidden_size, kernel_size=14, stride=14)
+        self.patch_embedding = nn.Conv2d(in_channels=config.num_channels, out_channels=config.hidden_size, kernel_size=config.patch_size, stride=config.patch_size)
         self.class_embedding = nn.Parameter(torch.randn(1, 1, config.hidden_size))
 
-        self.image_size = config.image_size = 448
-        self.patch_size = config.patch_size = 14
-        self.num_patches = (self.image_size // self.patch_size) ** 2
+        self.num_patches = (config.image_size // config.patch_size) ** 2
         self.num_positions = self.num_patches + 1
         self.position_embedding = nn.Parameter(torch.randn(1, self.num_positions, config.hidden_size))
 
+    def _get_pos_embed(self, pos_embed: Tensor, H: int, W: int) -> Tensor:
+        target_dtype = pos_embed.dtype
+        pos_embed = pos_embed.float().reshape(
+            1, self.image_size // self.patch_size, self.image_size // self.patch_size, -1).permute(0, 3, 1, 2)
+        pos_embed = nn.functional.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False). \
+            reshape(1, -1, H * W).permute(0, 2, 1).to(target_dtype)
+        return pos_embed
+
+    def forward(self, pixel_values: Tensor) -> Tensor:
+        # pixel_values (batch_size, channel, width, height)
+        patch_embeds = self.patch_embedding(pixel_values) # patch_embeds (batch_size, hidden_size, width / patch_size, height / patch_size)
+        batch_size, _, height, width = patch_embeds.shape
+        patch_embeds = patch_embeds.flatten(2).transpose(1, 2) # (batch_size, width / patch_size * height / patch_size, hidden_size)
+        class_embeds = self.class_embedding.expand(batch_size, 1, -1).to(pixel_values.dtype)
+        embeddings = torch.cat([class_embeds, patch_embeds], dim=1) # embeddings (batch_size, num_positions, hidden_size)
+        position_embedding = torch.cat([
+            self.position_embedding[:, :1, :],
+            self._get_pos_embed(self.position_embedding[:, 1:, :], height, width)
+        ], dim=1)
+        return embeddings + position_embedding.to(pixel_values.dtype)
 
 class InternAttention(nn.Module):
     def __init__(self, config: InternVisionModelConfig):
@@ -82,11 +104,6 @@ class InternMLP(nn.Module):
         return self.mlp(h)
 
 
-class Identity(nn.Module):
-    def __init__(self, config: InternVisionModelConfig):
-        super().__init__()
-
-
 class InternVisionEncoderLayer(nn.Module):
     def __init__(self, config: InternVisionModelConfig):
         super().__init__()
@@ -97,6 +114,13 @@ class InternVisionEncoderLayer(nn.Module):
         self.ls1 = nn.Parameter(config.initializer_factor * torch.ones(config.hidden_size))
         self.ls2 = nn.Parameter(config.initializer_factor * torch.ones(config.hidden_size))
         assert config.drop_path_rate == 0.0
+        self.drop_path1 = nn.Identity()
+        self.drop_path2 = nn.Identity()
+
+    def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> Tensor:
+        hidden_states = hidden_states + self.drop_path1(self.attn(self.norm1(hidden_states)) * self.ls1)
+        hidden_states = hidden_states + self.drop_path2(self.mlp(self.norm2(hidden_states)) * self.ls2)
+        return hidden_states
 
 
 class InternVisionEncoder(nn.Module):
@@ -104,12 +128,23 @@ class InternVisionEncoder(nn.Module):
         super().__init__()
         self.layers = nn.ModuleList([InternVisionEncoderLayer(config) for i in range(config.num_hidden_layers)])
 
+    def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> Tensor:
+        vision_feature_layer = (vision_feature_layer + len(self.layers)) % len(self.layers)
+        for layer_id, layer in enumerate(self.layers[:vision_feature_layer+1]):
+            hidden_states = layer(hidden_states)
+        return hidden_states
+
 
 class InternVisionModel(nn.Module):
     def __init__(self, config: InternVisionModelConfig):
         super().__init__()
         self.embeddings = InternVisionEmbeddings(config)
         self.encoder = InternVisionEncoder(config)
+
+    def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> VisionModelOutput:
+        h = self.embeddings(pixel_values)
+        h = self.encoder(h)
+        return VisionModelOutput(image_features=h)
 
 
 class InternLM2DynamicNTKScalingRotaryEmbedding(nn.Module):
