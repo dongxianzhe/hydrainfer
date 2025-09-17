@@ -4,9 +4,11 @@ from torch import nn, Tensor
 import os
 import safetensors.torch
 from hydrainfer.layer.norm import RMSNorm
-from hydrainfer.model.model_forward import UpDownMLP
-from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput
-
+from hydrainfer.model.model_forward import UpDownMLP, GateUpDownMLP, ROPECausalGroupedQueryPageAttention, DecoderLayer
+from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelOutput, LanguageModelParameters
+from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
+from hydrainfer.layer.causal_attention import AttentionParameters
+from hydrainfer.layer.multihead_attention import MultiHeadAttention, MultiHeadAttentionConfig, MultiHeadAttentionOutput, MultiHeadAttentionParameters
 
 def load_safetensor_strict_equal(model: nn.Module, model_weights_path: str):
     state_dict = model.state_dict()
@@ -32,6 +34,7 @@ class InternVisionModelConfig:
     patch_size: int
     image_size: int
     num_channels: int
+    num_attention_heads: int
 
 @dataclass
 class InternLM2ForCausalLMConfig:
@@ -40,6 +43,11 @@ class InternLM2ForCausalLMConfig:
     rms_norm_eps: float
     vocab_size: int
     num_hidden_layers: int
+    hidden_act: str
+    num_attention_heads: int
+    num_key_value_heads: int
+    max_position_embeddings: int
+    rope_theta: float
 
 
 @dataclass
@@ -82,13 +90,27 @@ class InternVisionEmbeddings(nn.Module):
 class InternAttention(nn.Module):
     def __init__(self, config: InternVisionModelConfig):
         super().__init__()
-        self.qkv = nn.Linear(in_features=config.hidden_size, out_features=9600, bias=False)
+        self.config = config
+        self.head_dim = config.hidden_size // config.num_attention_heads 
+        self.qkv = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size * 3, bias=False)
         self.attn_drop = nn.Dropout(p=0.0, inplace=False)
         self.proj_drop = nn.Dropout(p=0.0, inplace=False)
         self.q_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
         self.k_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
         self.proj = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size, bias=True)
 
+        self.attention = MultiHeadAttention(MultiHeadAttentionConfig(self.n_heads, self.head_dim))
+
+    def forward(self, hidden_states: Tensor) -> Tensor:
+        # hidden_states (batch_size, num_tokens_per_image, hidden_size)
+        qkv = self.qkv(hidden_states)
+        query = qkv[:self.config.hidden_size]
+        key   = qkv[self.config.hidden_size:2*self.config.hidden_size]
+        value = qkv[2*self.config.hidden_size:]
+        attention_output = self.attention(query, key, value, MultiHeadAttentionParameters(return_scores=False))
+        o = attention_output.o # (batch_size, num_tokens_per_image, hidden_size)
+        o = self.out_proj(o) # (batch_size, num_tokens_per_image, hidden_size)
+        return o
 
 class InternMLP(nn.Module):
     def __init__(self, config: InternVisionModelConfig):
@@ -101,7 +123,7 @@ class InternMLP(nn.Module):
         self.mlp = UpDownMLP(up_proj=self.fc1, down_proj=self.fc2, activation=self.fc1)
 
     def forward(self, h: Tensor) -> Tensor:
-        return self.mlp(h)
+        return self.mlp.forward(h)
 
 
 class InternVisionEncoderLayer(nn.Module):
@@ -147,18 +169,25 @@ class InternVisionModel(nn.Module):
         return VisionModelOutput(image_features=h)
 
 
-class InternLM2DynamicNTKScalingRotaryEmbedding(nn.Module):
-    def __init__(self, config: InternLM2ForCausalLMConfig):
-        super().__init__()
-
-
 class InternLM2Attention(nn.Module):
     def __init__(self, config: InternLM2ForCausalLMConfig):
         super().__init__()
-        self.wqkv = nn.Linear(in_features=config.hidden_size, out_features=8192, bias=False)
+        self.head_dim = config.hidden_size // config.num_attention_heads
+        self.wqkv = nn.Linear(in_features=config.hidden_size, out_features=(config.num_attention_heads + 2 * config.num_key_value_heads) * self.head_dim, bias=False)
         self.wo = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size, bias=False)
-        self.rotary_emb = InternLM2DynamicNTKScalingRotaryEmbedding(config)
+        self.rotary_emb = RotaryEmbedding(
+            rotary_dim=self.head_dim,
+            max_position_embeddings=config.max_position_embeddings,
+            inv_freq=compute_default_inv_freq(
+                rotary_dim=config.head_dim,
+                theta=config.rope_theta
+                ),
+            interleaved=False
+            ) # todo rope scaling
+        self.attention = ROPECausalGroupedQueryPageAttention(qkv_proj=self.wqkv, o_proj=self.wo, rotary_emb=self.rotary_emb, n_qo_heads=config.num_attention_heads, n_kv_heads=config.num_key_value_heads, head_dim=self.head_dim, )
 
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
+        return self.attention(hidden_states, position_ids, attention_param)
 
 class InternLM2MLP(nn.Module):
     def __init__(self, config: InternLM2ForCausalLMConfig):
@@ -166,24 +195,44 @@ class InternLM2MLP(nn.Module):
         self.w1 = nn.Linear(in_features=config.hidden_size, out_features=config.intermediate_size, bias=False)
         self.w3 = nn.Linear(in_features=config.hidden_size, out_features=config.intermediate_size, bias=False)
         self.w2 = nn.Linear(in_features=config.intermediate_size, out_features=config.hidden_size, bias=False)
+        assert config.hidden_act == 'silu'
         self.act_fn = nn.SiLU()
+        self.mlp = GateUpDownMLP(gate_proj=self.w1, up_proj=self.w3, down_proj=self.w2, activation=self.act_fn)
+        
+    def forward(self, h: Tensor) -> Tensor:
+        return self.mlp.forward(h)
 
 
 class InternLM2DecoderLayer(nn.Module):
-    def __init__(self, config: InternLM2ForCausalLMConfig):
+    def __init__(self, config: InternLM2ForCausalLMConfig, layer_id: int):
         super().__init__()
         self.attention = InternLM2Attention(config)
         self.feed_forward = InternLM2MLP(config)
         self.attention_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
         self.ffn_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
+        self.decoder_layer = DecoderLayer(attention=self.attention, mlp=self.feed_forward, norm_1=self.attention_norm, norm_2=self.ffn_norm, layer_id=layer_id, n_layers=config.num_hidden_layers)
+
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        return self.decoder_layer.forward(hidden_states, position_ids, model_params)
 
 class InternLM2Model(nn.Module):
     def __init__(self, config: InternLM2ForCausalLMConfig):
         super().__init__()
         self.tok_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=2)
-        self.layers = nn.ModuleList([InternLM2DecoderLayer(config) for i in range(config.num_hidden_layers)])
+        self.layers = nn.ModuleList([InternLM2DecoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
         self.norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
+
+
+    def forward(self, input_ids: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        if input_ids.dtype == torch.int:
+            hidden_states = self.tok_embeddings(input_ids)
+        else:
+            hidden_states = input_ids
+
+        for i, layer in enumerate(self.layers):
+            hidden_states = layer(hidden_states, position_ids, model_params)
+        return self.norm(hidden_states)
 
 
 class InternLM2ForCausalLM(nn.Module):
@@ -191,6 +240,13 @@ class InternLM2ForCausalLM(nn.Module):
         super().__init__()
         self.model = InternLM2Model(config)
         self.output = nn.Linear(in_features=config.hidden_size, out_features=config.vocab_size, bias=False)
+
+    def forward(self, input_ids_or_input_embeds: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
+        # input_ids (n_tokens, ) or input embeds (n_tokens, hidden_size)
+        hidden_state = self.model(input_ids_or_input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
+        logits = self.lm_head(hidden_state) # (n_selected_tokens, hidden_size)
+        sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False) # (n_selected_tokens, )
+        return sample_token_ids
 
 
 class InternVLChatModel(nn.Module):
