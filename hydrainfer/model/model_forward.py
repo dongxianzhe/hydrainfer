@@ -63,7 +63,7 @@ class ROPECausalGroupedQueryPageAttention:
             n_kv_heads = n_kv_heads,
             head_dim = head_dim, 
         ))
-    def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters):
+    def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
         # hidden_states (n_tokens, hidden_size)
         # position_ids (n_tokens, )
         if self.qkv_proj is not None:
