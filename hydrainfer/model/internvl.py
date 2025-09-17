@@ -3,12 +3,19 @@ import torch
 from torch import nn, Tensor
 import os
 import safetensors.torch
+from jinja2 import Template
+from typing import Optional
+from transformers import AutoTokenizer, AutoProcessor
 from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.model.model_forward import UpDownMLP, GateUpDownMLP, ROPECausalGroupedQueryPageAttention, DecoderLayer
 from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelOutput, LanguageModelParameters
 from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from hydrainfer.layer.causal_attention import AttentionParameters
 from hydrainfer.layer.multihead_attention import MultiHeadAttention, MultiHeadAttentionConfig, MultiHeadAttentionOutput, MultiHeadAttentionParameters
+from hydrainfer.model.model_factory import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModel, LanguageModel, VisionModelConfig, LanguageModelConfig, Tokenizer, ImageTokenCaculator
+from hydrainfer.utils.torch_utils import str2device, str2dtype
+from hydrainfer.model.model_profiler import ModelProfiler, ModelParamsConfig, VisionLanguageModelProfiler
+from hydrainfer.model.model_loader import load_config_from_json, load_safetensor
 
 def load_safetensor_strict_equal(model: nn.Module, model_weights_path: str):
     state_dict = model.state_dict()
@@ -48,12 +55,16 @@ class InternLM2ForCausalLMConfig:
     num_key_value_heads: int
     max_position_embeddings: int
     rope_theta: float
+    eos_token_id: int
 
 
 @dataclass
 class InternVLChatModelConfig:
     llm_config: InternLM2ForCausalLMConfig
     vision_config: InternVisionModelConfig
+    select_layer: int
+    ps_version: str
+    downsample_ratio: float
 
 
 class InternVisionEmbeddings(nn.Module):
@@ -99,7 +110,7 @@ class InternAttention(nn.Module):
         self.k_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
         self.proj = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size, bias=True)
 
-        self.attention = MultiHeadAttention(MultiHeadAttentionConfig(self.n_heads, self.head_dim))
+        self.attention = MultiHeadAttention(MultiHeadAttentionConfig(config.num_attention_heads, self.head_dim))
 
     def forward(self, hidden_states: Tensor) -> Tensor:
         # hidden_states (batch_size, num_tokens_per_image, hidden_size)
@@ -262,13 +273,226 @@ class InternVLChatModel(nn.Module):
         )
 
 
+class InternVLVisionModel(VisionModel):
+    def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
+        super().__init__()
+        # 1. config
+        config = load_config_from_json(InternVLChatModelConfig, model_path)
+        self.vision_feature_layer = config.select_layer
+        self.h = self.w = config.vision_config.image_size // config.vision_config.patch_size
+        # 2. create model
+        torch.set_default_dtype(dtype)
+        with torch.device(device):
+            self.vision_tower = InternVisionModel(config.vision_config)
+            self.multi_modal_projector = nn.Sequential(
+                nn.LayerNorm(config.vision_config.intermediate_size, eps=config.llm_config.rms_norm_eps, elementwise_affine=True), 
+                nn.Linear(in_features=config.vision_config.intermediate_size, out_features=config.llm_config.hidden_size, bias=True), 
+                nn.GELU(approximate='none'), 
+                nn.Linear(in_features=config.llm_config.hidden_size, out_features=config.llm_config.hidden_size, bias=True), 
+            )
+        torch.set_default_dtype(torch.float)
+        # 3. load vision_tower state dict
+        load_safetensor(
+            model_with_prefix_list=[
+                (self.vision_tower, 'vision_model.'), 
+                (self.multi_modal_projector, 'mlp1.'), 
+            ], 
+            param_with_name_list=[], 
+            model_weights_path=model_path, 
+        )
+
+        self.vision_tower.to(dtype)
+        self.vision_tower.eval()
+        self.multi_modal_projector.to(dtype)
+        self.multi_modal_projector.eval()
+
+    def pixel_shuffle(self, x: Tensor, scale_factor=0.5):
+        n, w, h, c = x.size()
+        # N, W, H, C --> N, W, H * scale, C // scale
+        x = x.view(n, w, int(h * scale_factor), int(c / scale_factor))
+        # N, W, H * scale, C // scale --> N, H * scale, W, C // scale
+        x = x.permute(0, 2, 1, 3).contiguous()
+        # N, H * scale, W, C // scale --> N, H * scale, W * scale, C // (scale ** 2)
+        x = x.view(n, int(h * scale_factor), int(w * scale_factor), int(c / (scale_factor * scale_factor)))
+        assert config.ps_version == 'v2'
+        x = x.permute(0, 2, 1, 3).contiguous()
+        return x
+
+    
+    def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
+        pixel_values = torch.cat(pixel_values, dim=0)
+        assert pixel_values.dim() == 4, f'pixel value shape should be 4 dim but got {pixel_values.shape}'
+        # pixel_values (n_images, n_channels, height, width)
+        output = self.vision_tower(pixel_values, self.vision_feature_layer, model_params) # (n_images, num_tokens_per_images, hidden_size of vision model)
+        vit_embeds = output.image_features
+        vit_embeds = vit_embeds[:, 1:] # (n_images, num_tokens_per_images - 1, hidden_size of vision model) evict first class token of each image
+
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], self.h, self.w, -1)
+        vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=config.downsample_ratio)
+        vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
+        vit_embeds = self.mlp1(vit_embeds)
+
+        image_features = self.multi_modal_projector(vit_embeds) # (n_images, (num_tokens_per_images - 1) * downsample_ratio * downsample_ratio, hidden_size of language model)
+        output.image_features = image_features
+        return output
+
+
+class InternVLLanguageModel(LanguageModel):
+    def __init__(self, model_path: str, dtype: torch.dtype, device: torch.device):
+        super().__init__()
+        # 1. config
+        config = load_config_from_json(InternVLChatModelConfig, self.path)
+        IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        self.image_token_id = tokenizer.convert_tokens_to_ids(self.IMG_END_TOKEN)
+        # 2. create model
+        torch.set_default_dtype(dtype)
+        with torch.device(device):
+            self.language_model = InternLM2ForCausalLM(config.text_config)
+        torch.set_default_dtype(torch.float)
+        # 3. load vision_tower state dict
+        load_safetensor(model_with_prefix_list=[(self.language_model, 'language_model.')], param_with_name_list=[], model_weights_path=model_path)
+
+        # to ensure that all tensor data type are correct such as non persistent rope inv freq, becuase it is created with float dtype specifically and will not be affected by set_default_dtype
+        self.language_model.to(dtype)
+        self.language_model.eval()
+    
+    def forward(self, input_ids: Tensor, image_features: Optional[Tensor], position_ids: Tensor, model_params: LanguageModelParameters) -> LanguageModelOutput:
+        # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
+        # image_features (n_text_tokens, hidden_size)
+        # position_ids (n_text_tokens + n_image_tokens)
+        input_embeds = self.language_model.model.embed_tokens(input_ids)
+        if image_features is not None:
+            image_overwrite_mask = input_ids == self.image_token_id
+            input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
+        sample_token_ids = self.language_model(input_embeds, position_ids, model_params) # (n_selected_tokens, )
+
+        return LanguageModelOutput(
+            sample_token_ids = sample_token_ids,
+        )
+
+
+class InternVLTokenizer(Tokenizer):
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self.tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
+        self.bos_token = self.tokenizer.bos_token
+        self.eos_token = self.tokenizer.eos_token
+        self.eos_token_id = self.tokenizer.eos_token_id
+        current_script_path = os.path.abspath(__file__)
+        script_dir = os.path.dirname(current_script_path)
+        template_path = os.path.join(script_dir, "chat_template", "template_llava.jinja")
+        with open(template_path, 'r', encoding='utf-8') as file:
+            self.chat_template = Template(file.read())
+
+    def encode(self, prompt: str) -> list[int]:
+        token_ids = self.tokenizer.encode(prompt, add_special_tokens=False)
+        return token_ids
+
+    def decode(self, token_id: int) -> str:
+        # note that this is not an ASCII U+005F _, it is U+2581
+        if self.tokenizer.convert_ids_to_tokens([token_id])[0].startswith('▁'):
+            text = " " + self.tokenizer.decode([token_id])
+        else:
+            text = self.tokenizer.decode([token_id])
+        return text
+
+    def apply_chat_template(self, messages: list[dict[str, str]]) -> str:
+        prompt = self.chat_template.render(
+            messages = messages, 
+            bos_token = self.bos_token, 
+            eos_token = self.eos_token,
+            add_generation_prompt = True, 
+        )
+        return prompt
+
+
+class InternVLTokenCaculator(ImageTokenCaculator):
+    def __init__(self, n_tokens_per_image: int):
+        self.n_tokens_per_image = n_tokens_per_image
+    def get_num_image_tokens(self, image_size: tuple[int, int]) -> int:
+        return self.n_tokens_per_image
+        
+
+class InternVLModelFactory(ModelFactory):
+    def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
+        self.path = config.path
+        self.dtype = str2dtype(config.dtype)
+        self.device = str2device(config.device)
+
+    def getVisionModel(self) -> VisionModel:
+        return InternVLVisionModel(self.path, self.dtype, self.device)
+
+    def getLanguageModel(self) -> LanguageModel:
+        return InternVLLanguageModel(self.path, self.dtype, self.device)
+
+    def getVisionModelConfig(self) -> VisionModelConfig:
+        config_ref = load_config_from_json(InternVLChatModelConfig, self.path)
+        n_tokens_per_image = int((config.vision_config.image_size // config.vision_config.patch_size) ** 2 * (config.downsample_ratio ** 2))
+        IMG_START_TOKEN = '<img>'
+        IMG_END_TOKEN = '</img>',
+        IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
+        image_token_id = self.tokenizer.convert_tokens_to_ids(self.IMG_END_TOKEN)
+        return VisionModelConfig(
+            image_token = IMG_START_TOKEN + IMG_CONTEXT_TOKEN + IMG_END_TOKEN, 
+            image_token_id = image_token_id, 
+            image_token_caculator = InternVLTokenCaculator(n_tokens_per_image=n_tokens_per_image),
+        )
+
+    def getLanguageModelConfig(self) -> LanguageModelConfig:
+        config_ref = load_config_from_json(InternVLChatModelConfig, self.path)
+        return LanguageModelConfig(
+            n_layers = config_ref.llm_config.num_hidden_layers, 
+            max_position_embeddings = config_ref.llm_config.max_position_embeddings, 
+            n_qo_heads = config_ref.llm_config.num_attention_heads, 
+            n_kv_heads = config_ref.llm_config.num_key_value_heads, 
+            head_dim = config_ref.llm_config.hidden_size // config_ref.llm_config.num_attention_heads, 
+            eos_token_id = config_ref.llm_config.eos_token_id, 
+        )
+
+    def getProcessor(self) -> AutoProcessor:
+        return AutoProcessor.from_pretrained(self.path, trust_remote_code=True)
+
+    def getTokenizer(self) -> Tokenizer:
+        return InternVLTokenizer(self.path)
+
+    def getModelProfiler(self) -> ModelProfiler:
+        return VisionLanguageModelProfiler(self.path, vision_model_prefixes=['vision_model.', 'mlp1.'], language_model_prefixes=['language_model.'])
+
+
 if __name__ == '__main__':
-    from hydrainfer.model.model_loader import load_config_from_json, load_safetensor
     model_weights_path = "/models/OpenGVLab/InternVL2-26B"
     config = load_config_from_json(config_class=InternVLChatModelConfig, model_weights_path=model_weights_path)
-    print(config)
-    torch.set_default_device(torch.device('cuda:0'))
-    torch.set_default_dtype(torch.half)
-    model = InternVLChatModel(config)
-    load_safetensor_strict_equal(model, model_weights_path=model_weights_path)
-    # load_safetensor(model_with_prefix_list=[(model, '')], param_with_name_list=[], model_weights_path=model_weights_path)
+    # print(config)
+
+    # torch.set_default_device(torch.device('cuda:0'))
+    # torch.set_default_dtype(torch.half)
+    # model = InternVLChatModel(config)
+    # load_safetensor_strict_equal(model, model_weights_path=model_weights_path)
+    # # load_safetensor(model_with_prefix_list=[(model, '')], param_with_name_list=[], model_weights_path=model_weights_path)
+    from hydrainfer.model.model_factory import getModelFactory
+    factory = getModelFactory(ModelFactoryConfig(path=model_weights_path), ModelFactoryContext())
+    tokenizer = factory.getTokenizer()
+    token_ids = tokenizer.encode('<img><IMG_CONTEXT></img> hello world')
+    text = ""
+    for token_id in token_ids:
+        text += tokenizer.decode(token_id)
+    print(f'token_ids {token_ids}')
+    print(f'text {text}')
+
+    # IMG_START_TOKEN='<img>'
+    # IMG_END_TOKEN='</img>',
+    # IMG_CONTEXT_TOKEN='<IMG_CONTEXT>'
+    # print(f'tokenizer.encode(IMG_START_TOKEN) {tokenizer.encode(IMG_START_TOKEN)}')
+    # print(f'tokenizer.encode(IMG_END_TOKEN) {tokenizer.encode(IMG_END_TOKEN)}')
+    # print(f'tokenizer.encode(IMG_CONTEXT_TOKEN) {tokenizer.encode(IMG_CONTEXT_TOKEN)}')
+
+    # messages = [
+    #     {"role": "user", "content": "Hello!"},
+    #     {"role": "assistant", "content": "Hi there!"},
+    #     {"role": "user", "content": "How are you?"},
+    # ]
+    # print(tokenizer.apply_chat_template(messages))
+
+    language_config = factory.getLanguageModelConfig()
+    vision_model = factory.getVisionModel()
