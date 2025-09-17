@@ -140,6 +140,9 @@ def getModelFactory(config: ModelFactoryConfig, context: ModelFactoryContext) ->
     architecture = json_config.get("architectures", [None])[0]
     model_type = json_config.get("model_type", None)
 
+    if architecture == 'InternVLChatModel':
+        from hydrainfer.model.internvl import InternVLModelFactory
+        return InternVLModelFactory(config, context)
     if architecture == 'LlavaForConditionalGeneration':
         from hydrainfer.model.llava import LlavaModelFactory
         return LlavaModelFactory(config, context)
