@@ -89,11 +89,7 @@ class InstructionCreator(RequestProcessorComponent):
             # llavanext (n_images, n_patches, n_channels, height, width)
             # for llava(next), height=width=336
             # qwen2-vl (n_patches, 1176) n_patches = round(height // 28) * round(width // 28) * 4
-            images_tensor = self.processor(
-                text="", 
-                images = image, 
-                return_tensors="pt"
-            )['pixel_values']
+            images_tensor = self.processor.process(image)
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt)
         n_token_ids_images = token_ids.count(self.image_token_id)

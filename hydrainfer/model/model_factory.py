@@ -1,6 +1,7 @@
 import os
 import json
 import torch
+from PIL import Image
 from torch import Tensor
 from typing import Optional
 from transformers import AutoProcessor
@@ -68,6 +69,11 @@ class Tokenizer:
         raise NotImplementedError
 
 
+class ImageProcessor:
+    def process(self, image: Image.Image) -> Tensor:
+        raise NotImplementedError
+
+
 @dataclass
 class ModelParamsConfig: 
     vision_model_params: int
@@ -92,7 +98,7 @@ class ModelFactory:
     def getLanguageModelConfig(self) -> LanguageModelConfig: 
         raise NotImplementedError
 
-    def getProcessor(self) -> AutoProcessor:
+    def getProcessor(self) -> ImageProcessor:
         raise NotImplementedError
 
     def getTokenizer(self) -> Tokenizer:

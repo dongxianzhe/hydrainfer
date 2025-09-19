@@ -63,11 +63,7 @@ class BatchSchedulerProfiler:
         height, width, n_channel = 336, 336, 3
         random_array = np.random.randint(0, 256, (height, width, n_channel), dtype=np.uint8)
         image = Image.fromarray(random_array)
-        images_tensor = self.processor(
-            text="", 
-            images = image, 
-            return_tensors="pt"
-        )['pixel_values']
+        images_tensor = self.processor.process(image)
         n_image_tokens = self.vision_config.image_token_caculator.get_num_image_tokens((height, width)) 
         images_tensor = images_tensor.to(self.dtype).to(self.device)
         encode_inst = ImageEmbed(

@@ -8,13 +8,14 @@ from typing import Optional
 from hydrainfer.model.llama import LlamaForCausalLM
 from hydrainfer.model.clip import CLIPVisionModel
 from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelParameters, LanguageModelOutput
-from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer, ModelProfiler, ModelParamsConfig
+from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer, ModelProfiler, ModelParamsConfig, ImageProcessor
 from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.utils.logger import getLogger
 from hydrainfer.model.model_loader import load_safetensor
 from hydrainfer.model.model_forward import UpDownMLP
+from hydrainfer.model.processor import TransformersAutoProcessorAdapter
 logger = getLogger(__name__)
 
 class LlavaTokenCaculator(ImageTokenCaculator):
@@ -210,8 +211,8 @@ class LlavaModelFactory(ModelFactory):
         )
         return config
 
-    def getProcessor(self) -> AutoProcessor:
-        return AutoProcessor.from_pretrained(self.path)
+    def getProcessor(self) -> ImageProcessor:
+        return TransformersAutoProcessorAdapter(self.path)
 
     def getTokenizer(self) -> Tokenizer:
         return LlavaTokenizer(self.path)
