@@ -1,3 +1,7 @@
+import httpx
+import time
+import traceback
+import json
 import time
 import argparse
 import traceback
@@ -6,8 +10,7 @@ from openai import AsyncOpenAI
 from metric import OnlineRequestOutput
 from synthetic_dataset import SyntheticDataEntry
 
-
-async def openai_compitable_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, client: AsyncOpenAI) -> OnlineRequestOutput:
+async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
     send_pbar.update(1)
     output = OnlineRequestOutput(entry=entry)
     output.start_time = time.perf_counter()
@@ -25,35 +28,47 @@ async def openai_compitable_server_proxy(model_path: str, entry: SyntheticDataEn
             },
         })
     try:
-        response = await client.chat.completions.create(
-            messages = [{
-                "role":"user",
-                "content": content,
-            }], 
-            max_tokens=entry.max_tokens, 
-            model=model_path,
-            temperature=0., 
-            stream=True, 
-        )
+        payload = {
+            "model": model_path,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": content, 
+                }
+            ],
+            "max_tokens": entry.max_tokens,
+            "temperature": 0.0,
+            "stream": True,
+        }
+
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("POST", f"{base_url}/chat/completions", json=payload) as response:
+                async for line in response.aiter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    if line.strip() == "data: [DONE]":
+                        break
+                    data = json.loads(line[len("data: "):])
+                    delta = data["choices"][0]["delta"].get("content")
+                    if isinstance(delta, str):
+                        output.output_text += delta
+                    output.token_times.append(time.perf_counter())
+
         output.success = True
-        async for chunk in response:
-            context = chunk.choices[0].delta.content
-            if isinstance(context, str):
-                output.output_text += context
-            output.token_times.append(time.perf_counter())
         output.prompt = entry.prompt
-    except Exception as e:
-        output.success=False
+    except Exception:
+        output.success = False
         output.error_msg = traceback.format_exc()
+
     recv_pbar.update(1)
     return output
 
 
 def get_server_proxy(backend: str):
     if backend == 'ours':
-        return openai_compitable_server_proxy
+        return openai_compatible_server_proxy
     if backend in ['vllm', 'tgi']:
-        return openai_compitable_server_proxy
+        return openai_compatible_server_proxy
     if backend == 'sglang':
-        return openai_compitable_server_proxy
-    return openai_compitable_server_proxy
+        return openai_compatible_server_proxy
+    return openai_compatible_server_proxy
