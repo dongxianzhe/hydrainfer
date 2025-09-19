@@ -8,13 +8,13 @@ import numpy as np
 
 
 @pytest.mark.parametrize('path', [
-    # "/models/llava-1.5-7b-hf", 
-    # "/models/llava-v1.6-vicuna-7b-hf", 
-    # "/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024", 
-    # "/models/deepseek-vl2-tiny", 
+    "/models/llava-1.5-7b-hf", 
+    "/models/llava-v1.6-vicuna-7b-hf", 
+    "/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024", 
+    "/models/deepseek-vl2-tiny", 
     "/models/OpenGVLab/InternVL2-26B", 
 ])
-def test_image_processor(path: str):
+def test_vision_model(path: str):
     str_device = 'cuda:0'
     str_dtype = 'fp16'
     device = str2device(str_device)
