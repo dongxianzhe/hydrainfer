@@ -5,12 +5,13 @@ from jinja2 import Template
 import torch
 import torch.nn.functional as F
 import timm
+from PIL import Image
 from einops import rearrange, repeat
 from torch import nn, Tensor
 from typing import Optional
 from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.model.parameters import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
-from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer
+from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer, ImageProcessor
 from hydrainfer.model.deepseek_v3 import DeepseekForCausalLM
 from hydrainfer.utils.torch_utils import str2dtype, str2device
 from hydrainfer.transformers_utils.deepseek_vl2_config import MlpProjectorConfig, DeepseekVLV2Config
@@ -281,6 +282,19 @@ class DeepSeekVL2Tokenizer(Tokenizer):
         )
         return prompt
 
+class DeepSeekVL2ImageProccsor(ImageProcessor):
+    def __init__(self, path: str) -> None:
+        super().__init__()
+        self.processor = DeepseekVLV2Processor.from_pretrained(path)
+
+    def process(self, image: Image.Image) -> Tensor:
+        images_tensor: Tensor = self.processor(
+            text="", 
+            images = image, 
+            return_tensors="pt"
+        )['pixel_values']
+        return images_tensor
+
 class DeepSeekVL2ModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
         self.path = config.path
@@ -326,8 +340,10 @@ class DeepSeekVL2ModelFactory(ModelFactory):
         )
         return config
 
-    def getProcessor(self) -> AutoProcessor:
-        return DeepseekVLV2Processor.from_pretrained(self.path)
+    def getProcessor(self) -> ImageProcessor:
+        from hydrainfer.model.processor import TransformersAutoProcessorAdapter
+        return TransformersAutoProcessorAdapter(self.path)
+        # return DeepSeekVL2ImageProccsor(self.path)
 
     def getTokenizer(self) -> Tokenizer:
         return DeepSeekVL2Tokenizer(self.path)

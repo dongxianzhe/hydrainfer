@@ -13,7 +13,7 @@ from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_i
 from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.model.downloader import download_hf_model
 from hydrainfer.model.parameters import AttentionParameters, LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
-from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer, ModelProfiler
+from hydrainfer.model.model_factory import VisionModel, VisionModelConfig, LanguageModel, LanguageModelConfig, ModelFactory, ModelFactoryConfig, ModelFactoryContext, ImageTokenCaculator, Tokenizer, ModelProfiler, ImageProcessor
 from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.layer.activation import silu
@@ -24,6 +24,7 @@ from hydrainfer.utils.logger import getLogger
 from hydrainfer.model.model_loader import load_safetensor
 from hydrainfer.layer.activation import Silu
 from hydrainfer.model.model_forward import GateUpDownMLP, UpDownMLP, ROPECausalGroupedQueryPageAttention, DecoderLayer
+from hydrainfer.model.processor import TransformersAutoProcessorAdapter
 logger = getLogger(__name__)
 
 smart_resize = partial(smart_resize, max_pixels=3584 * 3584)
@@ -437,8 +438,8 @@ class Qwen2VLModelFactory(ModelFactory):
         )
         return config
 
-    def getProcessor(self) -> AutoProcessor:
-        return AutoProcessor.from_pretrained(self.path)
+    def getProcessor(self) -> ImageProcessor:
+        return TransformersAutoProcessorAdapter(self.path)
 
     def getTokenizer(self) -> Tokenizer:
         return Qwen2VLTokenizer(self.path)

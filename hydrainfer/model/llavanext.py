@@ -7,12 +7,13 @@ from torch import nn, Tensor
 from transformers import LlavaConfig, LlavaNextConfig, AutoProcessor, AutoConfig, AutoTokenizer
 from transformers.models.llava_next.modeling_llava_next import get_anyres_image_grid_shape, unpad_image
 from hydrainfer.model.downloader import download_hf_model
-from hydrainfer.model import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModelConfig, LanguageModelConfig, LanguageModel, VisionModel, ImageTokenCaculator, Tokenizer, ModelProfiler
+from hydrainfer.model import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModelConfig, LanguageModelConfig, LanguageModel, VisionModel, ImageTokenCaculator, Tokenizer, ModelProfiler, ImageProcessor
 from hydrainfer.model.parameters import LanguageModelParameters, LanguageModelOutput, VisionModelParameters, VisionModelOutput
 from hydrainfer.model.model_profiler import VisionLanguageModelProfiler
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.model.llava import LlavaVisionModel, LlavaLanguageModel, LlavaTokenizer
 from hydrainfer.model.model_loader import load_safetensor
+from hydrainfer.model.processor import TransformersAutoProcessorAdapter
 
 
 class LlavaNextImageTokenCaculator(ImageTokenCaculator):
@@ -156,8 +157,8 @@ class LlavaNextModelFactory(ModelFactory):
         )
         return config
 
-    def getProcessor(self) -> AutoProcessor:
-        return AutoProcessor.from_pretrained(self.path)
+    def getProcessor(self) -> ImageProcessor:
+        return TransformersAutoProcessorAdapter(self.path)
 
     def getTokenizer(self) -> Tokenizer:
         return LlavaTokenizer(self.path)
