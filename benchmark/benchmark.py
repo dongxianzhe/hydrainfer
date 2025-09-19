@@ -11,12 +11,14 @@ from openai import AsyncOpenAI
 from typing import AsyncGenerator
 from dataclasses import dataclass, field, asdict
 from transformers import AutoTokenizer
-from metric import OnlineRequestOutput, BenchmarkResult, BenchmarkMetrics, BenchmarkMetricsBuilder, MethodResults
+from metric import OnlineRequestOutput, BenchmarkResult, MethodResults
 from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
 from backend import get_server_proxy
 
+def analyze_result(args: argparse.Namespace, method_results: MethodResults):
+    pass
 
-def log_result(args: argparse.Namespace, dataset: SyntheticDataset, method_results: MethodResults):
+def log_result(args: argparse.Namespace, method_results: MethodResults):
     # we do not log images to speed up log time
     for result in method_results.results:
         for i, output in enumerate(result.outputs):
@@ -46,13 +48,13 @@ def async_wrapper(func):
     return wrapper
 
 
-async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
+async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, request_rate: float) -> BenchmarkResult:
     request_rate_scaled = request_rate * args.request_rate_num_requests_scale
     num_requests_scaled = int(args.num_requests * request_rate * args.request_rate_num_requests_scale)
     send_pbar = tqdm(total = num_requests_scaled, desc='send')
     recv_pbar = tqdm(total = num_requests_scaled, desc='recv')
     server_proxy = get_server_proxy(args.backend)
-
+    
     start_time = time.perf_counter()
     tasks = []
     async for (i, entry) in poisson_process_request_generator(
@@ -62,7 +64,7 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client:
         if args.only_text:
             entry.images = []
             entry.images_size = []
-        tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, client=client)))
+        tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, base_url=f"http://{args.host}:{args.port}/v1", timeout=args.timeout)))
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
     end_time = time.perf_counter()
     recv_pbar.close()
@@ -78,17 +80,10 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client:
 
 @async_wrapper
 async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> MethodResults:
-    openai_api_key = "EMPTY"
-    openai_api_base = f"http://{args.host}:{args.port}/v1"
-    client = AsyncOpenAI(
-        api_key=openai_api_key,
-        base_url=openai_api_base,
-        timeout=httpx.Timeout(args.timeout), 
-    )
     results: list[BenchmarkResult] = []
     for request_rate in args.request_rate:
         print(f'start test request rate {request_rate} scale {args.request_rate_num_requests_scale}')
-        result = await benchmark(args, dataset, client, request_rate)
+        result = await benchmark(args, dataset, request_rate)
         results.append(result)
     return MethodResults(
         method_name = args.method_name, 
@@ -118,7 +113,8 @@ def main(args: argparse.Namespace):
         vizwiz_vqa   = args.vizwiz_vqa, 
     )                 
     method_results = benchmarks(args, dataset)
-    log_result(args, dataset, method_results)
+    analyze_result(args, dataset)
+    log_result(args, method_results)
 
 
 if __name__ == '__main__':
