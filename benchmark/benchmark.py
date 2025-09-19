@@ -44,20 +44,20 @@ def async_wrapper(func):
     return wrapper
 
 
-async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client: AsyncOpenAI, request_rate: float) -> BenchmarkResult:
+async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, request_rate: float) -> BenchmarkResult:
     request_rate_scaled = request_rate * args.request_rate_num_requests_scale
     num_requests_scaled = int(args.num_requests * request_rate * args.request_rate_num_requests_scale)
     send_pbar = tqdm(total = num_requests_scaled, desc='send')
     recv_pbar = tqdm(total = num_requests_scaled, desc='recv')
     server_proxy = get_server_proxy(args.backend)
-
+    
     start_time = time.perf_counter()
     tasks = []
     async for (i, entry) in poisson_process_request_generator(
         dataset=dataset[:num_requests_scaled], 
         request_rate=request_rate_scaled, 
     ):
-        tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, client=client)))
+        tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, base_url=f"http://{args.host}:{args.port}/v1", timeout=args.timeout)))
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
     end_time = time.perf_counter()
     recv_pbar.close()
@@ -73,17 +73,10 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client:
 
 @async_wrapper
 async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> MethodResults:
-    openai_api_key = "EMPTY"
-    openai_api_base = f"http://{args.host}:{args.port}/v1"
-    client = AsyncOpenAI(
-        api_key=openai_api_key,
-        base_url=openai_api_base,
-        timeout=httpx.Timeout(args.timeout), 
-    )
     results: list[BenchmarkResult] = []
     for request_rate in args.request_rate:
         print(f'start test request rate {request_rate} scale {args.request_rate_num_requests_scale}')
-        result = await benchmark(args, dataset, client, request_rate)
+        result = await benchmark(args, dataset, request_rate)
         results.append(result)
     return MethodResults(
         method_name = args.method_name, 
