@@ -202,7 +202,7 @@ class InternLM2Attention(nn.Module):
         self.attention = ROPECausalGroupedQueryPageAttention(qkv_proj=self.wqkv, o_proj=self.wo, rotary_emb=self.rotary_emb, n_qo_heads=config.num_attention_heads, n_kv_heads=config.num_key_value_heads, head_dim=self.head_dim, )
 
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
-        return self.attention(hidden_states, position_ids, attention_param)
+        return self.attention.forward(hidden_states, position_ids, attention_param)
 
 class InternLM2MLP(nn.Module):
     def __init__(self, config: InternLM2ForCausalLMConfig):
@@ -259,7 +259,7 @@ class InternLM2ForCausalLM(nn.Module):
     def forward(self, input_ids_or_input_embeds: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         # input_ids (n_tokens, ) or input embeds (n_tokens, hidden_size)
         hidden_state = self.model(input_ids_or_input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
-        logits = self.lm_head(hidden_state) # (n_selected_tokens, hidden_size)
+        logits = self.output(hidden_state) # (n_selected_tokens, hidden_size)
         sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False) # (n_selected_tokens, )
         return sample_token_ids
 
@@ -367,7 +367,7 @@ class InternVLLanguageModel(LanguageModel):
         # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
         # image_features (n_text_tokens, hidden_size)
         # position_ids (n_text_tokens + n_image_tokens)
-        input_embeds = self.language_model.model.embed_tokens(input_ids)
+        input_embeds = self.language_model.model.tok_embeddings(input_ids)
         if image_features is not None:
             image_overwrite_mask = input_ids == self.image_token_id
             input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
