@@ -18,6 +18,7 @@ from hydrainfer.model.model_factory import ModelFactory, ModelFactoryConfig, Mod
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.model.model_profiler import ModelProfiler, ModelParamsConfig, VisionLanguageModelProfiler
 from hydrainfer.model.model_loader import load_config_from_json, load_safetensor
+from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 
 def load_safetensor_strict_equal(model: nn.Module, model_weights_path: str):
     state_dict = model.state_dict()
@@ -58,6 +59,8 @@ class InternLM2ForCausalLMConfig:
     max_position_embeddings: int
     rope_theta: float
     eos_token_id: int
+    pad_token_id: int
+    bias: bool
 
 
 @dataclass
@@ -187,9 +190,10 @@ class InternVisionModel(nn.Module):
 class InternLM2Attention(nn.Module):
     def __init__(self, config: InternLM2ForCausalLMConfig):
         super().__init__()
+        self.config = config
         self.head_dim = config.hidden_size // config.num_attention_heads
-        self.wqkv = nn.Linear(in_features=config.hidden_size, out_features=(config.num_attention_heads + 2 * config.num_key_value_heads) * self.head_dim, bias=False)
-        self.wo = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size, bias=False)
+        self.wqkv = nn.Linear(in_features=config.hidden_size, out_features=(config.num_attention_heads + 2 * config.num_key_value_heads) * self.head_dim, bias=config.bias)
+        self.wo = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size, bias=config.bias)
         self.rotary_emb = RotaryEmbedding(
             rotary_dim=self.head_dim,
             max_position_embeddings=config.max_position_embeddings,
@@ -198,11 +202,31 @@ class InternLM2Attention(nn.Module):
                 theta=config.rope_theta
                 ),
             interleaved=False
-            ) # todo rope scaling
-        self.attention = ROPECausalGroupedQueryPageAttention(qkv_proj=self.wqkv, o_proj=self.wo, rotary_emb=self.rotary_emb, n_qo_heads=config.num_attention_heads, n_kv_heads=config.num_key_value_heads, head_dim=self.head_dim, )
+            ) 
+        # self.attention = ROPECausalGroupedQueryPageAttention(qkv_proj=self.wqkv, o_proj=self.wo, rotary_emb=self.rotary_emb, n_qo_heads=config.num_attention_heads, n_kv_heads=config.num_key_value_heads, head_dim=self.head_dim, )
+        self.attention = CausalGroupedQueryPageAttention(CausalGroupedQueryPageAttentionConfig(
+            n_qo_heads = self.config.num_attention_heads,
+            n_kv_heads = self.config.num_key_value_heads,
+            head_dim = self.head_dim, 
+        ))
+        self.n_qo_heads = config.num_attention_heads
+        self.n_kv_heads = config.num_key_value_heads
 
     def forward(self, hidden_states: Tensor, position_ids: Tensor, attention_param: AttentionParameters) -> Tensor:
-        return self.attention(hidden_states, position_ids, attention_param)
+        qkv = self.wqkv(hidden_states) # (n_tokens, (n_qo_heads + 2 * n_kv_heads) * head_dim)
+        group_size: int = self.config.num_attention_heads // self.config.num_key_value_heads
+        qkv = qkv.reshape(hidden_states.shape[0], -1, group_size + 2, self.head_dim) # each_group has one key, one value, group_size query
+        query = qkv[:, :, :group_size, :].contiguous()
+        key = qkv[:, :, -2, :].contiguous()
+        value = qkv[:, :, -1, :].contiguous()
+
+        query = query.view(-1, self.n_qo_heads, self.head_dim) # (n_tokens, n_qo_heads, head_size)
+        key   = key  .view(-1, self.n_kv_heads, self.head_dim) # (n_tokens, n_kv_heads, head_size)
+        value = value.view(-1, self.n_kv_heads, self.head_dim) # (n_tokens, n_kv_heads, head_size)
+        query, key = self.rotary_emb(query, key, position_ids) # query (n_tokens, n_qo_heads, head_size) key (n_tokens, n_kv_heads, head_size) note that rotary_emb is inplace operation
+        hidden_states = self.attention(query, key, value, attention_param).o # (n_tokens, hidden_size)
+        hidden_states = self.wo(hidden_states) # (n_tokens, hidden_size)
+        return hidden_states
 
 class InternLM2MLP(nn.Module):
     def __init__(self, config: InternLM2ForCausalLMConfig):
@@ -234,7 +258,7 @@ class InternLM2DecoderLayer(nn.Module):
 class InternLM2Model(nn.Module):
     def __init__(self, config: InternLM2ForCausalLMConfig):
         super().__init__()
-        self.tok_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=2)
+        self.tok_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=config.pad_token_id)
         self.layers = nn.ModuleList([InternLM2DecoderLayer(config, layer_id) for layer_id in range(config.num_hidden_layers)])
         self.norm = RMSNorm(hidden_size=config.hidden_size, eps=config.rms_norm_eps)
 
@@ -244,9 +268,11 @@ class InternLM2Model(nn.Module):
             hidden_states = self.tok_embeddings(input_ids)
         else:
             hidden_states = input_ids
+            assert not torch.any(torch.isnan(hidden_states))
 
         for i, layer in enumerate(self.layers):
             hidden_states = layer(hidden_states, position_ids, model_params)
+            assert not torch.any(torch.isnan(hidden_states)), f'layer_id {i}'
         return self.norm(hidden_states)
 
 
@@ -259,7 +285,7 @@ class InternLM2ForCausalLM(nn.Module):
     def forward(self, input_ids_or_input_embeds: Tensor, position_ids: Tensor, model_params: LanguageModelParameters) -> Tensor:
         # input_ids (n_tokens, ) or input embeds (n_tokens, hidden_size)
         hidden_state = self.model(input_ids_or_input_embeds, position_ids, model_params) # hidden_state (n_selected_tokens, hidden_size) we discard tokens that do not need to be sampled before entering into the last ffn layer to reduce redundant computation
-        logits = self.lm_head(hidden_state) # (n_selected_tokens, hidden_size)
+        logits = self.output(hidden_state) # (n_selected_tokens, hidden_size)
         sample_token_ids = torch.argmax(logits, dim=-1, keepdim=False) # (n_selected_tokens, )
         return sample_token_ids
 
@@ -367,8 +393,9 @@ class InternVLLanguageModel(LanguageModel):
         # input_ids      (n_text_tokens + n_image_tokens) n_text_tokens is number of text tokens, n_image_tokens is number of image tokens
         # image_features (n_text_tokens, hidden_size)
         # position_ids (n_text_tokens + n_image_tokens)
-        input_embeds = self.language_model.model.embed_tokens(input_ids)
+        input_embeds = self.language_model.model.tok_embeddings(input_ids)
         if image_features is not None:
+            assert not torch.any(torch.isnan(image_features))
             image_overwrite_mask = input_ids == self.image_token_id
             input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
         sample_token_ids = self.language_model(input_embeds, position_ids, model_params) # (n_selected_tokens, )

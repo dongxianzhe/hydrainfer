@@ -68,9 +68,9 @@ class ROPECausalGroupedQueryPageAttention:
         # position_ids (n_tokens, )
         if self.qkv_proj is not None:
             qkv = self.qkv_proj(hidden_states)
-            query = qkv[:, :, :self.n_qo_heads * self.head_dim]
-            key = qkv[:, :, self.n_qo_heads * self.head_dim:self.n_qo_heads * self.head_dim + self.n_kv_heads * self.head_dim]
-            value = qkv[:, :, self.n_qo_heads * self.head_dim + self.n_kv_heads * self.head_dim:]
+            query = qkv[:, :self.n_qo_heads * self.head_dim]
+            key = qkv[:, self.n_qo_heads * self.head_dim:self.n_qo_heads * self.head_dim + self.n_kv_heads * self.head_dim]
+            value = qkv[:, self.n_qo_heads * self.head_dim + self.n_kv_heads * self.head_dim:]
         else:
             query = self.q_proj(hidden_states) # (n_tokesn, hidden_size)
             key   = self.k_proj(hidden_states) # (n_tokesn, hidden_size)
