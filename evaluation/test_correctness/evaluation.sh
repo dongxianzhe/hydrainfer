@@ -9,11 +9,11 @@ port="8891"
 
 export CUDA_VISIBLE_DEVICES=1
 declare -A MODELS=(
-    # ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
-    # ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
-    # ["Qwen/Qwen2-VL-7B"]="/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
-    # ["deepseek-ai/deepseek-vl2-tiny"]="/models/deepseek-vl2-tiny"
-    ["OpenGVLab/InternVL2-26B"]="models/OpenGVLab/InternVL2-26B"
+    ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
+    ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
+    ["Qwen/Qwen2-VL-7B"]="/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
+    ["deepseek-ai/deepseek-vl2-tiny"]="/models/deepseek-vl2-tiny"
+    ["OpenGVLab/InternVL2-26B"]="/models/OpenGVLab/InternVL2-26B"
 )
 
 start_server(){
