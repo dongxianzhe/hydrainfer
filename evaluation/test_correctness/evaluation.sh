@@ -13,6 +13,7 @@ declare -A MODELS=(
     # ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
     # ["Qwen/Qwen2-VL-7B"]="/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
     # ["deepseek-ai/deepseek-vl2-tiny"]="/models/deepseek-vl2-tiny"
+    ["OpenGVLab/InternVL2-26B"]="/models/OpenGVLab/InternVL2-26B"
 )
 gpu_configs=(
     1
