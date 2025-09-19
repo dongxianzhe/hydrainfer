@@ -6,13 +6,15 @@ import safetensors.torch
 from jinja2 import Template
 from typing import Optional
 from transformers import AutoTokenizer, AutoProcessor
+from PIL import Image
+from hydrainfer.model import ImageProcessor
 from hydrainfer.layer.norm import RMSNorm
 from hydrainfer.model.model_forward import UpDownMLP, GateUpDownMLP, ROPECausalGroupedQueryPageAttention, DecoderLayer
 from hydrainfer.model.parameters import VisionModelParameters, VisionModelOutput, LanguageModelOutput, LanguageModelParameters
 from hydrainfer.layer.rotary_embedding import RotaryEmbedding, compute_default_inv_freq
 from hydrainfer.layer.causal_attention import AttentionParameters
 from hydrainfer.layer.multihead_attention import MultiHeadAttention, MultiHeadAttentionConfig, MultiHeadAttentionOutput, MultiHeadAttentionParameters
-from hydrainfer.model.model_factory import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModel, LanguageModel, VisionModelConfig, LanguageModelConfig, Tokenizer, ImageTokenCaculator
+from hydrainfer.model.model_factory import ModelFactory, ModelFactoryConfig, ModelFactoryContext, VisionModel, LanguageModel, VisionModelConfig, LanguageModelConfig, Tokenizer, ImageTokenCaculator, ImageProcessor
 from hydrainfer.utils.torch_utils import str2device, str2dtype
 from hydrainfer.model.model_profiler import ModelProfiler, ModelParamsConfig, VisionLanguageModelProfiler
 from hydrainfer.model.model_loader import load_config_from_json, load_safetensor
@@ -65,11 +67,13 @@ class InternVLChatModelConfig:
     select_layer: int
     ps_version: str
     downsample_ratio: float
+    max_dynamic_patch: int
 
 
 class InternVisionEmbeddings(nn.Module):
     def __init__(self, config: InternVisionModelConfig):
         super().__init__()
+        self.config = config
         self.patch_embedding = nn.Conv2d(in_channels=config.num_channels, out_channels=config.hidden_size, kernel_size=config.patch_size, stride=config.patch_size)
         self.class_embedding = nn.Parameter(torch.randn(1, 1, config.hidden_size))
 
@@ -80,7 +84,7 @@ class InternVisionEmbeddings(nn.Module):
     def _get_pos_embed(self, pos_embed: Tensor, H: int, W: int) -> Tensor:
         target_dtype = pos_embed.dtype
         pos_embed = pos_embed.float().reshape(
-            1, self.image_size // self.patch_size, self.image_size // self.patch_size, -1).permute(0, 3, 1, 2)
+            1, self.config.image_size // self.config.patch_size, self.config.image_size // self.config.patch_size, -1).permute(0, 3, 1, 2)
         pos_embed = nn.functional.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False). \
             reshape(1, -1, H * W).permute(0, 2, 1).to(target_dtype)
         return pos_embed
@@ -115,12 +119,12 @@ class InternAttention(nn.Module):
     def forward(self, hidden_states: Tensor) -> Tensor:
         # hidden_states (batch_size, num_tokens_per_image, hidden_size)
         qkv = self.qkv(hidden_states)
-        query = qkv[:self.config.hidden_size]
-        key   = qkv[self.config.hidden_size:2*self.config.hidden_size]
-        value = qkv[2*self.config.hidden_size:]
+        query = qkv[..., :self.config.hidden_size]
+        key   = qkv[..., self.config.hidden_size:2*self.config.hidden_size]
+        value = qkv[..., 2*self.config.hidden_size:]
         attention_output = self.attention(query, key, value, MultiHeadAttentionParameters(return_scores=False))
         o = attention_output.o # (batch_size, num_tokens_per_image, hidden_size)
-        o = self.out_proj(o) # (batch_size, num_tokens_per_image, hidden_size)
+        o = self.proj(o) # (batch_size, num_tokens_per_image, hidden_size)
         return o
 
 class InternMLP(nn.Module):
@@ -131,7 +135,7 @@ class InternMLP(nn.Module):
         self.fc1 = nn.Linear(in_features=config.hidden_size, out_features=config.intermediate_size, bias=True)
         self.fc2 = nn.Linear(in_features=config.intermediate_size, out_features=config.hidden_size, bias=True)
 
-        self.mlp = UpDownMLP(up_proj=self.fc1, down_proj=self.fc2, activation=self.fc1)
+        self.mlp = UpDownMLP(up_proj=self.fc1, down_proj=self.fc2, activation=self.act)
 
     def forward(self, h: Tensor) -> Tensor:
         return self.mlp.forward(h)
@@ -150,7 +154,7 @@ class InternVisionEncoderLayer(nn.Module):
         self.drop_path1 = nn.Identity()
         self.drop_path2 = nn.Identity()
 
-    def forward(self, hidden_states: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> Tensor:
+    def forward(self, hidden_states: Tensor) -> Tensor:
         hidden_states = hidden_states + self.drop_path1(self.attn(self.norm1(hidden_states)) * self.ls1)
         hidden_states = hidden_states + self.drop_path2(self.mlp(self.norm2(hidden_states)) * self.ls2)
         return hidden_states
@@ -176,7 +180,7 @@ class InternVisionModel(nn.Module):
 
     def forward(self, pixel_values: Tensor, vision_feature_layer: int, model_params: VisionModelParameters) -> VisionModelOutput:
         h = self.embeddings(pixel_values)
-        h = self.encoder(h)
+        h = self.encoder(h, vision_feature_layer, model_params)
         return VisionModelOutput(image_features=h)
 
 
@@ -320,7 +324,11 @@ class InternVLVisionModel(VisionModel):
 
     
     def forward(self, pixel_values: list[Tensor], model_params: VisionModelParameters) -> VisionModelOutput:
-        pixel_values = torch.cat(pixel_values, dim=0)
+        pixel_values = torch.cat(pixel_values, dim=0) # (n_patches, 3, 448, 448)
+        # n_patches_list: list[int] = []
+        # for pixel_values_per_request in pixel_values:
+        #     n_patches_list.append(pixel_values_per_request.shape[0])
+
         assert pixel_values.dim() == 4, f'pixel value shape should be 4 dim but got {pixel_values.shape}'
         # pixel_values (n_images, n_channels, height, width)
         output = self.vision_tower(pixel_values, self.vision_feature_layer, model_params) # (n_images, num_tokens_per_images, hidden_size of vision model)
@@ -330,10 +338,8 @@ class InternVLVisionModel(VisionModel):
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], self.h, self.w, -1)
         vit_embeds = self.pixel_shuffle(vit_embeds, scale_factor=self.config.downsample_ratio)
         vit_embeds = vit_embeds.reshape(vit_embeds.shape[0], -1, vit_embeds.shape[-1])
-        vit_embeds = self.mlp1(vit_embeds)
-
         image_features = self.multi_modal_projector(vit_embeds) # (n_images, (num_tokens_per_images - 1) * downsample_ratio * downsample_ratio, hidden_size of language model)
-        output.image_features = image_features
+        output.image_features = image_features.view(-1, image_features.shape[-1])
         return output
 
 
@@ -407,13 +413,6 @@ class InternVLTokenizer(Tokenizer):
         return prompt
 
 
-class InternVLTokenCaculator(ImageTokenCaculator):
-    def __init__(self, n_tokens_per_image: int):
-        self.n_tokens_per_image = n_tokens_per_image
-    def get_num_image_tokens(self, image_size: tuple[int, int]) -> int:
-        return self.n_tokens_per_image
-        
-
 class InternVLModelFactory(ModelFactory):
     def __init__(self, config: ModelFactoryConfig, context: ModelFactoryContext):
         self.path = config.path
@@ -428,7 +427,6 @@ class InternVLModelFactory(ModelFactory):
 
     def getVisionModelConfig(self) -> VisionModelConfig:
         config_ref = load_config_from_json(InternVLChatModelConfig, self.path)
-        n_tokens_per_image = int((config_ref.vision_config.image_size // config_ref.vision_config.patch_size) ** 2 * (config_ref.downsample_ratio ** 2))
         IMG_START_TOKEN = '<img>'
         IMG_CONTEXT_TOKEN = '<IMG_CONTEXT>'
         IMG_END_TOKEN = '</img>'
@@ -437,7 +435,7 @@ class InternVLModelFactory(ModelFactory):
         return VisionModelConfig(
             image_token = IMG_START_TOKEN + IMG_CONTEXT_TOKEN + IMG_END_TOKEN, 
             image_token_id = image_token_id, 
-            image_token_caculator = InternVLTokenCaculator(n_tokens_per_image=n_tokens_per_image),
+            image_token_caculator = InternVLTokenCaculator(self.path),
         )
 
     def getLanguageModelConfig(self) -> LanguageModelConfig:
@@ -451,8 +449,8 @@ class InternVLModelFactory(ModelFactory):
             eos_token_id = config_ref.llm_config.eos_token_id, 
         )
 
-    def getProcessor(self) -> AutoProcessor:
-        return AutoProcessor.from_pretrained(self.path, trust_remote_code=True)
+    def getProcessor(self) -> ImageProcessor:
+        return InternVLImageProcessor(self.path)
 
     def getTokenizer(self) -> Tokenizer:
         return InternVLTokenizer(self.path)
@@ -541,32 +539,40 @@ def load_image(image_file, input_size=448, max_num=12):
     return pixel_values
 
 
+class InternVLTokenCaculator(ImageTokenCaculator):
+    def __init__(self, path: str):
+        self.config = load_config_from_json(InternVLChatModelConfig, path)
+        min_num = 1
+        max_num = self.config.max_dynamic_patch
+        # calculate the existing image aspect ratio
+        self.target_ratios = set(
+            (i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1) if
+            i * j <= max_num and i * j >= min_num)
+        self.target_ratios = sorted(self.target_ratios, key=lambda x: x[0] * x[1])
 
-if __name__ == '__main__':
-    from hydrainfer.model.model_factory import getModelFactory
-    model_weights_path = "/models/OpenGVLab/InternVL2-26B"
-    factory = getModelFactory(ModelFactoryConfig(path=model_weights_path), ModelFactoryContext())
-    language_config = factory.getLanguageModelConfig()
-    print(f'language_config {language_config}')
-    vision_config = factory.getVisionModelConfig()
-    print(f'vision_config {vision_config}')
-    # vision_model = factory.getVisionModel()
-    # language_model = factory.getLanguageModel()
-    processor = factory.getProcessor()
+        self.n_tokens_per_patch = int((self.config.vision_config.image_size // self.config.vision_config.patch_size) ** 2 * (self.config.downsample_ratio ** 2))
+        self.use_thumbnail = True
 
-    from PIL import Image
-    image = Image.open('./panda.jpg')
-    transform = build_transform(input_size=448)
-    images = dynamic_preprocess(image, image_size=448, use_thumbnail=True)
-    pixel_values = [transform(image) for image in images]
 
-    img = load_image('./panda.jpg')
-    breakpoint()
+    def get_num_image_tokens(self, image_size: tuple[int, int]) -> int:
+        # find the closest aspect ratio to the target
+        orig_height, orig_width = image_size
+        aspect_ratio = orig_width / orig_height
+        self.use_thumbnail
+        target_aspect_ratio = find_closest_aspect_ratio(aspect_ratio, self.target_ratios, orig_width, orig_height, self.config.vision_config.image_size)
 
-    # pixel_values = [transform(image) for image in images]
-    # images_tensor = processor(
-    #         text="", 
-    #         images = image, 
-    #         return_tensors="pt"
-    #     )
-    # print(images_tensor)
+        blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+        return (blocks + self.use_thumbnail) * self.n_tokens_per_patch
+
+        
+class InternVLImageProcessor(ImageProcessor):
+    def __init__(self, path: str) -> None:
+        self.config = load_config_from_json(InternVLChatModelConfig, path)
+        super().__init__() 
+
+    def process(self, image: Image.Image) -> Tensor:
+        transform = build_transform(input_size=self.config.vision_config.image_size)
+        images = dynamic_preprocess(image, image_size=self.config.vision_config.image_size, use_thumbnail=True, max_num=self.config.max_dynamic_patch)
+        pixel_values = [transform(image) for image in images]
+        pixel_values = torch.stack(pixel_values)
+        return pixel_values
