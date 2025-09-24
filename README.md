@@ -5,7 +5,7 @@ a MLLM (Multimodal Large Language Models) inference engine for academic research
 
 You can install it from source code.
 ```
-conda create -n hydrainfer python=3.10
+conda create -n hydrainfer python=3.12.11
 conda activate hydrainfer
 pip install -r requirements.txt
 git submodule init
