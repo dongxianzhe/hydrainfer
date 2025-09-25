@@ -1,4 +1,5 @@
 import socket
+import psutil
 from dataclasses import dataclass
 from typing import Optional
 from hydrainfer.utils.logger import getLogger
@@ -57,3 +58,24 @@ def parse_address(config: NetworkAddressConfig) -> str:
     config = parse_network_config(config)
     url = f"tcp://{config.host}:{config.port}"
     return url
+
+
+@dataclass
+class snicaddr:
+    """
+        eg. snicaddr(family=<AddressFamily.AF_INET: 2>, address='127.0.0.1', netmask='255.0.0.0', broadcast=None, ptp=None)
+    """
+    family: int
+    address: str
+    netmask: str
+    broadcast: str
+    
+
+def find_interface_by_ip(target_ip: str) -> Optional[str]:
+    addrs: dict[str, list[snicaddr]] = psutil.net_if_addrs()
+    
+    for interface, address_list in addrs.items():
+        for address in address_list:
+            if address.family == socket.AF_INET and address.address == target_ip:
+                return interface
+    return None
