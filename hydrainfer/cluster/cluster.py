@@ -61,7 +61,10 @@ class Cluster:
                 }
             )
         if config.cluster_type == 'auto':
-            num_gpus = torch.cuda.device_count()
+            ray.init(ignore_reinit_error=True)
+            resources = ray.cluster_resources()
+            num_gpus = int(resources['GPU'])
+            logger.info(f'ray cluster has resources {resources}')
             assert num_gpus >= 1, "no gpu is available"
             # todo check available memory and profiler
             if num_gpus == 1:
