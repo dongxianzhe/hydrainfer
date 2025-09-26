@@ -104,7 +104,7 @@ class Cluster:
 
         # 3. create node and build migrate graph
         rank_allocator = IncreaingAllocator()
-        self.nodes: AsyncEPDNode = []
+        self.nodes: list[AsyncEPDNode] = []
         self.node_configs: list[NodeConfig] = []
         self.node_contexts: list[NodeContext] = []
         for data_parallel_config in instance_data_parallel_config_list:
@@ -126,7 +126,10 @@ class Cluster:
                 )(AsyncEPDNode).remote(data_parallel_config.node_config, context)
                 self.nodes.append(node)
                 self.node_configs.append(data_parallel_config.node_config)
-        self._run_nodes_remote_method(nodes=self.nodes, method_name="init", wait=True)
+
+        nccl_config = ray.get(self.nodes[0].get_nccl_config.remote())
+        logger.info(f'nccl config {nccl_config}')
+        self._run_nodes_remote_method(nodes=self.nodes, method_name="init", wait=True, nccl_config=nccl_config)
 
         # 4. update migrate graph
         self.ebalancer = LoadBalancer(config.ebalancer)
