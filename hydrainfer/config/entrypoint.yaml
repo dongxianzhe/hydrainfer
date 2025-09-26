@@ -28,8 +28,9 @@ cluster:
   ray_cluster_port: -1
   debug: false
 
-intranode_migrate_backend: "ipc"
+intranode_migrate_backend: "auto"
 internode_migrate_backend: "nccl"
+debug_migrate: false
 log_latency_breakdown: false
 ignore_eos: False
 

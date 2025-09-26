@@ -78,6 +78,7 @@ class AsyncEPDNode:
         model_factory = getModelFactory(self.config.model, ModelFactoryContext())
         language_config = model_factory.getLanguageModelConfig()
         kv_cache_config = TokenCacheBlockManagerConfig(
+            communication_backend_manager_config=self.config.migrate_backend_config, 
             n_layers = language_config.n_layers, 
             n_tokens = 2, 
             n_blocks = -1, 
@@ -88,6 +89,7 @@ class AsyncEPDNode:
             device = self.config.model.device, 
         )
         image_cache_config = TokenCacheBlockManagerConfig(
+            communication_backend_manager_config=self.config.migrate_backend_config, 
             n_layers = 1, 
             n_tokens = 1, 
             n_blocks = -1, 
@@ -123,8 +125,8 @@ class AsyncEPDNode:
         kv_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(kv_cache_config, kv_cache_memory)
         image_cache_config.n_blocks = TokenCacheBlockManager.compute_n_blocks(image_cache_config, image_cache_memory)
         logger.info(f'auto set kv cache n_blocks to {kv_cache_config.n_blocks} image cache n_blocks to {image_cache_config.n_blocks}')
-        self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=context.rank)) if context.node_type.has_kv_cache else None
-        self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=context.rank)) if context.node_type.has_image_cache else None
+        self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=context.rank, rank2host=self.rank2host)) if context.node_type.has_kv_cache else None
+        self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=context.rank, rank2host=self.rank2host)) if context.node_type.has_image_cache else None
 
     def _update_worker(self, context: NodeContext):
         worker_config = WorkerConfig(model=self.config.model)
@@ -197,8 +199,9 @@ class AsyncEPDNode:
     def _init_zmq(self):
         self.zmq_send = init_zmq_send(self.config.zmq) if self.config.zmq else None
 
-    async def init(self, nccl_config: NCCLCommunicatorConfig):
+    async def init(self, nccl_config: NCCLCommunicatorConfig, rank2host: dict[int, str]):
         try:
+            self.rank2host = rank2host
             logger.info(f'init {self.name} actor_id {getattr(self, "actor_id", None)} rank {self.context.rank} world_size {self.context.world_size}')
             logger.info("init nccl")
             self._init_nccl(nccl_config)
@@ -212,6 +215,9 @@ class AsyncEPDNode:
 
     def get_nccl_config(self) -> NCCLCommunicatorConfig:
         return NCCLCommunicatorConfig(host=get_host(), port=find_free_port())
+
+    def get_rank_host(self) -> tuple[int, str]:
+        return self.context.rank, get_host()
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)
@@ -336,7 +342,7 @@ class AsyncEPDNode:
         block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
         if self.config.debug_migrate:
             logger.debug(f"3.1 sender response {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
-        block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True, backend='nccl')
+        block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True)
 
     def _migrate_virtual_cache(self, src_node_actor_handle: ray.actor.ActorHandle, src_virtual_cache: VirtualTokenCache, is_kv_cache: bool) -> VirtualTokenCache:
         """3. after receiver allocate memory and get ready, tell sender to send cache and receiver wait to receive cache"""
@@ -344,23 +350,15 @@ class AsyncEPDNode:
 
         dst_virtual_cache = new_virtual_cache = block_manager.allocate_virtual_cache()
         block_manager.realloc(dst_virtual_cache, src_virtual_cache.n_cache_tokens)
-        if self.config.intranode_migrate_backend == 'ipc':
-            if self.config.debug_migrate:
-                logger.debug(f"3. receiver pull sender {'kv' if is_kv_cache else 'image'} cache via cuda ipc memory handle")
-            block_manager.migrate_blocks(src_virtual_cache=src_virtual_cache, dst_virtual_cache=new_virtual_cache, is_send=False, backend='ipc')
-        elif self.config.intranode_migrate_backend == 'nccl':
-            if self.config.debug_migrate:
-                logger.debug(f"3. receiver pull sender {'kv' if is_kv_cache else 'image'} cache via nccl")
-            if self.config.debug_migrate:
-                logger.debug(f"3.2 reciver recv {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
-            src_node_actor_handle.pull_virtual_cache.remote(
-                src_virtual_cache=src_virtual_cache, 
-                dst_virtual_cache=dst_virtual_cache, 
-                is_kv_cache=is_kv_cache, 
-            )
-            block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=False, backend='nccl')
-        else:
-            raise Exception(f'invalid intranode migrate backend {self.config.intranode_migrate_backend}')
+        if self.config.debug_migrate:
+            logger.debug(f"3. receiver pull sender {'kv' if is_kv_cache else 'image'} cache")
+
+        src_node_actor_handle.pull_virtual_cache.remote(
+            src_virtual_cache=src_virtual_cache, 
+            dst_virtual_cache=dst_virtual_cache, 
+            is_kv_cache=is_kv_cache, 
+        )
+        block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=False)
 
         return new_virtual_cache
 

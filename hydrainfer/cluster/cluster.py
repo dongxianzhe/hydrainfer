@@ -128,7 +128,13 @@ class Cluster:
 
         nccl_config = ray.get(self.nodes[0].get_nccl_config.remote())
         logger.info(f'nccl config {nccl_config}')
-        self._run_nodes_remote_method(nodes=self.nodes, method_name="init", wait=True, nccl_config=nccl_config)
+        rank2host: dict[int, str] = {}
+        for node in self.nodes:
+            rank, host = ray.get(node.get_rank_host.remote())
+            rank2host[rank] = host
+        for rank, host in rank2host.items():
+            logger.info(f'rank {rank} {self.node_contexts[rank].node_type.node_type} {host}')
+        self._run_nodes_remote_method(nodes=self.nodes, method_name="init", wait=True, nccl_config=nccl_config, rank2host=rank2host)
 
         # 4. update migrate graph
         self.ebalancer = LoadBalancer(config.ebalancer)
