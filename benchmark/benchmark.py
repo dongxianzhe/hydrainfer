@@ -19,8 +19,10 @@ from backend import get_server_proxy
 def log_result(args: argparse.Namespace, dataset: SyntheticDataset, method_results: MethodResults):
     # we do not log images to speed up log time
     for result in method_results.results:
-        for output in result.outputs:
+        for i, output in enumerate(result.outputs):
             output.entry.images = None
+            if i < args.show_result:
+                print(f'show request {i} result: {repr(output.output_text)}') # repr is used to not show escaped char
     
     with open(args.result_path, "w") as file:
         json.dump(asdict(method_results), fp=file, indent=4)
@@ -162,6 +164,7 @@ if __name__ == '__main__':
     parser.add_argument("--result-path", type=str)
     parser.add_argument("--method-name", type=str)
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--show-result", type=int, default=0, help='show some inference result to stdout')
     args, remain_args = parser.parse_known_args()
     print(f'benchmark args {args}')
     main(args)

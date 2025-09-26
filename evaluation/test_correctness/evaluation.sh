@@ -52,6 +52,7 @@ send_requests(){
         --port $port \
         --result-path=${RESULT_PATH}/${MODEL//\//-}-result.json \
         --request-rate $REQUEST_RATES \
+        --show-result=4 \
         --backend=ours \
         --textcaps=1
 }
