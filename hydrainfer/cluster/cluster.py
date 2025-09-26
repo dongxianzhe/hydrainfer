@@ -122,7 +122,6 @@ class Cluster:
                     max_restarts=1,
                     name=f"Node{rank}",
                     namespace='hydrainfer',
-                    lifetime='detached'
                 )(AsyncEPDNode).remote(data_parallel_config.node_config, context)
                 self.nodes.append(node)
                 self.node_configs.append(data_parallel_config.node_config)

@@ -20,10 +20,6 @@ apiserver:
   model: ${model}
   chat_template: null
 
-nccl_communicator:
-  host: "auto"
-  port: -1
-
 cluster: 
   ebalancer:
     policy: "round"

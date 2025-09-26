@@ -7,7 +7,7 @@ from typing import Literal
 from fastapi import Request
 import hydrainfer
 from hydrainfer.engine import RequestProcessParameters, OutputTokenParams
-from hydrainfer.cluster import Cluster, ClusterConfig, NCCLCommunicatorConfig
+from hydrainfer.cluster import Cluster, ClusterConfig
 from hydrainfer.request import OfflineInferenceOutput
 from hydrainfer.entrypoint.api_server import APIServer, APIServerConfig
 from hydrainfer.utils.zmq_utils import ZMQConfig, init_zmq_recv
@@ -21,7 +21,6 @@ logger = getLogger(__name__)
 class EntryPointConfig:
     mode: Literal["offline", "online"] = "online"
     zmq: ZMQConfig = field(default_factory=ZMQConfig)
-    nccl_communicator: NCCLCommunicatorConfig = field(default_factory=NCCLCommunicatorConfig)
     apiserver: APIServerConfig = field(default_factory=ClusterConfig)
     cluster: ClusterConfig = field(default_factory=ClusterConfig)
 
@@ -30,7 +29,6 @@ class EntryPoint:
     def __init__(self, config: EntryPointConfig):
         self.config = config
         self.config.zmq = parse_network_config(self.config.zmq, log_name='zmq')
-        self.config.nccl_communicator = parse_network_config(self.config.nccl_communicator, log_name='nccl_communicator')
         self.cluster = Cluster(config.cluster)
         if self.config.mode == 'online':
             self.api_server = APIServer(config.apiserver)
