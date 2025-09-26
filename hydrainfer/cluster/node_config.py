@@ -2,7 +2,7 @@ import argparse
 from typing import Optional, Literal
 from dataclasses import dataclass, field, fields
 from hydrainfer.model import ModelFactoryConfig, getModelFactory, ModelFactoryContext
-from hydrainfer.memory import TokenCacheBlockManagerConfig
+from hydrainfer.memory import TokenCacheBlockManagerConfig, CommunicationBackendManagerConfig
 from hydrainfer.engine import RequestProcessorConfig, BatchSchedulerConfig, ExecutorConfig, WorkerConfig, BatchSchedulerProfilerConfig
 from hydrainfer.utils.zmq_utils import ZMQConfig
 
@@ -20,6 +20,5 @@ class NodeConfig:
     batch_scheduler_profiler: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)
     zmq: Optional[ZMQConfig] = None
     debug_migrate: bool = True
-    intranode_migrate_backend: Literal['ipc', 'nccl'] = 'ipc'
-    internode_migrate_backend: Literal['nccl'] = 'nccl'
+    migrate_backend_config: CommunicationBackendManagerConfig = field(default_factory=CommunicationBackendManagerConfig)
     log_latency_breakdown: bool = False

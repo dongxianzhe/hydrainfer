@@ -6,6 +6,8 @@ defaults:
 model: ${model}
 zmq: ${zmq}
 debug_migrate: False
-intranode_migrate_backend: ${intranode_migrate_backend}
-internode_migrate_backend: ${internode_migrate_backend}
+migrate_backend_config:
+  intranode_migrate_backend: ${intranode_migrate_backend}
+  internode_migrate_backend: ${internode_migrate_backend}
+  debug: ${debug_migrate}
 log_latency_breakdown: ${log_latency_breakdown}
