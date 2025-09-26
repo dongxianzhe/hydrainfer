@@ -79,3 +79,8 @@ def find_interface_by_ip(target_ip: str) -> Optional[str]:
             if address.family == socket.AF_INET and address.address == target_ip:
                 return interface
     return None
+
+def get_host() -> str:
+    hostname = socket.gethostname()
+    ip_address = socket.gethostbyname(hostname)
+    return ip_address

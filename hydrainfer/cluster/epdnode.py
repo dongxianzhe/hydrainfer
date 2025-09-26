@@ -1,26 +1,24 @@
 import ray
+import socket
 import traceback
 import copy
 import time
 import torch
 import asyncio
 import ray.actor
-from typing import Optional, Literal
 import torch.distributed as dist
 from torch.distributed import P2POp, batch_isend_irecv
 from dataclasses import dataclass, field
-from concurrent.futures import ThreadPoolExecutor
-from hydrainfer.utils.socket_utils import parse_address
+from hydrainfer.utils.socket_utils import parse_address, find_free_port, get_host
 from hydrainfer.request import Request
 from hydrainfer.model import getModelFactory, ModelFactoryContext
 from hydrainfer.engine import RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerConfig, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
 from hydrainfer.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig
 from hydrainfer.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
 from hydrainfer.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
-
 from hydrainfer.utils.zmq_utils import init_zmq_send
 from hydrainfer.cluster import MigrateGraph, MigrateNode, NodeType
-from hydrainfer.cluster.node_config import NodeConfig
+from hydrainfer.cluster.node_config import NodeConfig, NCCLCommunicatorConfig
 from hydrainfer.cluster.loadbalancer import LoadBalancer, LoadBalancerConfig, CompositeLoadBlancer
 from hydrainfer.utils.logger import getLogger
 logger = getLogger(__name__)
@@ -174,16 +172,14 @@ class AsyncEPDNode:
         except: 
             traceback.print_exc()
 
-    def _init_nccl(self):
-        if not self.config.nccl_communicator:
-            return
+    def _init_nccl(self, nccl_config: NCCLCommunicatorConfig):
         if self.context.world_size == 1:
             return
         dist.init_process_group(
             backend="nccl", 
             rank=self.context.rank, 
             world_size=self.context.world_size, 
-            init_method=parse_address(self.config.nccl_communicator), 
+            init_method=parse_address(nccl_config), 
         )
         logger.info('warm up p2p operation')
         p2p_op_list = []
@@ -201,17 +197,21 @@ class AsyncEPDNode:
     def _init_zmq(self):
         self.zmq_send = init_zmq_send(self.config.zmq) if self.config.zmq else None
 
-    async def init(self):
+    async def init(self, nccl_config: NCCLCommunicatorConfig):
         try:
             logger.info(f'init {self.name} actor_id {getattr(self, "actor_id", None)} rank {self.context.rank} world_size {self.context.world_size}')
-            self._init_nccl()
+            logger.info("init nccl")
+            self._init_nccl(nccl_config)
+            logger.info("init zmq")
             self._init_zmq()
-            logger.info("init engine start")
+            logger.info("init engine")
             self._update_engine(self.context)
-            logger.info("init engine finished")
+            logger.info("init node success")
         except Exception as e:
             traceback.print_exc()
-            
+
+    def get_nccl_config(self) -> NCCLCommunicatorConfig:
+        return NCCLCommunicatorConfig(host=get_host(), port=find_free_port())
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
         self.request_processor.process(request, params)

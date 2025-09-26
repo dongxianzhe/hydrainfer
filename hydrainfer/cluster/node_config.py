@@ -20,7 +20,6 @@ class NodeConfig:
     batch_scheduler_profiler: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)
     zmq: Optional[ZMQConfig] = None
     debug_migrate: bool = True
-    nccl_communicator: Optional[NCCLCommunicatorConfig] = None
     intranode_migrate_backend: Literal['ipc', 'nccl'] = 'ipc'
     internode_migrate_backend: Literal['nccl'] = 'nccl'
     log_latency_breakdown: bool = False
