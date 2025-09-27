@@ -18,7 +18,6 @@ apiserver:
   port: 8888
   zmq: ${zmq}
   model: ${model}
-  chat_template: null
 
 cluster: 
   ebalancer:
