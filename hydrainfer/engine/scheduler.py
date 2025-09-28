@@ -12,7 +12,6 @@ logger = getLogger(__name__)
 
 @dataclass
 class BatchSchedulerConfig:
-    batch_policy: Literal['nobatch', 'requestlevel', 'continuousbatch'] = 'continuousbatch'
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
     max_overload_requests: int = 0
@@ -90,27 +89,14 @@ class BatchScheduler:
         self.step_cnt += 1
         schedule_time = time.perf_counter()
         # 1. get enough requests to participate in the batch
-        if self.config.batch_policy == 'nobatch':
-            raise NotImplementedError
-            if len(self.running) == 0:
-                if not self.waiting.empty():
-                    rcb = self.waiting.get()
-                    self.schedule_running(rcb)
-        elif self.config.batch_policy == 'requestlevel':
-            raise NotImplementedError
-            if len(self.running) == 0:
-                while len(self.running) < self.config.max_running_requests - self.migrating_cnt and not self.waiting.empty():
-                    rcb = self.waiting.get()
-                    self.schedule_running(rcb)
-        elif self.config.batch_policy == 'continuousbatch':
-            while len(self.running) < self.config.max_running_requests - self.migrating_cnt and len(self.waiting) > 0:
-                rcb = self.waiting.popleft()
-                self.schedule_running(rcb)
-            # we are risking dead pull cache lock when ED Node' all requests are waiting P Node pull and P Node's all requests are waiting ED Node pull cache
-            # so we need to limit the number of new requests
-            while len(self.running) < self.config.max_running_requests - self.migrating_cnt + self.config.max_overload_requests and len(self.waiting) > 0 and isinstance(self.waiting[0].current_instruction(), PullCache):
-                rcb = self.waiting.popleft()
-                self.schedule_running(rcb)
+        while len(self.running) < self.config.max_running_requests - self.migrating_cnt and len(self.waiting) > 0:
+            rcb = self.waiting.popleft()
+            self.schedule_running(rcb)
+        # we are risking dead pull cache lock when ED Node' all requests are waiting P Node pull and P Node's all requests are waiting ED Node pull cache
+        # so we need to limit the number of new requests
+        while len(self.running) < self.config.max_running_requests - self.migrating_cnt + self.config.max_overload_requests and len(self.waiting) > 0 and isinstance(self.waiting[0].current_instruction(), PullCache):
+            rcb = self.waiting.popleft()
+            self.schedule_running(rcb)
 
         if len(self.running) == 0:
             return []
