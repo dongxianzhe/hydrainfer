@@ -16,6 +16,7 @@ from hydrainfer.model.model_factory import VisionModelConfig, LanguageModelConfi
 from hydrainfer.engine.worker import WorkerConfig, WorkerContext, getWorker, Worker
 from hydrainfer.memory import TokenCacheBlockManager, KVCache
 from hydrainfer.engine import BatchRequest
+from hydrainfer.engine import LanguageModelParametersBuilder
 from hydrainfer.request import OfflineInferenceOutput
 from hydrainfer.utils.torch_utils import str2dtype, str2device
 from hydrainfer.utils.logger import getLogger
@@ -100,17 +101,7 @@ class BatchFillExecutor(Executor):
             self.batch_decode_with_paged_kvcache_wrapper = flashinfer.BatchDecodeWithPagedKVCacheWrapper(self.workspace_buffer, "NHD", use_tensor_cores=True)
         self.print_text_output_token_processor = PrintTextOutputTokenProcessor(self.tokenizer)
 
-    def _execute_image_embed(self, batch: BatchRequest) -> Tensor:
-        if len(batch) == 0:
-            return None
-        pixel_values: list[Tensor] = []
-        for rcb, inst in batch:
-            pixel_values.append(inst.pixel_values)
-            inst.pixel_values = None
-        pixel_values = torch.cat(pixel_values, dim=0).to(dtype=self.dtype, device=self.device)
-        image_features = self.worker.execute_vision_model(pixel_values, VisionModelParameters(return_last_layer_attention=False)).image_features
-        return image_features
-            
+
     def execute(self, batch: BatchRequest) -> Future:
         if len(batch) == 0:
             return EmptyFuture()
@@ -121,61 +112,23 @@ class BatchFillExecutor(Executor):
                 rcb.virtual_kv_cache = self.block_mangaer.allocate_virtual_cache()
 
         # 2. filter out request which need image embed
-        batch_image_fill = BatchRequest()
-        image_tokens: list[Tensor] = []
-        for rcb, inst in batch:
-            if isinstance(inst, ImageEmbedFill):
-                token_cache = self.image_block_manager.get_layer_cache(layer_id=0)
-                slot_ids = self.image_block_manager.v2p(rcb.virtual_image_cache, inst.image_token_cache_ids)
-                image_token_cache = token_cache.get_caches()[0]
-                image_token_cache = image_token_cache.view(-1, self.language_model_config.n_qo_heads * self.language_model_config.head_dim)
-                slot_ids = torch.tensor(slot_ids, dtype=torch.int, device=self.device)
-                request_image_tokens = image_token_cache[slot_ids, :]
-                image_tokens.append(request_image_tokens)
-        if len(batch_image_fill) > 0 and len(image_tokens) > 0:
-            raise Exception('not support pixel value and image embed batch')
-
-        if len(image_tokens) == 0:
-            image_features = self._execute_image_embed(batch_image_fill)
-        else:
-            image_features = torch.cat(image_tokens, dim=0).to(dtype=self.dtype, device=self.device)
-
-        token_ids         : list[int] = []
-        position_ids      : list[int] = []
-        selected_token_ids: list[int] = []
-        attention_params_builder = AttentionParametersBuilder(
-            num_qo_heads = self.language_model_config.n_qo_heads,
-            num_kv_heads = self.language_model_config.n_kv_heads,
-            head_dim = self.language_model_config.head_dim, 
-            block_size = self.context.kv_cache_block_manager.config.block_size, 
-            device = self.device, 
-            flash_infer_batch_prefill_handler = self.batch_prefill_with_paged_kvcache_wrapper, 
-            flash_infer_batch_decode_handler = self.batch_decode_with_paged_kvcache_wrapper, 
+        builder = LanguageModelParametersBuilder(
+            image_block_manager=self.image_block_manager, 
+            kv_cache_block_manager=self.block_mangaer, 
+            vision_model_config=self.vision_model_config, 
+            language_model_config=self.language_model_config, 
+            dtype=self.dtype, 
+            device=self.device, 
+            batch_prefill_with_paged_kvcache_wrapper=self.batch_prefill_with_paged_kvcache_wrapper, 
+            batch_decode_with_paged_kvcache_wrapper=self.batch_decode_with_paged_kvcache_wrapper,
         )
-        for rcb, inst in batch:
-            token_ids += inst.token_ids
-            position_ids += inst.position_ids
-            if inst.sample:
-                selected_token_ids.append(len(token_ids) - 1)
+        builder.add_batch(batch)
+        model_params = builder.build_language_model_parameters()
 
-            virtual_kv_cache = rcb.virtual_kv_cache
-            slot_ids = self.block_mangaer.set(virtual_kv_cache, inst.cache_ids)
-            attention_params_builder.add_request(
-                q_seq_len = len(inst.token_ids), 
-                kv_seq_len = virtual_kv_cache.n_cache_tokens, 
-                new_cache_slots = slot_ids, 
-                block_table = virtual_kv_cache.block_table
-            )
-        for layer_id in range(self.language_model_config.n_layers):
-            attention_params_builder.add_kv_cache(KVCache.from_token_cache(self.block_mangaer.get_layer_cache(layer_id)))
-        layers_attention_params = attention_params_builder.build_attention_parameters()
-        model_params = LanguageModelParameters(
-            attention_params = layers_attention_params, 
-            all_sequences_decode = layers_attention_params[0].all_sequences_decode, 
-            selected_token_ids = selected_token_ids
-        )
-        input_ids_tensor = torch.tensor(token_ids, dtype=torch.int, device=self.device)
-        position_ids_tensor = torch.tensor(position_ids, dtype=torch.int, device=self.device)
+        input_ids_tensor = model_params.input_ids_or_input_embeds
+        image_features = model_params.image_features
+        position_ids_tensor = model_params.position_ids
+        selected_token_ids = model_params.selected_token_ids
 
         sample_token_ids = self.worker.execute_language_model(input_ids_tensor, image_features, position_ids_tensor, model_params).sample_token_ids
         sample_token_ids = sample_token_ids.tolist()

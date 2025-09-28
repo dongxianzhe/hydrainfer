@@ -4,6 +4,7 @@ from .output_token_processor import OutputTokenProcessor, PrintOutputTokenProces
 from .scenario import ScenarioType, ScenarioClassifier
 from .rcb import RequestControlBlock, BatchRequest
 from .worker import getWorker, WorkerConfig, WorkerContext, Worker
+from .parameters_builder import LanguageModelParametersBuilder
 from .executor import ExecutorConfig, ExecutorContext, InstructionExecutor, Future
 from .profiler import BatchSchedulerProfilerConfig, BatchSchedulerProfilerContext, BatchSchedulerProfiler
 from .scheduler import BatchScheduler, BatchSchedulerConfig, BatchRequest, BatchSchedulerContext
