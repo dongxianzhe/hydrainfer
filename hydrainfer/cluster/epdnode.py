@@ -340,18 +340,13 @@ class AsyncEPDNode:
 
     async def pull_virtual_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
         block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
-        if self.config.debug_migrate:
-            logger.debug(f"3.1 sender response {'kv' if is_kv_cache else 'image'} cache pull request src block table {src_virtual_cache.rank} {src_virtual_cache.block_table} dst block table {dst_virtual_cache.rank} {dst_virtual_cache.block_table}")
         block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True)
 
     def _migrate_virtual_cache(self, src_node_actor_handle: ray.actor.ActorHandle, src_virtual_cache: VirtualTokenCache, is_kv_cache: bool) -> VirtualTokenCache:
-        """3. after receiver allocate memory and get ready, tell sender to send cache and receiver wait to receive cache"""
         block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
 
         dst_virtual_cache = new_virtual_cache = block_manager.allocate_virtual_cache()
         block_manager.realloc(dst_virtual_cache, src_virtual_cache.n_cache_tokens)
-        if self.config.debug_migrate:
-            logger.debug(f"3. receiver pull sender {'kv' if is_kv_cache else 'image'} cache")
 
         src_node_actor_handle.pull_virtual_cache.remote(
             src_virtual_cache=src_virtual_cache, 
@@ -363,6 +358,7 @@ class AsyncEPDNode:
         return new_virtual_cache
 
     async def _execute_pull_cache(self, batch: BatchRequest):
+        """3. called sender's to send blocks and free blocks"""
         for rcb, inst in batch:
             if len(rcb.metric.ep_transfer) == 0:
                 rcb.metric.ep_transfer.append(time.perf_counter())
@@ -386,16 +382,10 @@ class AsyncEPDNode:
             else:
                 rcb.metric.pd_transfer.append(time.perf_counter())
 
-
     async def migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
-        """ 2. receiver allocate new cache and migrate blocks and called sender's free method to free blocks"""
-        if self.config.debug_migrate:
-            logger.debug(f'2. recv migrate {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
-
-        # set pull cache stage src_node_actor_handle, waiting schedule
+        """ 2. receiver allocate new cache and waiting scheduler to pull cache"""
         rcb.current_instruction().src_node_actor_handle = src_node_actor_handle
         self.batch_scheduler.schedule_new(rcb)
-        # self._migrate(src_node_actor_handle, rcb)
     
     async def _execute_batch_migrate(self, batch: BatchRequest):
         """ 1. sender send block table to receiver"""
@@ -410,8 +400,6 @@ class AsyncEPDNode:
                 rcb.step()
                 self.batch_scheduler.schedule_running(rcb)
                 continue
-            if self.config.debug_migrate:
-                logger.debug(f'1. sender {inst.ty} migrate to {node.id}, {rcb.scenario_type} request {rcb.request_id} {rcb.instructions}')
             self.batch_scheduler.migrating_acquire()
 
             # don't know why some rpc call will failed at pickle
@@ -432,8 +420,6 @@ class AsyncEPDNode:
 
     async def free_migrate_request(self, rcb: RequestControlBlock):
         """ 4. sender free request"""
-        if self.config.debug_migrate:
-            logger.debug(f'4. sender free request {rcb.request_id}')
         await self._free_cache(rcb)
         self.batch_scheduler.migrating_release()
 
