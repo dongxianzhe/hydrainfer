@@ -19,6 +19,10 @@ class VisionModelOutput:
 
 @dataclass
 class LanguageModelParameters:
+    input_ids_or_input_embeds: Tensor
+    position_ids: Tensor
+    image_features: Optional[Tensor]
+    image_overwrite_mask: Optional[Tensor]
     attention_params: list[AttentionParameters]
     all_sequences_decode: bool
     selected_token_ids: list[int]
