@@ -217,34 +217,10 @@ class BatchFillExecutor(Executor):
             if inst.is_chunked:
                 continue
 
-            if rcb.output_token_params.is_offline_output:
-                if rcb.output_token_params.is_stream_output:
-                    raise Exception('offline inference is not support stream output')
-                else:
-                    if is_last_token:
-                        self.context.zmq_send.send_pyobj(OfflineInferenceOutput(
-                            text = self.tokenizer.decode(rcb.output_token_ids),
-                            output_token_ids = rcb.output_token_ids, 
-                            arrival_time  = rcb.metric.arrival_time, 
-                            finished_time = rcb.metric.finished_time, 
-                            token_times = rcb.metric.token_times,
-
-                            ttft = rcb.metric.token_times[0] - rcb.metric.arrival_time, 
-                            tpot = [
-                                rcb.metric.token_times[i] - rcb.metric.token_times[i-1]
-                                for i in range(1, len(rcb.metric.token_times))
-                            ], 
-                        ))
-            else:
-                if rcb.output_token_params.is_stream_output:
-                    content = self.tokenizer.decode(next_token_id)
-                    self.context.zmq_send.send_pyobj((rcb.request_id, content))
-                    if is_last_token:
-                        self.context.zmq_send.send_pyobj((rcb.request_id, None))
-                else:
-                    if is_last_token:
-                        self.context.zmq_send.send_pyobj((rcb.request_id, self.tokenizer.decode(rcb.output_token_ids)))
-                        self.context.zmq_send.send_pyobj((rcb.request_id, None))
+            content = self.tokenizer.decode(next_token_id)
+            self.context.zmq_send.send_pyobj((rcb.request_id, content))
+            if is_last_token:
+                self.context.zmq_send.send_pyobj((rcb.request_id, None))
 
         batch.step()
         return EmptyFuture()

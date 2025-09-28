@@ -110,8 +110,6 @@ class APIServer:
                 ), RequestProcessParameters(
                     outout_token_parmas = OutputTokenParams(
                         print_output_text = False, 
-                        is_stream_output = True, 
-                        is_offline_output = False, 
                     )
                 ))
 

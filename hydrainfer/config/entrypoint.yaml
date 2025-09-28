@@ -7,8 +7,6 @@ model:
   dtype: "auto"
   device: "auto"  
 
-mode: "online"
-
 zmq:
   host: "auto"
   port: -1
