@@ -5,7 +5,6 @@ defaults:
   - ../engine/batch_scheduler_profiler@batch_scheduler_profiler
 model: ${model}
 zmq: ${zmq}
-debug_migrate: False
 migrate_backend_config:
   intranode_migrate_backend: ${intranode_migrate_backend}
   internode_migrate_backend: ${internode_migrate_backend}

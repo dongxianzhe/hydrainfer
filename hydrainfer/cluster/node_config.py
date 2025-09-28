@@ -19,6 +19,5 @@ class NodeConfig:
     executor: ExecutorConfig = field(default_factory=ExecutorConfig)
     batch_scheduler_profiler: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)
     zmq: Optional[ZMQConfig] = None
-    debug_migrate: bool = True
     migrate_backend_config: CommunicationBackendManagerConfig = field(default_factory=CommunicationBackendManagerConfig)
     log_latency_breakdown: bool = False
