@@ -4,7 +4,7 @@ import queue
 from queue import Queue
 from typing import Literal, Optional, Union
 from dataclasses import dataclass, fields
-from hydrainfer.engine import Instruction, Fill, TextFill, ImageFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest, PullCache
+from hydrainfer.engine import Instruction, Fill, TextFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest, PullCache
 from hydrainfer.utils.allocate import IncreaingAllocator
 import argparse
 from hydrainfer.utils.logger import getLogger

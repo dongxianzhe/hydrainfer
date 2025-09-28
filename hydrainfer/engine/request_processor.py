@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 from typing import Optional
 from hydrainfer.request.request import Request, RequestMetaData
-from hydrainfer.engine import Instruction, TextFill, ImageFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache, EPMigrate, PDMigrate
+from hydrainfer.engine import Instruction, TextFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache, EPMigrate, PDMigrate
 from hydrainfer.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 from hydrainfer.model import ImageTokenCaculator
 from hydrainfer.utils.logger import getLogger
@@ -17,7 +17,6 @@ logger = getLogger(__name__)
 @dataclass
 class RequestProcessorConfig:
     num_request_process_workers: int = 32
-    disaggregate_embed_prefill: bool = True
     ep_migrate: bool = False
     pd_migrate: bool = False
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
@@ -108,38 +107,26 @@ class InstructionCreator(RequestProcessorComponent):
         # 6. stage division
         builder = InstructionListBuilder()
         if images_tensor is not None:
-            if self.config.disaggregate_embed_prefill:
-                image_token_cache_ids = list(range(n_image_tokens))
-                embed = ImageEmbed(
-                    pixel_values = images_tensor,
-                    cache_ids=image_token_cache_ids, 
-                    images_size=images_size, 
-                )
-                prefill = ImageEmbedFill(
-                    image_token_cache_ids=image_token_cache_ids, 
-                    image_token_mask=image_overwrite_mask[:n_prompt_tokens], 
-                    token_ids = token_ids[:n_prompt_tokens], 
-                    position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = cache_ids[:n_prompt_tokens], 
-                    sample = True, 
-                    sample_dst = None, 
-                )
-                builder.append(embed)
-                if self.config.ep_migrate:
-                    builder.append(EPMigrate())
-                    builder.append(PullCache())
-                builder.append(prefill)
-            else:
-                assert self.image_token_caculator is None, "dynamic num image token is not support in image fill"
-                prefill = ImageFill(
-                    pixel_values = images_tensor, 
-                    token_ids = token_ids[:n_prompt_tokens], 
-                    position_ids = position_ids[:n_prompt_tokens], 
-                    cache_ids = cache_ids[:n_prompt_tokens], 
-                    sample = True, 
-                    sample_dst = None, 
-                )
-                builder.append(prefill)
+            image_token_cache_ids = list(range(n_image_tokens))
+            embed = ImageEmbed(
+                pixel_values = images_tensor,
+                cache_ids=image_token_cache_ids, 
+                images_size=images_size, 
+            )
+            prefill = ImageEmbedFill(
+                image_token_cache_ids=image_token_cache_ids, 
+                image_token_mask=image_overwrite_mask[:n_prompt_tokens], 
+                token_ids = token_ids[:n_prompt_tokens], 
+                position_ids = position_ids[:n_prompt_tokens], 
+                cache_ids = cache_ids[:n_prompt_tokens], 
+                sample = True, 
+                sample_dst = None, 
+            )
+            builder.append(embed)
+            if self.config.ep_migrate:
+                builder.append(EPMigrate())
+                builder.append(PullCache())
+            builder.append(prefill)
         else:
             prefill = TextFill(
                 token_ids = token_ids[:n_prompt_tokens], 

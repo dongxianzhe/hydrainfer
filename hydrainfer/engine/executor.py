@@ -7,7 +7,7 @@ from torch import Tensor
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, fields, field
-from hydrainfer.engine import RequestControlBlock, Instruction, ImageFill, ImageEmbedFill, Fill, EmptyInstruction, ImageEmbed
+from hydrainfer.engine import RequestControlBlock, Instruction, ImageEmbedFill, Fill, EmptyInstruction, ImageEmbed
 from hydrainfer.engine import PrintTextOutputTokenProcessor
 from hydrainfer.layer.causal_attention import AttentionParametersBuilder, AttentionParameters
 from hydrainfer.model.parameters import LanguageModelParameters, VisionModelParameters
@@ -124,9 +124,7 @@ class BatchFillExecutor(Executor):
         batch_image_fill = BatchRequest()
         image_tokens: list[Tensor] = []
         for rcb, inst in batch:
-            if isinstance(inst, ImageFill):
-                batch_image_fill.append(rcb)
-            elif isinstance(inst, ImageEmbedFill):
+            if isinstance(inst, ImageEmbedFill):
                 token_cache = self.image_block_manager.get_layer_cache(layer_id=0)
                 slot_ids = self.image_block_manager.v2p(rcb.virtual_image_cache, inst.image_token_cache_ids)
                 image_token_cache = token_cache.get_caches()[0]

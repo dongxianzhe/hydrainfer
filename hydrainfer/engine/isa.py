@@ -83,26 +83,6 @@ class TextFill(Fill):
         return "TF"
 
 
-class ImageFill(Fill):
-    """
-    pixel values is image tensor shaped (n_images, n_channels, n_width, n_height)
-    """
-    def __init__(
-        self, 
-        pixel_values: Tensor, 
-        token_ids: Optional[list[int]], 
-        position_ids: list[int], 
-        cache_ids: list[int], 
-        sample: bool, 
-        sample_dst: Optional[Fill]
-    ):
-        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
-        self.pixel_values    = pixel_values # (n_images, n_channel, )
-
-    def __repr__(self):
-        return "IF"
-
-
 class ImageEmbedFill(Fill):
     """
     for example if we have a prompt "<image> what's the content of this image"
