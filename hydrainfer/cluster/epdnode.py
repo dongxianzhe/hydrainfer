@@ -14,7 +14,7 @@ from hydrainfer.request import Request
 from hydrainfer.model import getModelFactory, ModelFactoryContext
 from hydrainfer.engine import RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerConfig, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
 from hydrainfer.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig
-from hydrainfer.engine import Fill, TextFill, ImageFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
+from hydrainfer.engine import Fill, TextFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
 from hydrainfer.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
 from hydrainfer.utils.zmq_utils import init_zmq_send
 from hydrainfer.cluster import MigrateGraph, MigrateNode, NodeType
