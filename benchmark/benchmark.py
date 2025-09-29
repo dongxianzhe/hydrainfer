@@ -168,7 +168,7 @@ if __name__ == '__main__':
     parser.add_argument("--method-name", type=str)
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--show-result", type=int, default=0, help='show some inference result to stdout')
-    parser.add_argument("--only_text", type=bool, default=False, help="if set true, benchmark only send prompt of multimodal request")
+    parser.add_argument("--only_text", type=int, default=0, help="if set true, benchmark only send prompt of multimodal request")
     args, remain_args = parser.parse_known_args()
     print(f'benchmark args {args}')
     main(args)
