@@ -20,18 +20,6 @@ from hydrainfer.model.model_profiler import ModelProfiler, ModelParamsConfig, Vi
 from hydrainfer.model.model_loader import load_config_from_json, load_safetensor
 from hydrainfer.layer.causal_attention import CausalGroupedQueryPageAttention, CausalGroupedQueryPageAttentionConfig
 
-def load_safetensor_strict_equal(model: nn.Module, model_weights_path: str):
-    state_dict = model.state_dict()
-    loaded_set = set()
-    for entry in os.scandir(model_weights_path):
-        if entry.is_file() and os.path.splitext(entry.name)[1] == '.safetensors':
-            for name, weight in safetensors.torch.load_file(entry.path).items():
-                print(f'{name}, {weight.shape}, {state_dict[name].shape}')
-                state_dict[name].data.copy_(weight)
-                loaded_set.add(name)
-    assert len(state_dict) == len(loaded_set), f'expected load {len(state_dict)} tensors, but only {len(loaded_set)} tensors are loaded, {state_dict.keys() - loaded_set} are not loaded'
-
-
 @dataclass
 class InternVisionModelConfig:
     hidden_size: int
@@ -45,6 +33,10 @@ class InternVisionModelConfig:
     image_size: int
     num_channels: int
     num_attention_heads: int
+    qk_normalization: bool
+    attention_dropout: float
+    dropout: float
+    qkv_bias: bool
 
 @dataclass
 class InternLM2ForCausalLMConfig:
@@ -82,7 +74,7 @@ class InternVisionEmbeddings(nn.Module):
 
         self.num_patches = (config.image_size // config.patch_size) ** 2
         self.num_positions = self.num_patches + 1
-        self.position_embedding = nn.Parameter(torch.randn(1, self.num_positions, config.hidden_size))
+        self.position_embedding = nn.Parameter(torch.randn(1, self.num_positions, config.hidden_size), requires_grad=False)
 
     def _get_pos_embed(self, pos_embed: Tensor, H: int, W: int) -> Tensor:
         target_dtype = pos_embed.dtype
@@ -93,8 +85,8 @@ class InternVisionEmbeddings(nn.Module):
         return pos_embed
 
     def forward(self, pixel_values: Tensor) -> Tensor:
-        # pixel_values (batch_size, channel, width, height)
-        patch_embeds = self.patch_embedding(pixel_values) # patch_embeds (batch_size, hidden_size, width / patch_size, height / patch_size)
+        # pixel_values (batch_size, channel, height, width)
+        patch_embeds = self.patch_embedding(pixel_values) # patch_embeds (batch_size, hidden_size, height / patch_size, width / patch_size)
         batch_size, _, height, width = patch_embeds.shape
         patch_embeds = patch_embeds.flatten(2).transpose(1, 2) # (batch_size, width / patch_size * height / patch_size, hidden_size)
         class_embeds = self.class_embedding.expand(batch_size, 1, -1).to(pixel_values.dtype)
@@ -110,12 +102,14 @@ class InternAttention(nn.Module):
         super().__init__()
         self.config = config
         self.head_dim = config.hidden_size // config.num_attention_heads 
-        self.qkv = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size * 3, bias=False)
-        self.attn_drop = nn.Dropout(p=0.0, inplace=False)
-        self.proj_drop = nn.Dropout(p=0.0, inplace=False)
-        self.q_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
-        self.k_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
+        self.qkv = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size * 3, bias=config.qkv_bias)
+        # self.q_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
+        # self.k_norm = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
+        self.q_norm = nn.RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.k_norm = nn.RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.proj = nn.Linear(in_features=config.hidden_size, out_features=config.hidden_size, bias=True)
+        assert config.attention_dropout == 0.0
+        assert config.dropout == 0.0
 
         self.attention = MultiHeadAttention(MultiHeadAttentionConfig(config.num_attention_heads, self.head_dim))
 
@@ -125,6 +119,9 @@ class InternAttention(nn.Module):
         query = qkv[..., :self.config.hidden_size]
         key   = qkv[..., self.config.hidden_size:2*self.config.hidden_size]
         value = qkv[..., 2*self.config.hidden_size:]
+        if self.config.qk_normalization:
+            query = self.q_norm(query)
+            key = self.k_norm(key)
         attention_output = self.attention(query, key, value, MultiHeadAttentionParameters(return_scores=False))
         o = attention_output.o # (batch_size, num_tokens_per_image, hidden_size)
         o = self.proj(o) # (batch_size, num_tokens_per_image, hidden_size)
@@ -149,17 +146,15 @@ class InternVisionEncoderLayer(nn.Module):
         super().__init__()
         self.attn = InternAttention(config)
         self.mlp = InternMLP(config)
-        self.norm1 = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
-        self.norm2 = RMSNorm(hidden_size=config.hidden_size, eps=config.layer_norm_eps)
-        self.ls1 = nn.Parameter(config.initializer_factor * torch.ones(config.hidden_size))
-        self.ls2 = nn.Parameter(config.initializer_factor * torch.ones(config.hidden_size))
+        self.norm1 = nn.RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.norm2 = nn.RMSNorm(config.hidden_size, eps=config.layer_norm_eps)
+        self.ls1 = nn.Parameter(config.initializer_factor * torch.ones(config.hidden_size), requires_grad=False)
+        self.ls2 = nn.Parameter(config.initializer_factor * torch.ones(config.hidden_size), requires_grad=False)
         assert config.drop_path_rate == 0.0
-        self.drop_path1 = nn.Identity()
-        self.drop_path2 = nn.Identity()
 
     def forward(self, hidden_states: Tensor) -> Tensor:
-        hidden_states = hidden_states + self.drop_path1(self.attn(self.norm1(hidden_states)) * self.ls1)
-        hidden_states = hidden_states + self.drop_path2(self.mlp(self.norm2(hidden_states)) * self.ls2)
+        hidden_states = hidden_states + self.attn(self.norm1(hidden_states) * self.ls1)
+        hidden_states = hidden_states + self.mlp(self.norm2(hidden_states) * self.ls2)
         return hidden_states
 
 
@@ -268,11 +263,9 @@ class InternLM2Model(nn.Module):
             hidden_states = self.tok_embeddings(input_ids)
         else:
             hidden_states = input_ids
-            assert not torch.any(torch.isnan(hidden_states))
 
         for i, layer in enumerate(self.layers):
             hidden_states = layer(hidden_states, position_ids, model_params)
-            assert not torch.any(torch.isnan(hidden_states)), f'layer_id {i}'
         return self.norm(hidden_states)
 
 
@@ -395,7 +388,6 @@ class InternVLLanguageModel(LanguageModel):
         # position_ids (n_text_tokens + n_image_tokens)
         input_embeds = self.language_model.model.tok_embeddings(input_ids)
         if image_features is not None:
-            assert not torch.any(torch.isnan(image_features))
             image_overwrite_mask = input_ids == self.image_token_id
             input_embeds[image_overwrite_mask, :] = image_features.view(-1, input_embeds.shape[-1])
         sample_token_ids = self.language_model(input_embeds, position_ids, model_params) # (n_selected_tokens, )
