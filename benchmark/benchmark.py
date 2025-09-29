@@ -1,22 +1,55 @@
 import os
 import json
 import time
-import httpx
 import random
 import asyncio
 import argparse
 import numpy as np
 from tqdm import tqdm
-from openai import AsyncOpenAI
 from typing import AsyncGenerator
 from dataclasses import dataclass, field, asdict
-from transformers import AutoTokenizer
-from metric import OnlineRequestOutput, BenchmarkResult, MethodResults
+from metric import OnlineRequestOutput, BenchmarkResult, MethodResults, Statistics
 from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
 from backend import get_server_proxy
 
+def make_statistic(values: list[float]) -> Statistics:
+    if len(values) == 0:
+        return None
+    return Statistics(
+        max = max(values), 
+        min = min(values), 
+        mean = np.mean(values), 
+        median = np.median(values), 
+        p90 = np.percentile(values, 90), 
+        p99 = np.percentile(values, 99), 
+        var = np.var(values), 
+    )
+
 def analyze_result(args: argparse.Namespace, method_results: MethodResults):
-    pass
+    pbar = tqdm(range(sum([len(result.outputs) for result in method_results.results])), desc="analyzing result")
+    for result in method_results.results:
+        for output in result.outputs:
+            pbar.update(1)
+            if not output.success:
+                continue
+            output.total_tokens = len(output.token_times)
+            output.latency = output.token_times[-1] - output.start_time
+            output.ttft = output.token_times[0] - output.start_time
+            output.tpots = sorted([output.token_times[i] - output.token_times[i - 1] for i in range(1, len(output.token_times))])
+            output.tpot_statistics = make_statistic(output.tpots)
+            result.total_tokens += output.total_tokens
+            result.total_success += output.success
+            result.latencies.append(output.latency)
+            result.ttfts.append(output.ttft)
+            result.tpots.extend(output.tpots)
+        result.latencies.sort()
+        result.ttfts.sort()
+        result.tpots.sort()
+        result.token_throughput = result.total_tokens / (result.end_time - result.start_time)
+        result.request_throughput = result.total_success / (result.end_time - result.start_time)
+        result.latency_statistics = make_statistic(result.latencies)
+        result.ttft_statistics = make_statistic(result.ttfts)
+        result.tpot_statistics = make_statistic(result.tpots)
 
 def log_result(args: argparse.Namespace, method_results: MethodResults):
     # we do not log images to speed up log time
@@ -113,7 +146,7 @@ def main(args: argparse.Namespace):
         vizwiz_vqa   = args.vizwiz_vqa, 
     )                 
     method_results = benchmarks(args, dataset)
-    analyze_result(args, dataset)
+    analyze_result(args, method_results)
     log_result(args, method_results)
 
 
