@@ -23,7 +23,7 @@ class Request:
     request_id: Union[int, str] = 0
     prompt: str = ""
     image: Optional[Image.Image] = None
-    image_base64: str = ""
+    image_base64: Optional[str] = None
     sampling_params: SamplingParameters = field(default_factory=SamplingParameters)
     token_params: TokenParameters = field(default_factory=TokenParameters)
 

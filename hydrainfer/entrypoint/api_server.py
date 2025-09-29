@@ -95,7 +95,7 @@ class APIServer:
             assert len(request.messages) == 1, 'only support one round chat'
 
             image_base64_list = self._parse_content(request.messages)
-            assert len(image_base64_list) == 1, f'only support one image per request, but got {len(image_base64_list)} images'
+            assert len(image_base64_list) <= 1, f'only support one image per request, but got {len(image_base64_list)} images'
             prompt = self.tokenizer.apply_chat_template(request.messages)
             
             async_stream = AsyncStream()
@@ -105,7 +105,7 @@ class APIServer:
                     request_id = request_id, 
                     prompt = prompt, 
                     image = None, 
-                    image_base64 = image_base64_list[0], 
+                    image_base64 = image_base64_list[0] if len(image_base64_list) == 1 else None, 
                     sampling_params = SamplingParameters(max_tokens=request.max_tokens)
                 ), RequestProcessParameters(
                     outout_token_parmas = OutputTokenParams(
