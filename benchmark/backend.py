@@ -11,22 +11,24 @@ async def openai_compitable_server_proxy(model_path: str, entry: SyntheticDataEn
     send_pbar.update(1)
     output = OnlineRequestOutput(entry=entry)
     output.start_time = time.perf_counter()
+    content = [
+        {
+            "type": "text",
+            "text": entry.prompt, 
+        },
+    ]
+    for image in entry.images:
+        content.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/png;base64,{image}"
+            },
+        })
     try:
         response = await client.chat.completions.create(
             messages = [{
                 "role":"user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": entry.prompt, 
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{entry.images[0]}"
-                        },
-                    },
-                ],
+                "content": content,
             }], 
             max_tokens=entry.max_tokens, 
             model=model_path,

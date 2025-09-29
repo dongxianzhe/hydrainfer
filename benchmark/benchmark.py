@@ -59,6 +59,9 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, client:
         dataset=dataset[:num_requests_scaled], 
         request_rate=request_rate_scaled, 
     ):
+        if args.only_text:
+            entry.images = []
+            entry.images_size = []
         tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, client=client)))
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
     end_time = time.perf_counter()
@@ -165,6 +168,7 @@ if __name__ == '__main__':
     parser.add_argument("--method-name", type=str)
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--show-result", type=int, default=0, help='show some inference result to stdout')
+    parser.add_argument("--only_text", type=bool, default=False, help="if set true, benchmark only send prompt of multimodal request")
     args, remain_args = parser.parse_known_args()
     print(f'benchmark args {args}')
     main(args)
