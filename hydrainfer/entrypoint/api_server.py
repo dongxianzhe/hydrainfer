@@ -98,7 +98,7 @@ class APIServer:
             assert len(image_base64_list) <= 1, f'only support one image per request, but got {len(image_base64_list)} images'
             prompt = self.tokenizer.apply_chat_template(request.messages)
             
-            async_stream = AsyncStream()
+            async_stream = AsyncStream(interval=self.config.tpot_slo)
             self.async_streams[request_id] = async_stream
             for observer in self.observers:
                 observer.add_request(Request(
