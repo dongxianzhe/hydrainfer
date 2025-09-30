@@ -11,6 +11,7 @@ from dataclasses import dataclass, field, asdict
 from metric import OnlineRequestOutput, BenchmarkResult, MethodResults, Statistics
 from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
 from backend import get_server_proxy
+from timestamp import get_intervals
 
 def make_statistic(values: list[float]) -> Statistics:
     if len(values) == 0:
@@ -62,17 +63,14 @@ def log_result(args: argparse.Namespace, method_results: MethodResults):
     with open(args.result_path, "w") as file:
         json.dump(asdict(method_results), fp=file, indent=4)
 
-
-async def poisson_process_request_generator(
-    dataset,
-    request_rate: float,
+from typing import Iterable
+async def request_generator(
+    dataset: Iterable,
+    intervals: Iterable
 ) -> AsyncGenerator[tuple[int, SyntheticDataEntry], None]:
     for i, request in enumerate(dataset):
         yield i, request
-        if request_rate == float('inf'):
-            continue
-        interval = np.random.exponential(1.0 / request_rate)
-        await asyncio.sleep(interval)
+        await asyncio.sleep(intervals[i])
 
 
 def async_wrapper(func):
@@ -88,11 +86,12 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, request
     recv_pbar = tqdm(total = num_requests_scaled, desc='recv')
     server_proxy = get_server_proxy(args.backend)
     
+    intervals = get_intervals(method=args.request_rate_method, request_rate=request_rate_scaled)
     start_time = time.perf_counter()
     tasks = []
-    async for (i, entry) in poisson_process_request_generator(
+    async for (i, entry) in request_generator(
         dataset=dataset[:num_requests_scaled], 
-        request_rate=request_rate_scaled, 
+        intervals=intervals, 
     ):
         if args.only_text:
             entry.images = []
@@ -173,11 +172,10 @@ if __name__ == '__main__':
         '--request-rate', 
         type=float, 
         nargs='*', 
-        default=[float('inf')], 
+        default=[float('10')], 
         metavar='rate',
-        help="Number of requests per second. If this is inf, "
-        "then all the requests are sent at time 0. "
-        "Otherwise, we use Poisson process to synthesize "
+        help="Number of requests per second"
+        "we use poisson process or real work load to synthetic"
         "the request arrival times.",
     )
     parser.add_argument(
@@ -185,6 +183,13 @@ if __name__ == '__main__':
         type=int,
         default=1,
         help="scaling factor of num requests and request scale, set to the number of gpu.",
+    )
+    parser.add_argument(
+        "--request-rate-method", 
+        type=str,
+        choices=['poisson', 'azure_code', 'azure_conv', 'burstgpt', 'mooncake'], 
+        default="poisson", 
+        help="choose the request rate sampling method", 
     )
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8888)
