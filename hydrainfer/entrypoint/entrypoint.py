@@ -28,8 +28,8 @@ class EntryPoint:
     def __init__(self, config: EntryPointConfig):
         self.config = config
         self.config.zmq = parse_network_config(self.config.zmq, log_name='zmq')
-        self.cluster = Cluster(config.cluster)
         self.api_server = APIServer(config.apiserver)
+        self.cluster = Cluster(config.cluster)
         self.api_server.register(self.cluster)
         self.api_server.run()
 
