@@ -336,6 +336,7 @@ class AsyncEPDNode:
     
     async def perf_monitor_loop(self):
         while True:
+            logger.info(f'image cache usage {self.image_cache_block_manager.get_metrics()}, kv cache usage {self.kv_cache_block_manager.get_metrics()}')
             await asyncio.sleep(10)
 
     async def pull_virtual_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
