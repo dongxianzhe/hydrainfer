@@ -1,4 +1,4 @@
-from .block_allocator import BlockAllocator
+from .block_allocator import BlockAllocator, BlockAllocatorMetrics
 from .token_cache import VirtualTokenCache, TokenCache
 from .communication import CommunicationBackendManager, CommunicationBackendManagerConfig, CommunicationBackendManagerContext 
 from .token_cache_manger import TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig

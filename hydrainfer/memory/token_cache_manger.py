@@ -6,7 +6,7 @@ from typing import Optional, Literal
 from dataclasses import dataclass, field
 from hydrainfer.memory import VirtualTokenCache, TokenCache
 from hydrainfer.utils.logger import getLogger
-from hydrainfer.memory import BlockAllocator
+from hydrainfer.memory import BlockAllocator, BlockAllocatorMetrics
 from hydrainfer.utils.allocate import IncreaingAllocator
 from hydrainfer.utils.torch_utils import str2dtype, str2device, get_dtype_size
 from hydrainfer.memory import CommunicationBackendManager, CommunicationBackendManagerConfig, CommunicationBackendManagerContext
@@ -20,6 +20,12 @@ except Exception as e:
     logger.warning('ipc block migration kernel import failed')
     get_ipc_mem_handle = None
     block_migration = None
+
+
+@dataclass
+class TokenCacheManagerMetrics:
+    allocator_metrics: BlockAllocatorMetrics
+
 
 @dataclass
 class TokenCacheBlockManagerConfig:
@@ -145,3 +151,8 @@ class TokenCacheBlockManager:
     @classmethod
     def compute_n_blocks(cls, config: TokenCacheBlockManagerConfig, memory: int):
         return memory // (config.n_layers * config.n_tokens * config.block_size * config.n_heads * config.head_size * get_dtype_size(str2dtype(config.dtype)))
+
+    def get_metrics(self) -> TokenCacheManagerMetrics:
+        return TokenCacheManagerMetrics(
+            allocator_metrics=self.block_allocator.get_metrics(), 
+        )
