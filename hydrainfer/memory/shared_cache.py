@@ -1,6 +1,8 @@
+import io
 import numpy as np
 import xxhash
 from dataclasses import dataclass
+from PIL import Image
 
 
 @dataclass
@@ -76,3 +78,11 @@ def compute_hash(token_ids: list[int], block_size: int, prefix: int) -> list[int
         hashes.append(h)
     return hashes
 
+
+def compute_image_hash(image: Image.Image) -> int:
+    h = xxhash.xxh64()
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    image_np = np.array(image)
+    h.update(image_np.tobytes())
+    return h.intdigest()
