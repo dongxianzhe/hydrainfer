@@ -18,8 +18,6 @@ logger = getLogger(__name__)
 @dataclass
 class RequestProcessorConfig:
     num_request_process_workers: int = 32
-    ep_migrate: bool = False
-    pd_migrate: bool = False
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
     ignore_eos: bool = False
     debug: bool = False
@@ -133,9 +131,8 @@ class InstructionCreator(RequestProcessorComponent):
                 hashes=hashes, 
             )
             builder.append(embed)
-            if self.config.ep_migrate:
-                builder.append(EPMigrate())
-                builder.append(PullCache())
+            builder.append(EPMigrate())
+            builder.append(PullCache())
             builder.append(prefill)
         else:
             prefill = TextFill(
@@ -147,9 +144,8 @@ class InstructionCreator(RequestProcessorComponent):
                 hashes=hashes, 
             )
             builder.append(prefill)
-        if self.config.pd_migrate:
-            builder.append(PDMigrate())
-            builder.append(PullCache())
+        builder.append(PDMigrate())
+        builder.append(PullCache())
 
         last_inst = prefill
         left = n_prompt_tokens     
