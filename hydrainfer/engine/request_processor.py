@@ -10,6 +10,7 @@ from hydrainfer.request.request import Request, RequestMetaData
 from hydrainfer.engine import Instruction, TextFill, EmptyInstruction, ImageEmbed, ImageEmbedFill, InstructionList, InstructionListBuilder, MigrateRequest, RequestControlBlock, OutputTokenProcessor, BatchScheduler, PrintTextOutputTokenProcessor, LogOutputTokenProcessor, OutputTokenParams, ScenarioClassifier, PullCache, EPMigrate, PDMigrate
 from hydrainfer.model.model_factory import ModelFactoryConfig, ModelFactoryContext, getModelFactory
 from hydrainfer.model import ImageTokenCaculator
+from hydrainfer.memory import compute_hash, compute_image_hash
 from hydrainfer.utils.logger import getLogger
 logger = getLogger(__name__)
 
@@ -57,9 +58,10 @@ class InstructionCreator(RequestProcessorComponent):
         self.image_token_caculator: Optional[ImageTokenCaculator]  = vision_model_config.image_token_caculator
         self.n_layers = language_model_config.n_layers
 
-    def _insert_image_tokens(self, token_ids: list[int], images_size: list[tuple[int, int]], image_token_caculator: ImageTokenCaculator) -> tuple[list[int], int]:
+    def _insert_image_tokens(self, token_ids: list[int], image_hashes: list[int], images_size: list[tuple[int, int]], image_token_caculator: ImageTokenCaculator) -> tuple[list[int], list[int], int]:
         # replace each image_token_id with num_image_tokens image_token_id
         inserted_token_ids: list[int] = []
+        token_ids_to_hash: list[int] = []
         image_id = -1
         total_num_image_tokens = 0
         for token_id in token_ids:
@@ -68,11 +70,15 @@ class InstructionCreator(RequestProcessorComponent):
                 num_image_tokens = image_token_caculator.get_num_image_tokens(image_size=images_size[image_id])
                 total_num_image_tokens += num_image_tokens
                 inserted_token_ids.extend([self.image_token_id] * (num_image_tokens - 1))
+                token_ids_to_hash.extend([image_hashes[image_id]] * (num_image_tokens - 1))
             inserted_token_ids.append(token_id)
-        return inserted_token_ids, total_num_image_tokens
+            token_ids_to_hash.append(token_id)
+        hashes = compute_hash(token_ids=token_ids_to_hash, block_size=16, prefix=-1)
+        return hashes, inserted_token_ids, total_num_image_tokens
 
     def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
         # 1. images
+        # todo support multi image
         image: Optional[Image.Image] = None
         images_tensor: Optional[Tensor] = None 
         images_size: list[tuple[int, int]] = []
@@ -89,10 +95,12 @@ class InstructionCreator(RequestProcessorComponent):
             # for llava(next), height=width=336
             # qwen2-vl (n_patches, 1176) n_patches = round(height // 28) * round(width // 28) * 4
             images_tensor = self.processor.process(image)
+        image_hashes = [compute_image_hash(image)] if image is not None else []
+
         # 2. token_ids
         token_ids = self.tokenizer.encode(request.prompt)
         n_token_ids_images = token_ids.count(self.image_token_id)
-        token_ids, n_image_tokens = self._insert_image_tokens(token_ids, images_size, self.image_token_caculator)
+        hashes, token_ids, n_image_tokens = self._insert_image_tokens(token_ids, image_hashes, images_size, self.image_token_caculator)
         n_images = n_token_ids_images
         n_prompt_tokens = len(token_ids)
         n_text_tokens = n_prompt_tokens - n_image_tokens
@@ -109,18 +117,20 @@ class InstructionCreator(RequestProcessorComponent):
         if images_tensor is not None:
             image_token_cache_ids = list(range(n_image_tokens))
             embed = ImageEmbed(
-                pixel_values = images_tensor,
+                pixel_values=images_tensor,
                 cache_ids=image_token_cache_ids, 
                 images_size=images_size, 
+                hashes=image_hashes, 
             )
             prefill = ImageEmbedFill(
                 image_token_cache_ids=image_token_cache_ids, 
                 image_token_mask=image_overwrite_mask[:n_prompt_tokens], 
-                token_ids = token_ids[:n_prompt_tokens], 
-                position_ids = position_ids[:n_prompt_tokens], 
-                cache_ids = cache_ids[:n_prompt_tokens], 
-                sample = True, 
-                sample_dst = None, 
+                token_ids=token_ids[:n_prompt_tokens], 
+                position_ids=position_ids[:n_prompt_tokens], 
+                cache_ids=cache_ids[:n_prompt_tokens], 
+                sample=True, 
+                sample_dst=None, 
+                hashes=hashes, 
             )
             builder.append(embed)
             if self.config.ep_migrate:
@@ -129,11 +139,12 @@ class InstructionCreator(RequestProcessorComponent):
             builder.append(prefill)
         else:
             prefill = TextFill(
-                token_ids = token_ids[:n_prompt_tokens], 
-                position_ids = position_ids[:n_prompt_tokens], 
-                cache_ids = cache_ids[:n_prompt_tokens], 
-                sample = True, 
-                sample_dst = None, 
+                token_ids=token_ids[:n_prompt_tokens], 
+                position_ids=position_ids[:n_prompt_tokens], 
+                cache_ids=cache_ids[:n_prompt_tokens], 
+                sample=True, 
+                sample_dst=None, 
+                hashes=hashes, 
             )
             builder.append(prefill)
         if self.config.pd_migrate:
@@ -150,6 +161,7 @@ class InstructionCreator(RequestProcessorComponent):
                 cache_ids = cache_ids[left:right], 
                 sample = True, 
                 sample_dst = None, 
+                hashes=None, 
             )
             builder.append(decode)
             last_inst.sample_dst = decode
@@ -188,6 +200,7 @@ class ScenarioPredictor(RequestProcessorComponent):
         rcb.scenario_type = scenario_type
         return rcb
 
+
 class OutputTokenProcessorComponent(RequestProcessorComponent):
     def __init__(self, config: RequestProcessorConfig):
         self.config = config
@@ -198,6 +211,7 @@ class OutputTokenProcessorComponent(RequestProcessorComponent):
         for output_token_processor in params.output_token_processors:
             rcb.register_output_token_processor(output_token_processor)
         return rcb
+
 
 class SamplingParamsProcess(RequestProcessorComponent):
     def __init__(self, config: RequestProcessorConfig):
@@ -211,6 +225,7 @@ class SamplingParamsProcess(RequestProcessorComponent):
         if not self.config.ignore_eos:
             rcb.sampling_params.eos_token_ids.append(self.eos_token_id)
         return rcb
+
 
 class RequestProcessor:
     def __init__(self, config: RequestProcessorConfig):

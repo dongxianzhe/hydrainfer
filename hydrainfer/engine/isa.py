@@ -29,6 +29,7 @@ class Fill(Instruction):
     sample is True
     sample dst is next Fill instruction used in decode stage
 
+    hashes are used to allocate the prefix cache
     decode Fill's token_ids is None when request created and set when autoregressing
     """
     def __init__(
@@ -37,7 +38,8 @@ class Fill(Instruction):
         position_ids: list[int], 
         cache_ids: list[int], 
         sample: bool, 
-        sample_dst: Optional["Fill"]
+        sample_dst: Optional["Fill"], 
+        hashes: Optional[list[int]], 
     ):
         super().__init__()
         self.token_ids = token_ids
@@ -45,6 +47,7 @@ class Fill(Instruction):
         self.cache_ids = cache_ids
         self.sample = sample
         self.sample_dst = sample_dst
+        self.hashes = hashes
         self.is_chunked = False # used to control weather return sample token to api server
 
 
@@ -55,9 +58,10 @@ class TextFill(Fill):
         position_ids: list[int], 
         cache_ids: list[int], 
         sample: bool, 
-        sample_dst: Optional[Fill]
+        sample_dst: Optional[Fill], 
+        hashes: Optional[list[int]], 
     ):
-        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
+        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst, hashes)
 
     def chunk_prefill(self, chunk_size: int):
         """
@@ -70,6 +74,7 @@ class TextFill(Fill):
             cache_ids = self.cache_ids[chunk_size:], 
             sample = self.sample, 
             sample_dst = self.sample_dst, 
+            hash=self.hashes, 
         )
         self.insert_next(rest_text_fill)
         self.token_ids = self.token_ids[:chunk_size]
@@ -97,9 +102,10 @@ class ImageEmbedFill(Fill):
         position_ids: list[int], 
         cache_ids: list[int], 
         sample: bool, 
-        sample_dst: Optional[Fill]
+        sample_dst: Optional[Fill], 
+        hashes: Optional[list[int]], 
     ):
-        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst)
+        super().__init__(token_ids, position_ids, cache_ids, sample, sample_dst, hashes)
         self.image_token_cache_ids = image_token_cache_ids # 0, 1, 2, ..., 575 
         self.image_token_mask = image_token_mask
 
@@ -118,6 +124,7 @@ class ImageEmbedFill(Fill):
             cache_ids = self.cache_ids[chunk_size:], 
             sample = self.sample, 
             sample_dst = self.sample_dst, 
+            hashes=self.hashes, 
         )
         self.insert_next(rest_fill)
         self.image_token_cache_ids = self.image_token_cache_ids[:num_image_token]
@@ -141,11 +148,13 @@ class ImageEmbed(Instruction):
         pixel_values: Tensor, 
         cache_ids: list[int], 
         images_size: list[tuple[int, int]], 
+        hashes: Optional[list[int]], 
     ):
         super().__init__()
         self.pixel_values = pixel_values
         self.cache_ids = cache_ids
         self.images_size = images_size
+        self.hashes = hashes
 
     def __repr__(self):
         return "IE"
