@@ -69,12 +69,16 @@ class BatchSchedulerProfiler:
         encode_inst = ImageEmbed(
             pixel_values = images_tensor, 
             cache_ids = list(range(0, n_image_tokens)), 
-            images_size=[(height, width)] # original image size
+            images_size=[(height, width)],  # original image size
+            hashes=None, 
         )
 
         batch = BatchRequest()
         for _ in range(batch_size):
             batch.append(self._prepare_rcb(encode_inst))
+        for rcb, _ in batch:
+            rcb.virtual_image_cache = self.context.image_cache_block_manager.allocate_virtual_cache()
+            self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, n_image_tokens)
         return batch
 
     def _prepare_prefill_batch(self, batch_size: int) -> BatchRequest:
@@ -90,6 +94,9 @@ class BatchSchedulerProfiler:
         batch = BatchRequest()
         for _ in range(batch_size // n_prompt_tokens_per_requests):
             batch.append(self._prepare_rcb(prefill_inst))
+        for rcb, _ in batch:
+            rcb.virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache()
+            self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, n_prompt_tokens_per_requests)
         return batch
 
     def _prepare_decode_batch(self, batch_size: int, n_cache: int = 512) -> BatchRequest:
@@ -108,6 +115,8 @@ class BatchSchedulerProfiler:
             rcb = self._prepare_rcb(decode_inst)
             rcb.virtual_kv_cache = shared_virtual_kv_cache # use shared kv cache to avoid OOM
             batch.append(rcb)
+        for rcb, _ in batch:
+            rcb.virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache()
         return batch
 
     def _binary_search_max_batch_size(self, left: int, right: int, criterion: Callable[[int], bool]):
@@ -122,7 +131,9 @@ class BatchSchedulerProfiler:
             except Exception as e:
                 right = mid - 1
                 if self.config.debug:
-                    logger.debug(e)
+                    import traceback
+                    traceback.print_exc()
+
         return left
 
     def _free_cache(self, batch: BatchRequest):

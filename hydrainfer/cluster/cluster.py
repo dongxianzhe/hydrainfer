@@ -69,9 +69,13 @@ class Cluster:
             # todo check available memory and profiler
             if num_gpus == 1:
                 config.n_epdnode = 1
-            else:
+            elif num_gpus == 2:
                 config.n_epnode = num_gpus // 2
                 config.n_dnode = num_gpus - config.n_epnode
+            elif num_gpus == 3:
+                config.n_enode = 1
+                config.n_pnode = 1
+                config.n_dnode = 1
             logger.info(f"auto set node n_enode={config.n_enode} n_epnode={config.n_epnode} n_ednode={config.n_ednode} n_epdnode={config.n_epdnode} n_pnode={config.n_pnode} n_pdnode={config.n_pdnode} n_dnode={config.n_dnode}")
 
         instance_data_parallel_config_list: list[InstanceDataParallelConfig] = [

@@ -24,7 +24,7 @@ class SharedCache:
         self.block_id_to_hash: list[int] =  list(range(config.n_blocks))
 
         self.blocks: list[SharedBlock] = [SharedBlock(0) for i in range(config.n_blocks)]
-        self.to_be_evicted = set()
+        self.to_be_evicted = set(range(config.n_blocks))
 
     def match(self, hashes: list[int]) -> list[int]:
         return [self.hash_to_block_id.get(hash, -1) for hash in hashes]
@@ -59,6 +59,15 @@ class SharedCache:
                 del self.hash_to_block_id[hash]
             self.block_id_to_hash[block_id] = -1
         return evicted_blocks
+
+    def allocate(self, n_blocks: int) -> list[int]:
+        return self.evict(n_blocks)
+
+    def get_num_avaiable_blocks(self) -> int:
+        return len(self.to_be_evicted)
+
+    def is_write_safe(self, block_id: int) -> int:
+        return self.blocks[block_id].ref_count == 1
 
 
 def compute_block_hash(token_ids: list[int], prefix: int = -1) -> int:

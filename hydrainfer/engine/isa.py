@@ -50,6 +50,9 @@ class Fill(Instruction):
         self.hashes = hashes
         self.is_chunked = False # used to control weather return sample token to api server
 
+    def chunk_prefill(self, chunk_size: int): 
+        raise NotImplementedError()
+
 
 class TextFill(Fill):
     def __init__(

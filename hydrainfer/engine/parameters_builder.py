@@ -60,7 +60,7 @@ class LanguageModelParametersBuilder:
             self.selected_token_ids.append(len(self.token_ids) - 1)
 
         virtual_kv_cache = rcb.virtual_kv_cache
-        slot_ids = self.kv_cache_block_manager.set(virtual_kv_cache, inst.cache_ids)
+        slot_ids = self.kv_cache_block_manager.v2p(virtual_kv_cache, inst.cache_ids)
         self.attention_params_builder.add_request(
             q_seq_len = len(inst.token_ids), 
             kv_seq_len = virtual_kv_cache.n_cache_tokens, 

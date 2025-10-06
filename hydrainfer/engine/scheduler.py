@@ -36,11 +36,11 @@ class BatchSchedulerContext:
 class BatchScheduler:
     def __init__(self, config: BatchSchedulerConfig, context: BatchSchedulerContext):
         self.config = config
+        self.context = context
         self.profiler = context.profiler
         self.image_budgets = self.profiler.profile_image_budgets()
         self.token_budgets = self.profiler.profile_token_budgets()
 
-        # self.waiting = Queue()
         self.waiting = deque()
 
         self.running: list[RequestControlBlock] = []
@@ -120,51 +120,73 @@ class BatchScheduler:
         decode_seqs : list[RequestControlBlock] = []
         this_step: list[RequestControlBlock] = []
         next_step: list[RequestControlBlock] = []
-        # 1. classify seqs
-        for seq in self.running:
-            inst = seq.instructions.curr
+
+        # 1. allocate cache and skip some chunked prefill tasks because of prefix cache matching
+        for rcb in self.running:
+            inst = rcb.current_instruction()
+            if isinstance(inst, Fill):
+                if rcb.virtual_kv_cache is None:
+                    rcb.virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache(inst.hashes)
+                    num_prefix_cache_matched = rcb.virtual_kv_cache.n_cache_tokens
+                    if num_prefix_cache_matched > 0:
+                        assert num_prefix_cache_matched <= len(inst.token_ids)
+                        if num_prefix_cache_matched < len(inst.token_ids):
+                            inst.chunk_prefill(chunk_size=num_prefix_cache_matched)
+                        rcb.step()
+                inst = rcb.current_instruction()
+                if isinstance(inst, Fill):
+                    self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, max(rcb.virtual_kv_cache.n_cache_tokens, max(inst.cache_ids) + 1))
+            elif isinstance(inst, ImageEmbed):
+                if rcb.virtual_image_cache is None:
+                    rcb.virtual_image_cache = self.context.image_cache_block_manager.allocate_virtual_cache()
+                self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, max(rcb.virtual_image_cache.n_cache_tokens, max(inst.cache_ids) + 1))
+
+        # 2. classify seqs
+        for rcb in self.running:
+            inst = rcb.current_instruction()
             if isinstance(inst, Fill):
                 if len(inst.token_ids) == 1:
-                    decode_seqs.append(seq)
+                    decode_seqs.append(rcb)
                 else:
-                    prefill_seqs.append(seq)
+                    prefill_seqs.append(rcb)
             elif isinstance(inst, ImageEmbed):
-                embed_seqs.append(seq)
+                embed_seqs.append(rcb)
             else:
-                this_step.append(seq)
+                this_step.append(rcb)
 
         # 2. batch image embed
-        for seq in embed_seqs:
+        for rcb in embed_seqs:
             if batch_embed_images < self.image_budgets:
-                this_step.append(seq)
+                this_step.append(rcb)
                 batch_embed_images += 1 # todo cope with multi image
             else:
-                next_step.append(seq)
+                next_step.append(rcb)
 
         # 3. batch prefill and decode
         fill_seqs = prefill_seqs + decode_seqs if self.config.priority == 'prefill' else decode_seqs + prefill_seqs
             
-        for seq in fill_seqs:
-            inst = seq.instructions.curr
+        for rcb in fill_seqs:
+            inst = rcb.current_instruction()
             n_tokens = len(inst.token_ids)
             if batch_fill_tokens + n_tokens <= self.token_budgets:
-                this_step.append(seq)
+                this_step.append(rcb)
                 batch_fill_tokens += n_tokens
             elif batch_fill_tokens < self.token_budgets and n_tokens > 1 and self.config.chunked_prefill and (isinstance(inst, TextFill) or isinstance(inst, ImageEmbedFill)): # if it is prefill and we can chunk part of it
+                # todo chunk_size align to block_size to make prefix cache
                 chunk_size = self.token_budgets - batch_fill_tokens
                 inst.chunk_prefill(chunk_size)
-                this_step.append(seq)
+                this_step.append(rcb)
                 batch_fill_tokens += chunk_size
             elif batch_fill_tokens == 0: # avoid the prefill larger than token_budgets block
-                this_step.append(seq)
+                this_step.append(rcb)
                 batch_fill_tokens += n_tokens
             else:
-                next_step.append(seq)
+                next_step.append(rcb)
 
         if self.config.debug:
             logger.debug(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
-            logger.debug(f'sid : ' + ' '.join(f'{seq.sid: 2}'                 for seq in this_step))
-            logger.debug(f'inst: ' + ' '.join(f'{seq.instructions.curr}' for seq in this_step))
+            logger.debug(f'sid : ' + ' '.join(f'{rcb.sid: 2}'                 for rcb in this_step))
+            logger.debug(f'inst: ' + ' '.join(f'{rcb.current_instruction()}' for rcb in this_step))
             logger.debug(f'batch images {batch_embed_images}')
             logger.debug(f'batch tokens {batch_fill_tokens}')
 

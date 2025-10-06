@@ -106,12 +106,27 @@ class BatchFillExecutor(Executor):
         if len(batch) == 0:
             return EmptyFuture()
 
-        # 1. allocate memory if necessary
-        for rcb, _ in batch:
-            if rcb.virtual_kv_cache is None:
-                rcb.virtual_kv_cache = self.block_mangaer.allocate_virtual_cache()
+        # 1. set kv cache logically for prefix caching
+        block_size = self.context.kv_cache_block_manager.block_size
+        for rcb, inst in batch:
+            rcb: RequestControlBlock
+            inst: Fill
+            if inst.hashes is None:
+                continue
+            hashes: list[int] = []
+            virtual_block_ids: list[int] = []
+            for virtual_cache_id in inst.cache_ids:
+                # we set block hash to prefix cache when finished each block computation
+                if virtual_cache_id % block_size != block_size - 1:
+                    continue
+                virtual_block_id = virtual_cache_id // block_size
+                if virtual_block_id >= len(inst.hashes):
+                    continue # todo we don't support prefix cache for decode token now
+                hashes.append(inst.hashes[virtual_block_id])
+                virtual_block_ids.append(virtual_block_id)
+            self.context.kv_cache_block_manager.set_blocks(rcb.virtual_kv_cache, virtual_block_ids, hashes)
 
-        # 2. filter out request which need image embed
+        # 2. set kv cache physically
         builder = LanguageModelParametersBuilder(
             image_block_manager=self.image_block_manager, 
             kv_cache_block_manager=self.block_mangaer, 
@@ -137,6 +152,7 @@ class BatchFillExecutor(Executor):
             batch.step()
             return EmptyFuture()
 
+        # 3. process sampled tokens
         token_time = time.perf_counter()
         i = 0
         for rcb, inst in batch:
@@ -193,9 +209,6 @@ class BatchImageEmbedExecutor(Executor):
     def execute(self, batch: BatchRequest) -> Future:
         if len(batch) == 0:
             return EmptyFuture()
-        for rcb, _ in batch:
-            if rcb.virtual_image_cache is None:
-                rcb.virtual_image_cache = self.block_manager.allocate_virtual_cache()
 
         new_cache_slots: list[int] = []
         images_size: list[tuple[int, int]] = []
@@ -204,7 +217,8 @@ class BatchImageEmbedExecutor(Executor):
             pixel_values = inst.pixel_values.to(self.dtype).to(self.device) # (n_images, n_channels, width, height)
             batch_pixel_values.append(pixel_values)
             inst.pixel_values = None
-            slot_ids = self.block_manager.set(rcb.virtual_image_cache, inst.cache_ids) 
+            slot_ids = self.block_manager.v2p(rcb.virtual_image_cache, inst.cache_ids)
+            # slot_ids = self.block_manager.set(rcb.virtual_image_cache, inst.cache_ids) 
             new_cache_slots += slot_ids 
             images_size += inst.images_size
 
