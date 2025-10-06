@@ -1,11 +1,5 @@
 defaults:
   - node
 
-batch_scheduler:
-  max_running_requests: 6144
-  max_overload_requests: 0
-request_processor:
-  ep_migrate: True
-  pd_migrate: True
 batch_scheduler_profiler:
   tpot_slo: 1

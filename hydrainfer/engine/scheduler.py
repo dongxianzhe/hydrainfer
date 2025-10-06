@@ -5,16 +5,23 @@ from queue import Queue
 from typing import Literal, Optional, Union
 from dataclasses import dataclass, fields
 from hydrainfer.engine import Instruction, Fill, TextFill, EmptyInstruction, ImageEmbedFill, ImageEmbed, RequestControlBlock, BatchSchedulerProfiler, BatchRequest, PullCache
+from hydrainfer.memory import TokenCacheBlockManager
 from hydrainfer.utils.allocate import IncreaingAllocator
 import argparse
 from hydrainfer.utils.logger import getLogger
 logger = getLogger(__name__)
 
+
+@dataclass
+class BatchSchedulerMetrics:
+    n_running_requests: int
+    n_requests_waiting_migrate: int
+
+
 @dataclass
 class BatchSchedulerConfig:
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
-    max_overload_requests: int = 0
     chunked_prefill: bool = True
     debug: bool = False
 
@@ -22,6 +29,8 @@ class BatchSchedulerConfig:
 @dataclass
 class BatchSchedulerContext:
     profiler: BatchSchedulerProfiler
+    kv_cache_block_manager: TokenCacheBlockManager
+    image_cache_block_manager: TokenCacheBlockManager
 
 
 class BatchScheduler:
@@ -38,12 +47,14 @@ class BatchScheduler:
         self.step_cnt = 0
         self.sid_allocator = IncreaingAllocator(first_value=1)
 
+        self.max_overload_requests = config.max_running_requests
+        self.running_cnt = 0
         self.migrating_cnt = 0
 
     def migrating_acquire(self):
         # migrating_acquire and migrating_release are used to count how many request need to be pulled
         # we need this count because avoid sender OOM when there are too many waiting migrate requests and running requests
-        assert self.migrating_cnt < self.config.max_running_requests + self.config.max_overload_requests, f'invalid acquire'
+        assert self.migrating_cnt < self.config.max_running_requests + self.max_overload_requests, f'invalid acquire'
         self.migrating_cnt += 1
 
     def migrating_release(self):
@@ -94,10 +105,11 @@ class BatchScheduler:
             self.schedule_running(rcb)
         # we are risking dead pull cache lock when ED Node' all requests are waiting P Node pull and P Node's all requests are waiting ED Node pull cache
         # so we need to limit the number of new requests
-        while len(self.running) < self.config.max_running_requests - self.migrating_cnt + self.config.max_overload_requests and len(self.waiting) > 0 and isinstance(self.waiting[0].current_instruction(), PullCache):
+        while len(self.running) < self.config.max_running_requests - self.migrating_cnt + self.max_overload_requests and len(self.waiting) > 0 and isinstance(self.waiting[0].current_instruction(), PullCache):
             rcb = self.waiting.popleft()
             self.schedule_running(rcb)
 
+        self.running_cnt = len(self.running)
         if len(self.running) == 0:
             return []
 
@@ -158,3 +170,9 @@ class BatchScheduler:
 
         self.running = next_step
         return BatchRequest(this_step)
+
+    def get_metrics(self) -> BatchSchedulerMetrics:
+        return BatchSchedulerMetrics(
+            n_running_requests=self.running_cnt, 
+            n_requests_waiting_migrate = self.migrating_cnt, 
+        )

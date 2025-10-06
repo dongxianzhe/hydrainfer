@@ -1,5 +1,2 @@
 defaults:
   - node
-
-batch_scheduler_profiler:
-  tpot_slo: 0.04

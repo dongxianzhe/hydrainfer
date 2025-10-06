@@ -1,6 +1,4 @@
-batch_policy: "continuousbatch"
 priority: "decode"
-max_running_requests: 24
-max_overload_requests: 0
+max_running_requests: -1
 chunked_prefill: True
 debug: False

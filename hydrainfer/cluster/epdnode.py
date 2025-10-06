@@ -128,6 +128,16 @@ class AsyncEPDNode:
         self.kv_cache_block_manager = TokenCacheBlockManager(kv_cache_config, TokenCacheBlockManagerContext(rank=context.rank, rank2host=self.rank2host)) if context.node_type.has_kv_cache else None
         self.image_cache_block_manager = TokenCacheBlockManager(image_cache_config, TokenCacheBlockManagerContext(rank=context.rank, rank2host=self.rank2host)) if context.node_type.has_image_cache else None
 
+        if self.config.batch_scheduler.max_running_requests == -1:
+            # suppose avg 2048 token for each request
+            max_running_requests = 1024
+            if context.node_type.has_kv_cache:
+                max_running_requests = min(max_running_requests, kv_cache_config.n_blocks // (2048 // kv_cache_config.block_size))
+            if context.node_type.has_image_cache:
+                max_running_requests = min(max_running_requests, image_cache_config.n_blocks // (2048 // image_cache_config.block_size))
+            self.config.batch_scheduler.max_running_requests = max_running_requests
+            logger.info(f'auto set batch scheduler max_running_requests {self.config.batch_scheduler.max_running_requests}')
+
     def _update_worker(self, context: NodeContext):
         worker_config = WorkerConfig(model=self.config.model)
         self.worker = getWorker(worker_config, WorkerContext(has_vision_model=context.node_type.has_vision_model, has_language_model=context.node_type.has_language_model))
@@ -157,6 +167,8 @@ class AsyncEPDNode:
             self.config.batch_scheduler, 
             BatchSchedulerContext(
                 profiler = self.profiler, 
+                kv_cache_block_manager=self.kv_cache_block_manager, 
+                image_cache_block_manager=self.image_cache_block_manager, 
             ))
 
         self.request_processor = RequestProcessor(self.config.request_processor)
@@ -336,7 +348,11 @@ class AsyncEPDNode:
     
     async def perf_monitor_loop(self):
         while True:
-            logger.info(f'image cache usage {self.image_cache_block_manager.get_metrics()}, kv cache usage {self.kv_cache_block_manager.get_metrics()}')
+            logger.info(
+                f'image cache usage {self.image_cache_block_manager.get_metrics()}, '
+                f'kv cache usage {self.kv_cache_block_manager.get_metrics()}, '
+                f'{self.batch_scheduler.get_metrics(), }'
+            )
             await asyncio.sleep(10)
 
     async def pull_virtual_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
