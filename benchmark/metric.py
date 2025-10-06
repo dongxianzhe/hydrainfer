@@ -39,8 +39,8 @@ class BenchmarkResult:
     # The following data is derived from the data above.
     total_tokens: int = 0
     total_success: int = 0
-    token_throughput: int = 0
-    request_throughput: int = 0
+    token_throughput: float = 0
+    request_throughput: float = 0
     latencies: list[float] = field(default_factory=list)
     ttfts: list[float] = field(default_factory=list)
     tpots: list[float] = field(default_factory=list)
@@ -51,7 +51,7 @@ class BenchmarkResult:
 
 @dataclass
 class MethodResults:
-    method_name: str
+    method_name: Optional[str]
     datasets: dict[str, int]
     model: str
     model_path: str

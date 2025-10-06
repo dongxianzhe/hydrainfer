@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from PIL import Image
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor
+from typing import Optional, Union
 
 
 def encode_base64_content_from_image(image: Image.Image) -> str:
@@ -20,9 +21,9 @@ def encode_base64_content_from_image(image: Image.Image) -> str:
 @dataclass
 class SyntheticDataEntry:
     prompt: str
-    images: list[str]
+    images: Optional[list[str]]
     max_tokens: int
-    images_size: list[tuple[int, int]] # (width, height)
+    images_size: list[Union[tuple[int, int], list[int]]] # (width, height) we need union because dump json wil convert tuple to list but load json can't convert list to tuple
     dataset: str
 
 
