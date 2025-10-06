@@ -345,15 +345,19 @@ class AsyncEPDNode:
                 await asyncio.sleep(0.001)
         except Exception as e:
             traceback.print_exc()
+            ray.actor.exit_actor()
     
     async def perf_monitor_loop(self):
-        while True:
-            logger.info(
-                f'image cache usage {self.image_cache_block_manager.get_metrics()}, '
-                f'kv cache usage {self.kv_cache_block_manager.get_metrics()}, '
-                f'{self.batch_scheduler.get_metrics(), }'
-            )
-            await asyncio.sleep(10)
+        try:
+            while True:
+                logger.info(
+                    f'image cache usage {self.image_cache_block_manager.get_metrics()}, '
+                    f'kv cache usage {self.kv_cache_block_manager.get_metrics()}, '
+                    f'{self.batch_scheduler.get_metrics(), }'
+                )
+                await asyncio.sleep(5)
+        except Exception as e:
+            traceback.print_exc()
 
     async def pull_virtual_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
         block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
@@ -362,6 +366,7 @@ class AsyncEPDNode:
     def _migrate_virtual_cache(self, src_node_actor_handle: ray.actor.ActorHandle, src_virtual_cache: VirtualTokenCache, is_kv_cache: bool) -> VirtualTokenCache:
         block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
 
+        # todo support prefix cache after migrate
         dst_virtual_cache = new_virtual_cache = block_manager.allocate_virtual_cache()
         block_manager.realloc(dst_virtual_cache, src_virtual_cache.n_cache_tokens)
 
@@ -410,6 +415,7 @@ class AsyncEPDNode:
             return
         for rcb, inst in batch:
             rcb.step()
+            assert isinstance(rcb.current_instruction(), PullCache)
             loadbalancer = self.ep_loadbalancer if isinstance(inst, EPMigrate) else self.pd_loadbalancer
             node = loadbalancer.choice(key=rcb.scenario_type)
             if node.id == self.actor_id:

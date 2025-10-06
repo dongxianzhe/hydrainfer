@@ -10,6 +10,7 @@ from hydrainfer.memory import BlockAllocator, BlockAllocatorMetrics
 from hydrainfer.utils.allocate import IncreaingAllocator
 from hydrainfer.utils.torch_utils import str2dtype, str2device, get_dtype_size
 from hydrainfer.memory import CommunicationBackendManager, CommunicationBackendManagerConfig, CommunicationBackendManagerContext
+from hydrainfer.memory import SharedCache, SharedCacheConfig
 
 logger = getLogger(__name__)
 
@@ -25,6 +26,7 @@ except Exception as e:
 @dataclass
 class TokenCacheManagerMetrics:
     allocator_metrics: BlockAllocatorMetrics
+    cache_hit_rate: float
 
 
 @dataclass
@@ -84,12 +86,38 @@ class TokenCacheBlockManager:
                 migrate_block_tensors_view=self.migrate_block_tensors_view, 
                 rank2host=context.rank2host, 
             ))
+        self.shared_cache = SharedCache(config=SharedCacheConfig(n_blocks=self.n_blocks))
 
-    def allocate_virtual_cache(self) -> VirtualTokenCache:
+        self.total_block_queried = 0.
+        self.total_block_matched = 0.
+
+    def get_num_avaiable_blocks(self) -> int:
+        return self.block_allocator.get_num_avaiable_blocks() + self.shared_cache.get_num_avaiable_blocks()
+
+    def _allocate_new_blocks(self, n_blocks: int) -> list[int]:
+        block_ids = self.block_allocator.allocate(n_blocks)
+        if len(block_ids) < n_blocks:
+            block_ids += self.shared_cache.allocate(n_blocks)
+        assert len(block_ids) == n_blocks, 'not enough blocks'
+        self.shared_cache.pin(block_ids)
+        return block_ids
+        
+
+    def allocate_virtual_cache(self, hashes: Optional[list[int]]=None) -> VirtualTokenCache:
+        if hashes is None:
+            n_cached_tokens = 0
+            matched_block_ids = [] 
+        else:
+            block_ids: list[int] = self.shared_cache.match(hashes)
+            matched_block_ids: list[int] = block_ids[: block_ids.index(-1) if -1 in block_ids else len(block_ids)]
+            self.shared_cache.pin(matched_block_ids)
+            n_cached_tokens = len(matched_block_ids) * self.block_size
+            self.total_block_matched += len(matched_block_ids)
+            self.total_block_queried += len(hashes)
         return VirtualTokenCache(
             vid = self.vid_allocator.allocate(), 
-            n_cache_tokens = 0, 
-            block_table = [], 
+            n_cache_tokens = n_cached_tokens, 
+            block_table = matched_block_ids, 
             memory_handle = self.memory_handle,
             rank=self.rank,
             n_blocks_of_cache_manager=self.n_blocks
@@ -104,38 +132,29 @@ class TokenCacheBlockManager:
             physical_cache_ids.append(slot_id)
         return physical_cache_ids
 
-    def set(self, virtual_cache: VirtualTokenCache, virtual_cache_ids: list[int]) -> list[int]:
-        # 1. try to allocate memory if block is not enough
-        n_tokens = max(virtual_cache_ids) + 1
-        n_blocks = (n_tokens + self.block_size - 1) // self.block_size
-        if len(virtual_cache.block_table) < n_blocks:
-            virtual_cache.block_table += self.block_allocator.allocate(n_blocks - len(virtual_cache.block_table))
-        if len(virtual_cache.block_table) < n_blocks:
-            raise Exception(f'not enough cache, total n_blocks {self.n_blocks}, virtual cache need {n_blocks} allready has {len(virtual_cache.block_table)}')
-        # 2. set vitual cache
-        virtual_cache.n_cache_tokens = max(virtual_cache.n_cache_tokens, n_tokens)
+    def set_blocks(self, virtual_cache: VirtualTokenCache, virtual_block_ids: list[int], hashes: list[int]):
+        assert len(virtual_block_ids) == len(hashes)
+        phyical_block_ids: list[int] = [virtual_cache.block_table[virtual_block_id] for virtual_block_id in virtual_block_ids]
+        self.shared_cache.insert(hashes=hashes, block_ids=phyical_block_ids)
 
-        # 3. get phyical cache slot id
-        return self.v2p(virtual_cache, virtual_cache_ids)
-
-    def free_blocks(self, virtual_cache: VirtualTokenCache, virtual_block_ids: list[int]):
-        for virtual_block_id in sorted(virtual_block_ids, reverse=True):
+    def set(self, virtual_cache: VirtualTokenCache, virtual_cache_ids: list[int], hashes: list[int]):
+        assert len(virtual_cache_ids) == len(hashes)
+        assert max(virtual_cache_ids) + 1 < virtual_cache.n_cache_tokens
+        physical_block_ids: list[int] = []
+        for virtual_cache_id in virtual_cache_ids:
+            virtual_block_id = virtual_cache_id // self.block_size
             physical_block_id = virtual_cache.block_table[virtual_block_id]
-            self.block_allocator.free([physical_block_id])
-            if virtual_block_id == len(virtual_cache.block_tables) - 1:
-                virtual_cache.n_cache_tokens -= (virtual_cache.n_cache_tokens + self.block_size - 1) % self.block_size + 1
-            else:
-                virtual_cache.n_cache_tokens -= self.block_size
-            del virtual_cache.block_table[virtual_block_id]
+            assert self.shared_cache.is_write_safe(physical_block_id), 'copy on write is not supported now'
+        self.shared_cache.insert(hashes=hashes, block_ids=physical_block_ids)
 
     def realloc(self, virtual_cache: VirtualTokenCache, n_tokens: int):
         if n_tokens > virtual_cache.n_cache_tokens:
             n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
-            virtual_cache.block_table += self.block_allocator.allocate(n_need_blocks - len(virtual_cache.block_table))
+            virtual_cache.block_table += self._allocate_new_blocks(n_need_blocks - len(virtual_cache.block_table))
             virtual_cache.n_cache_tokens = n_tokens
         else:
             n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
-            self.block_allocator.free(virtual_cache.block_table[n_need_blocks:])
+            self.shared_cache.unpin(virtual_cache.block_table[n_need_blocks:])
             virtual_cache.block_table = virtual_cache.block_table[:n_need_blocks]
             virtual_cache.n_cache_tokens = n_tokens
 
@@ -155,4 +174,6 @@ class TokenCacheBlockManager:
     def get_metrics(self) -> TokenCacheManagerMetrics:
         return TokenCacheManagerMetrics(
             allocator_metrics=self.block_allocator.get_metrics(), 
+            cache_hit_rate=self.total_block_matched / self.total_block_queried if self.total_block_queried 
+            != 0 else 0., 
         )

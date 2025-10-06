@@ -23,12 +23,10 @@ class BlockAllocator:
         )
 
     def allocate(self, n_blocks: int) -> list[int]:
+        # allocate at most n_blocks, return all blocks if not enough 
         if n_blocks == 0:
             return []
-        if n_blocks > len(self.free_blocks):
-            raise Exception(f'not enough blocks, need {n_blocks}')
-            # not enough block to allocate
-            return []
+        n_blocks = min(n_blocks, len(self.free_blocks))
 
         blocks, self.free_blocks = self.free_blocks[-n_blocks:], self.free_blocks[:-n_blocks]
         return blocks
@@ -36,3 +34,6 @@ class BlockAllocator:
     def free(self, blocks: list[int]):
         self.free_blocks += blocks
         assert len(self.free_blocks) <= self.total_blocks
+
+    def get_num_avaiable_blocks(self) -> int:
+        return len(self.free_blocks)

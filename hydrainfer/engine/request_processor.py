@@ -55,6 +55,7 @@ class InstructionCreator(RequestProcessorComponent):
         self.image_token_id = vision_model_config.image_token_id
         self.image_token_caculator: Optional[ImageTokenCaculator]  = vision_model_config.image_token_caculator
         self.n_layers = language_model_config.n_layers
+        self.block_size = 16
 
     def _insert_image_tokens(self, token_ids: list[int], image_hashes: list[int], images_size: list[tuple[int, int]], image_token_caculator: ImageTokenCaculator) -> tuple[list[int], list[int], int]:
         # replace each image_token_id with num_image_tokens image_token_id
@@ -71,7 +72,7 @@ class InstructionCreator(RequestProcessorComponent):
                 token_ids_to_hash.extend([image_hashes[image_id]] * (num_image_tokens - 1))
             inserted_token_ids.append(token_id)
             token_ids_to_hash.append(token_id)
-        hashes = compute_hash(token_ids=token_ids_to_hash, block_size=16, prefix=-1)
+        hashes = compute_hash(token_ids=token_ids_to_hash, block_size=self.block_size, prefix=-1)
         return hashes, inserted_token_ids, total_num_image_tokens
 
     def process(self, request: Request, rcb: RequestControlBlock, params: RequestProcessParameters) -> RequestControlBlock:
