@@ -84,7 +84,8 @@ class BatchSchedulerProfiler:
             position_ids = list(range(n_prompt_tokens_per_requests)), 
             cache_ids = list(range(n_prompt_tokens_per_requests)), 
             sample=True, 
-            sample_dst=None
+            sample_dst=None, 
+            hashes=None, 
         )
         batch = BatchRequest()
         for _ in range(batch_size // n_prompt_tokens_per_requests):
@@ -97,7 +98,8 @@ class BatchSchedulerProfiler:
             position_ids = [n_cache], 
             cache_ids = [n_cache], 
             sample=True, 
-            sample_dst=None
+            sample_dst=None, 
+            hashes=None,
         )
         batch = BatchRequest()
 
