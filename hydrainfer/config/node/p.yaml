@@ -1,8 +1,5 @@
 defaults:
   - node
 
-request_processor:
-  ep_migrate: False
-  pd_migrate: True
 batch_scheduler_profiler:
   tpot_slo: 1
