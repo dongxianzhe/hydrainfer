@@ -103,6 +103,8 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, request
     assert len(outputs) > 0
 
     return BenchmarkResult(
+        total_request = num_requests_scaled, 
+        request_rate_method = args.request_rate_method, 
         start_time = start_time, 
         end_time = end_time, 
         request_rate = request_rate, 

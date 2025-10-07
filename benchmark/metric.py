@@ -32,6 +32,8 @@ class OnlineRequestOutput:
 
 @dataclass
 class BenchmarkResult:
+    total_request: int
+    request_rate_method: str
     request_rate: float = 0
     start_time: float = 0
     end_time: float = 0
