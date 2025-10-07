@@ -31,6 +31,7 @@ additional_server_configs=(
 )
 declare -A methods=(
     ["ours"]="start_hydrainfer_server"
+    ["vllm"]="start_vllm_server"
 )
 trace_configs=(
     "--textcaps=1 --pope=0 --mme=0 --text_vqa=0 --vizwiz_vqa=0 --request-rate-method=poisson"
@@ -47,20 +48,36 @@ trace_configs=(
 ####################################################################
 
 start_hydrainfer_server(){
+    CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
+    RAY_DEDUP_LOGS=0 \
+        conda run -n hydrainfer --no-capture-output \
+        python -m hydrainfer.entrypoint.entrypoint \
+        model.path=$MODEL_PATH \
+        apiserver.host=$host \
+        apiserver.port=$port \
+        ignore_eos=true \
+        $additional_server_config \
+        > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
+}
+
+start_vllm_server(){
+    CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
+    conda run -n vllm --no-capture-output \
+        vllm serve $MODEL_PATH \
+        --host=$host \
+        --port=$port \
+        --tensor-parallel-size=${number_gpus_need} \
+        --enforce-eager \
+        $additional_server_config \
+        > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
+}
+
+start_apiserver(){
     echo "starting api server"
     timestamp=$(date +"%Y%m%d_%H%M%S")
     attempt=0
     while [ $attempt -lt $start_server_max_retry ]; do
-        CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
-        RAY_DEDUP_LOGS=0 \
-            conda run -n hydrainfer --no-capture-output \
-            python -m hydrainfer.entrypoint.entrypoint \
-            model.path=$MODEL_PATH \
-            apiserver.host=$host \
-            apiserver.port=$port \
-            ignore_eos=true \
-            $additional_server_config \
-            > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
+        $server_start_method
         pid=$!
         if wait_api_server $host $port $pid; then
             echo "server start success."
@@ -94,14 +111,14 @@ send_requests(){
 
 test_correctness(){
     if [[ "$start_server" == "1" ]]; then
-        $server_start_method
+        start_apiserver
     fi
 
     if [[ "$start_benchmark" == "1" ]]; then
         for trace in "${trace_configs[@]}"; do
             if ! wait_api_server "$host" "$port" "$pid" && [[ "$start_server" == "1" ]]; then
                 echo "server failed after benchmark. try to restart server."
-                $server_start_method
+                start_apiserver
             fi
             send_requests
         done
