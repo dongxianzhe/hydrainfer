@@ -20,8 +20,8 @@ gpu_configs=(
     # 32
 )
 declare -A methods=(
-    # ["ours"]="start_hydrainfer_server"
-    ["vllm"]="start_vllm_server"
+    ["ours"]="start_hydrainfer_server"
+    # ["vllm"]="start_vllm_server"
     # ["sglang"]="start_sglang_server"
     # ["lmdeploy"]="start_lmdeploy_server"
 )
@@ -120,6 +120,7 @@ start_apiserver(){
 
 send_requests(){
     echo "start to send requests"
+    safe_trace=$(echo "$trace" | sed 's/[ \/:*?"<>|&!(){}]/_/g')
     conda run -n hydrainfer --no-capture-output \
         python ${OUR_ROOT_PATH}/benchmark/benchmark.py \
         --model=${MODEL} \
@@ -134,7 +135,7 @@ send_requests(){
         --show-result=4 \
         --backend=${method} \
         --method-name=${method} \
-        --result-path=$RESULT_PATH/${log_prefix}-result.json
+        --result-path=$RESULT_PATH/${log_prefix}-${safe_trace}-result.json
 }
 
 evaluation(){
