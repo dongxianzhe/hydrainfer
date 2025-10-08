@@ -122,8 +122,10 @@ class BatchScheduler:
         next_step: list[RequestControlBlock] = []
 
         # 1. allocate cache and skip some chunked prefill tasks because of prefix cache matching
+        after_allocated_cache: list[RequestControlBlock] = []
         for rcb in self.running:
             inst = rcb.current_instruction()
+            cache_is_enough: bool = True
             if isinstance(inst, Fill):
                 if rcb.virtual_kv_cache is None:
                     rcb.virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache(inst.hashes)
@@ -135,14 +137,22 @@ class BatchScheduler:
                         rcb.step()
                 inst = rcb.current_instruction()
                 if isinstance(inst, Fill):
-                    self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, max(rcb.virtual_kv_cache.n_cache_tokens, max(inst.cache_ids) + 1))
+                    if not self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, max(rcb.virtual_kv_cache.n_cache_tokens, max(inst.cache_ids) + 1)):
+                        logger.warning(f'kv cache is not enough, abandon request {rcb.request_id} decresaing max_running_requests')
+                        self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
+                        self.max_overload_requests -= 1
+                        self.config.max_running_requests -= 1
+                        cache_is_enough = False
             elif isinstance(inst, ImageEmbed):
                 if rcb.virtual_image_cache is None:
                     rcb.virtual_image_cache = self.context.image_cache_block_manager.allocate_virtual_cache()
                 self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, max(rcb.virtual_image_cache.n_cache_tokens, max(inst.cache_ids) + 1))
-
+            if cache_is_enough:
+                after_allocated_cache.append(rcb)
+            
+                
         # 2. classify seqs
-        for rcb in self.running:
+        for rcb in after_allocated_cache:
             inst = rcb.current_instruction()
             if isinstance(inst, Fill):
                 if len(inst.token_ids) == 1:

@@ -98,7 +98,6 @@ class TokenCacheBlockManager:
         block_ids = self.block_allocator.allocate(n_blocks)
         if len(block_ids) < n_blocks:
             block_ids += self.shared_cache.allocate(n_blocks)
-        assert len(block_ids) == n_blocks, 'not enough blocks'
         self.shared_cache.pin(block_ids)
         return block_ids
         
@@ -147,16 +146,21 @@ class TokenCacheBlockManager:
             assert self.shared_cache.is_write_safe(physical_block_id), 'copy on write is not supported now'
         self.shared_cache.insert(hashes=hashes, block_ids=physical_block_ids)
 
-    def realloc(self, virtual_cache: VirtualTokenCache, n_tokens: int):
+    def realloc(self, virtual_cache: VirtualTokenCache, n_tokens: int) -> bool:
         if n_tokens > virtual_cache.n_cache_tokens:
             n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
             virtual_cache.block_table += self._allocate_new_blocks(n_need_blocks - len(virtual_cache.block_table))
+            if len(virtual_cache.block_table) * self.block_size < n_tokens:
+                virtual_cache.n_cache_tokens = len(virtual_cache.block_table) * self.block_size
+                return False
             virtual_cache.n_cache_tokens = n_tokens
+            return True
         else:
             n_need_blocks = (n_tokens + self.block_size - 1) // self.block_size
             self.shared_cache.unpin(virtual_cache.block_table[n_need_blocks:])
             virtual_cache.block_table = virtual_cache.block_table[:n_need_blocks]
             virtual_cache.n_cache_tokens = n_tokens
+            return True
 
     def get_layer_cache(self, layer_id: int) -> TokenCache:
         return TokenCache([self.cache_tensor[layer_id, token_id, :, :, :, :] for token_id in range(self.n_tokens)])
