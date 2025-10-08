@@ -202,7 +202,7 @@ if __name__ == '__main__':
     parser.add_argument("--vizwiz_vqa", type=int, default=int(os.environ.get("VIZWIZ_VQA", 0)))
     parser.add_argument("--result-path", type=str)
     parser.add_argument("--method-name", type=str)
-    parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--show-result", type=int, default=0, help='show some inference result to stdout')
     parser.add_argument("--only_text", type=int, default=0, help="if set true, benchmark only send prompt of multimodal request")
     args, remain_args = parser.parse_known_args()

@@ -41,7 +41,7 @@ async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEn
             "stream": True,
         }
 
-        async with httpx.AsyncClient(timeout=None) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", f"{base_url}/chat/completions", json=payload) as response:
                 async for line in response.aiter_lines():
                     if not line or not line.startswith("data: "):
