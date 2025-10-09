@@ -125,9 +125,9 @@ class PerformanceAnalyzer:
             self.models.add(method_result.model)
             self.datasets.add(json.dumps(method_result.datasets))
             self.methods.add(method_result.method_name)
-        logger.info(self.models)
-        logger.info(self.datasets)
-        logger.info(self.methods)
+        logger.info(f"all models: {self.models}")
+        logger.info(f"all models: {self.datasets}")
+        logger.info(f"all models: {self.methods}")
         
         assert all(len(method_result.results) == len(self.methods_results[0].results) for method_result in self.methods_results), f'method result is not equal'
         self.request_rates = [result.request_rate for result in self.methods_results[0].results]
@@ -219,11 +219,19 @@ class PerformanceAnalyzer:
     def auto_select_slo_settings(self, methods_results: list[MethodResults], ttft_slo_settings: Optional[list[float]]=None, tpot_slo_settings: Optional[list[float]]=None, num_groups_selected: int=1) -> list[MethodsComparionData]:
         sample_request_rate = len(self.request_rates) // 3 * 2
         ttft_slo_settings = self.sample_and_round_range(
-            values=[method_results.results[sample_request_rate].ttft_statistics.mean for method_results in methods_results], 
+            values=[
+                method_results.results[sample_request_rate].ttft_statistics.mean 
+                for method_results in methods_results
+                if method_results.results[sample_request_rate].ttft_statistics is not None
+                ], 
             num_samples=10, 
             round_to=0.2) if ttft_slo_settings is None else ttft_slo_settings
         tpot_slo_settings = self.sample_and_round_range(
-            values=[method_results.results[sample_request_rate].tpot_statistics.p90 for method_results in methods_results], 
+            values=[
+                method_results.results[sample_request_rate].tpot_statistics.p90 
+                for method_results in methods_results
+                if method_results.results[sample_request_rate].tpot_statistics is not None
+                ], 
             num_samples=10, 
             round_to=0.04) if tpot_slo_settings is None else tpot_slo_settings
 
@@ -243,11 +251,15 @@ class PerformanceAnalyzer:
         sorted_groups = sorted(groups, key=lambda methods_comprion_data: np.var([attainment.goodput for attainment in methods_comprion_data.methods_attainemnts]), reverse=True)
         return sorted_groups[:num_groups_selected]
 
-    def analyze_results(self):
+    def analyze_results(self, ttft_slo_settings: Optional[list[float]]=None, tpot_slo_settings: Optional[list[float]]=None):
         self.all_methods_comparion_data: list[MethodsComparionData] = []
         for model, model_methods_results in bucket_by_attr(self.methods_results, lambda m: m.model).items():
             for dataset, model_dataset_methods_results in bucket_by_attr(model_methods_results, lambda m: json.dumps(m.datasets)).items():
-                methods_comparion_data: MethodsComparionData = self.auto_select_slo_settings(model_dataset_methods_results)[0]
+                methods_comparion_data: MethodsComparionData = self.auto_select_slo_settings(
+                    model_dataset_methods_results, 
+                    ttft_slo_settings=ttft_slo_settings, 
+                    tpot_slo_settings=tpot_slo_settings, 
+                    )[0]
                 self.all_methods_comparion_data.append(methods_comparion_data)
                 methods_goodput = {attainment.method_results.method_name: attainment.goodput for attainment in methods_comparion_data.methods_attainemnts}
                 logger.info(f'{model}, {dataset}, ttft settting {methods_comparion_data.ttft_slo_setting} tpot setting {methods_comparion_data.tpot_slo_setting} goodput {methods_goodput}')
