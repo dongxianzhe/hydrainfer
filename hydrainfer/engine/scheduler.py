@@ -23,6 +23,7 @@ class BatchSchedulerConfig:
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
     chunked_prefill: bool = True
+    max_queuing_delay: float = 4
     debug: bool = False
 
 
@@ -61,28 +62,6 @@ class BatchScheduler:
         assert self.migrating_cnt > 0, f'invalid release'
         self.migrating_cnt -= 1
 
-    def _stamp_queuing_begin_time(self, rcb: RequestControlBlock):
-        if isinstance(rcb.current_instruction(), ImageEmbed):
-            rcb.metric.encode_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.prefill_queueing) == 0:
-            rcb.metric.prefill_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.decode_queueing) == 0:
-            rcb.metric.decode_queueing.append(time.perf_counter())
-            return
-
-    def _stamp_queuing_end_time(self, rcb: RequestControlBlock):
-        if len(rcb.metric.encode_queueing) == 1:
-            rcb.metric.encode_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.prefill_queueing) == 1:
-            rcb.metric.prefill_queueing.append(time.perf_counter())
-            return
-        if len(rcb.metric.decode_queueing) == 1:
-            rcb.metric.decode_queueing.append(time.perf_counter())
-            return
-
     def schedule_new(self, rcb: RequestControlBlock):
         rcb.sid = self.sid_allocator.allocate()
         if isinstance(rcb.current_instruction(), PullCache):
@@ -90,11 +69,8 @@ class BatchScheduler:
         else:
             self.waiting.append(rcb)
 
-        self._stamp_queuing_begin_time(rcb)
-
     def schedule_running(self, rcb: RequestControlBlock):
         self.running.append(rcb)
-        self._stamp_queuing_end_time(rcb)
 
     def step(self) -> BatchRequest:
         self.step_cnt += 1

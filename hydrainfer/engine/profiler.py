@@ -19,7 +19,7 @@ logger = getLogger(__name__)
 @dataclass
 class BatchSchedulerProfilerConfig:
     model: ModelFactoryConfig = field(default_factory=ModelFactoryConfig)
-    tpot_slo: float = 0.4
+    max_latency: float = 0.4
     debug: bool = False
 
 
@@ -159,8 +159,8 @@ class BatchSchedulerProfiler:
             total_dur += dur
         avg_dur = total_dur / self.n_profile_iter
         self._free_cache(batch)
-        logger.debug(f'{name} binary search [{mid}] profile_avg_dur: {avg_dur} target_tpot_slo {self.config.tpot_slo}')
-        return avg_dur < self.config.tpot_slo - 0.01
+        logger.debug(f'{name} binary search [{mid}] profile_avg_dur: {avg_dur} target_tpot_slo {self.config.max_latency}')
+        return avg_dur < self.config.max_latency - 0.01
 
     def profile_image_budgets(self) -> int:
         logger.debug(f'start profile_image_budgets')

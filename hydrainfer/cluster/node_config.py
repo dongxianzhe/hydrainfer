@@ -20,4 +20,3 @@ class NodeConfig:
     batch_scheduler_profiler: BatchSchedulerProfilerConfig = field(default_factory=BatchSchedulerProfilerConfig)
     zmq: Optional[ZMQConfig] = None
     migrate_backend_config: CommunicationBackendManagerConfig = field(default_factory=CommunicationBackendManagerConfig)
-    log_latency_breakdown: bool = False

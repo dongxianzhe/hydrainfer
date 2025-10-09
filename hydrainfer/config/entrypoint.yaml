@@ -29,10 +29,12 @@ cluster:
 intranode_migrate_backend: "auto"
 internode_migrate_backend: "nccl"
 debug_migrate: false
-log_latency_breakdown: false
 ignore_eos: False
 
 hydra:  
   output_subdir: null  
   run:  
     dir: "hydra_log"
+
+ttft_slo: 2
+tpot_slo: 0.4

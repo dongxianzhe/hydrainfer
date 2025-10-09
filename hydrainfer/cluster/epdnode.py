@@ -15,7 +15,7 @@ from hydrainfer.model import getModelFactory, ModelFactoryContext
 from hydrainfer.engine import RequestProcessParameters, RequestControlBlock, BatchRequest, getWorker, BatchScheduler, RequestProcessor, WorkerConfig, WorkerContext, InstructionExecutor, ExecutorContext, EPMigrate, PDMigrate, RequestProcessorObserver
 from hydrainfer.memory import VirtualTokenCache, TokenCacheBlockManager, TokenCacheBlockManagerContext, TokenCacheBlockManagerConfig
 from hydrainfer.engine import Fill, TextFill, ImageEmbedFill, EmptyInstruction, ImageEmbed, MigrateRequest, PullCache
-from hydrainfer.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType, log_latency_breakdown
+from hydrainfer.engine import BatchSchedulerProfiler, BatchSchedulerProfilerContext, BatchSchedulerContext, ScenarioType
 from hydrainfer.utils.zmq_utils import init_zmq_send
 from hydrainfer.cluster import MigrateGraph, MigrateNode, NodeType
 from hydrainfer.cluster.node_config import NodeConfig, NCCLCommunicatorConfig
@@ -264,25 +264,6 @@ class AsyncEPDNode:
                 continue
             raise Exception(f'unsupported instrction {type(inst)}')
 
-        # latency break down analysis
-        if self.config.log_latency_breakdown:
-            tmp = []
-            for rcb, inst in batch_fill:
-                tmp.append((rcb, inst))
-                if not isinstance(inst, Fill):
-                    continue
-                if len(inst.token_ids) > 1: # this is a chunked prefill inst
-                    if len(rcb.metric.prefill_execute) == 0: # this is first chunk
-                        rcb.metric.prefill_execute.append(time.perf_counter())
-                    else: # this is not first chunk
-                        pass
-                else: # this is decode
-                    if len(rcb.metric.decode_execute) == 0: # this is first decode
-                        rcb.metric.decode_execute.append(time.perf_counter())
-        
-            for rcb, _ in batch_image_embed:
-                rcb.metric.encode_execute.append(time.perf_counter())
-
 
         # execute concurrently
         async_futures = []
@@ -301,34 +282,12 @@ class AsyncEPDNode:
         if self.image_cache_block_manager:
             self.image_cache_block_manager.synchronize()
 
-        # latency break down analysis
-        if self.config.log_latency_breakdown:
-            for rcb, inst in tmp:
-                if not isinstance(inst, Fill):
-                    continue
-                if len(inst.token_ids) > 1: # this is prefill
-                    if len(rcb.metric.prefill_execute) == 1:
-                        rcb.metric.prefill_execute.append(time.perf_counter())
-                    else:
-                        rcb.metric.prefill_execute[1] = time.perf_counter()
-                else: # this is decode
-                    if len(rcb.metric.decode_execute) == 1:
-                        rcb.metric.decode_execute.append(time.perf_counter())
-                    elif len(rcb.metric.decode_execute) > 1:
-                        rcb.metric.decode_execute[1] = time.perf_counter()
-            
-            for rcb, _ in batch_image_embed:
-                rcb.metric.encode_execute.append(time.perf_counter())
-
         # 3. scheduler requests
         t = time.perf_counter()
         for batch in [batch_image_embed, batch_fill, batch_empty, batch_pull_cache]:
             for rcb, inst in batch:
                 if rcb.is_finished():
-                    rcb.metric.finished_time = t
                     await self._free_cache(rcb)
-                    if self.config.log_latency_breakdown:
-                        log_latency_breakdown(rcb.metric)
                 else:
                     self.batch_scheduler.schedule_running(rcb)
 
@@ -382,11 +341,6 @@ class AsyncEPDNode:
     async def _execute_pull_cache(self, batch: BatchRequest):
         """3. called sender's to send blocks and free blocks"""
         for rcb, inst in batch:
-            if len(rcb.metric.ep_transfer) == 0:
-                rcb.metric.ep_transfer.append(time.perf_counter())
-            else:
-                rcb.metric.pd_transfer.append(time.perf_counter())
-            
             old_rcb = copy.copy(rcb)
             if rcb.virtual_kv_cache and self.context.node_type.has_kv_cache:
                 rcb.virtual_kv_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
@@ -399,10 +353,6 @@ class AsyncEPDNode:
             inst.src_node_actor_handle.free_migrate_request.remote(old_rcb)
             rcb.step()
 
-            if len(rcb.metric.ep_transfer) == 1:
-                rcb.metric.ep_transfer.append(time.perf_counter())
-            else:
-                rcb.metric.pd_transfer.append(time.perf_counter())
 
     async def migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
         """ 2. receiver allocate new cache and waiting scheduler to pull cache"""
