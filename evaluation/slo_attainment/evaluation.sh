@@ -4,6 +4,9 @@ source ../common.sh
 ############################## params ##############################
 REQUEST_RATES="1 2 3 4 5 6 7 8 9 10 11 12"
 NUM_REQUESTS=30
+# REQUEST_RATES=3
+# NUM_REQUESTS=3
+timeout=40
 host="127.0.0.1"
 port="8891"
 start_server_max_retry=5
@@ -20,8 +23,14 @@ gpu_configs=(
     # 32
 )
 declare -A methods=(
-    ["ours"]="start_hydrainfer_server"
+    # ["ours"]="start_hydrainfer_server"
     # ["vllm"]="start_vllm_server"
+    ["vllm-0-11-0"]="start_vllm_server"
+    # ["vllm-0-10-2"]="start_vllm_server"
+    # ["vllm-0-9-2"]="start_vllm_server"
+    # ["vllm-0-8-5"]="start_vllm_server"
+    # ["vllm-0-7-3"]="start_vllm_server"
+    # ["vllm-0-6-6"]="start_vllm_server"
     # ["sglang"]="start_sglang_server"
     # ["lmdeploy"]="start_lmdeploy_server"
 )
@@ -29,18 +38,18 @@ additional_server_configs=(
     ""
 )
 declare -A MODELS=(
-    ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
-    # ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
+    # ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
+    ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
     # ["Qwen/Qwen2-VL-7B"]="/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
     # ["deepseek-ai/deepseek-vl2-tiny"]="/models/deepseek-vl2-tiny"
     # ["OpenGVLab/InternVL2-26B"]="/models/OpenGVLab/InternVL2-26B"
 )
 trace_configs=(
     "--textcaps=1 --pope=0 --mme=0 --text_vqa=0 --vizwiz_vqa=0 --request-rate-method=poisson"
-    "--textcaps=0 --pope=1 --mme=0 --text_vqa=0 --vizwiz_vqa=0 --request-rate-method=poisson"
-    "--textcaps=0 --pope=0 --mme=1 --text_vqa=0 --vizwiz_vqa=0 --request-rate-method=poisson"
-    "--textcaps=0 --pope=0 --mme=0 --text_vqa=1 --vizwiz_vqa=0 --request-rate-method=poisson"
-    "--textcaps=0 --pope=0 --mme=0 --text_vqa=0 --vizwiz_vqa=1 --request-rate-method=poisson"
+    # "--textcaps=0 --pope=1 --mme=0 --text_vqa=0 --vizwiz_vqa=0 --request-rate-method=poisson"
+    # "--textcaps=0 --pope=0 --mme=1 --text_vqa=0 --vizwiz_vqa=0 --request-rate-method=poisson"
+    # "--textcaps=0 --pope=0 --mme=0 --text_vqa=1 --vizwiz_vqa=0 --request-rate-method=poisson"
+    # "--textcaps=0 --pope=0 --mme=0 --text_vqa=0 --vizwiz_vqa=1 --request-rate-method=poisson"
     # "--textcaps=1 --pope=1 --mme=1 --text_vqa=1 --vizwiz_vqa=1 --request-rate-method=poisson"
     # "--textcaps=1 --pope=1 --mme=1 --text_vqa=1 --vizwiz_vqa=1 --request-rate-method=azure_code"
     # "--textcaps=1 --pope=1 --mme=1 --text_vqa=1 --vizwiz_vqa=1 --request-rate-method=azure_conv"
@@ -64,7 +73,7 @@ start_hydrainfer_server(){
 
 start_vllm_server(){
     CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
-    conda run -n vllm --no-capture-output \
+    conda run -n ${method} --no-capture-output \
         vllm serve $MODEL_PATH \
         --host=$host \
         --port=$port \
@@ -76,7 +85,7 @@ start_vllm_server(){
 
 start_sglang_server(){
     CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
-    conda run -n sglang --no-capture-output \
+    conda run -n ${method} --no-capture-output \
         python -m sglang.launch_server \
         --model-path=$MODEL_PATH \
         --host=$host \
@@ -91,7 +100,7 @@ start_sglang_server(){
 start_lmdeploy_server(){
     # lmdeploy serve api_server -h
     CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
-    conda run -n lmdeploy --no-capture-output \
+    conda run -n ${method} --no-capture-output \
         lmdeploy serve api_server ${MODEL_PATH} \
         --eager-mode \
         --server-name=$host \
@@ -130,6 +139,7 @@ send_requests(){
         --num-requests=$NUM_REQUESTS \
         --request-rate-num-requests-scale=$number_gpus_need \
         --request-rate $REQUEST_RATES \
+        --timeout=${timeout} \
         --only_text=${only_text} \
         $trace \
         --show-result=4 \
@@ -162,6 +172,8 @@ evaluation(){
 
 for method in "${!methods[@]}"; do
     server_start_method="${methods[$method]}"
+    RESULT_PATH=$(echo "$SCRIPT_PATH/result/${method}/$(date +%Y%m%d_%H%M%S)")
+    mkdir -p $RESULT_PATH
     for number_gpus_need in ${gpu_configs[@]}; do
         for MODEL in "${!MODELS[@]}"; do
             MODEL_PATH="${MODELS[$MODEL]}"

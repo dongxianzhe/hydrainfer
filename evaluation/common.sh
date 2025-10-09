@@ -1,10 +1,7 @@
 SCRIPT=$(readlink -f "$0")
 SCRIPT_PATH=$(dirname "$SCRIPT")
 OUR_ROOT_PATH=$(realpath "$SCRIPT_PATH/../../")
-RESULT_PATH=$(echo "$SCRIPT_PATH/result/$(date +%Y%m%d_%H%M%S)")
 COMMON_SCRIPT_PATH="$SCRIPT_PATH/../"
-
-mkdir -p $RESULT_PATH
 
 clean_up() {
     echo "Cleaning up..."
