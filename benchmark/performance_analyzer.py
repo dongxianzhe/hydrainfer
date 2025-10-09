@@ -6,7 +6,7 @@ import os
 import json
 import numpy as np
 from collections import defaultdict
-from metric import MethodResults
+from metric import MethodResults, OnlineRequestOutput
 from dataclasses import dataclass
 from utils import load_json
 from hydrainfer.utils.logger import getLogger
@@ -83,7 +83,8 @@ def bucket_by_attr(items: list[T], key_func: Callable[[T], str]) -> dict[str, li
 
 class PerformanceAnalyzer:
     """ this class is figure and table builder 
-        analyzer.scan_results_folder("/data1/home/dongxianzhe1/projects/hydrainfer/evaluation/test_correctness/result")
+        analyzer = PerformanceAnalyzer()
+        analyzer.scan_results_folder("/data1/home/dongxianzhe1/projects/hydrainfer/evaluation/slo_attainment/result")
         analyzer.parse()
         analyzer.analyze_results()
         analyzer.plot()
@@ -115,6 +116,7 @@ class PerformanceAnalyzer:
 
     def parse(self):
         """ build models, datasets, methods indexes """
+        assert len(self.methods_results) > 0, 'no result is scanned'
         for method_result in self.methods_results:
             self.models.add(method_result.model)
             self.datasets.add(json.dumps(method_result.datasets))
@@ -127,9 +129,11 @@ class PerformanceAnalyzer:
         self.request_rates = [result.request_rate for result in self.methods_results[0].results]
 
     def compute_slo_attainenments(self, method_results: MethodResults, dataset_to_ttft_slo_settings: dict[str, float], dataset_to_tpot_slo_settings: dict[str, float]) -> SLOAttainment:
-        ttft_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] for output in result.outputs) / len(result.outputs) for result in method_results.results]
-        tpot_attainments = [sum(output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in result.outputs) / len(result.outputs) for result in method_results.results]
-        slo_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] and output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in result.outputs) / len(result.outputs) for result in method_results.results]
+        def get_success_outputs(outputs: list[OnlineRequestOutput]) -> list[OnlineRequestOutput]:
+            return [output for output in outputs if output.success]
+        ttft_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
+        tpot_attainments = [sum(output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
+        slo_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] and output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
         _, ttft_attainments = self.smooth_curve(self.request_rates, ttft_attainments)
         _, tpot_attainments = self.smooth_curve(self.request_rates, tpot_attainments)
         _, slo_attainments = self.smooth_curve(self.request_rates, slo_attainments)
