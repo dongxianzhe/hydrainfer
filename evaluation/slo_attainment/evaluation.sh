@@ -25,11 +25,11 @@ gpu_configs=(
 declare -A methods=(
     # ["ours"]="start_hydrainfer_server"
     # ["vllm"]="start_vllm_server"
-    ["vllm-0-11-0"]="start_vllm_server"
+    # ["vllm-0-11-0"]="start_vllm_server"
     # ["vllm-0-10-2"]="start_vllm_server"
     # ["vllm-0-9-2"]="start_vllm_server"
     # ["vllm-0-8-5"]="start_vllm_server"
-    # ["vllm-0-7-3"]="start_vllm_server"
+    ["vllm-0-7-3"]="start_vllm_server"
     # ["vllm-0-6-6"]="start_vllm_server"
     # ["sglang"]="start_sglang_server"
     # ["lmdeploy"]="start_lmdeploy_server"
@@ -72,6 +72,12 @@ start_hydrainfer_server(){
 }
 
 start_vllm_server(){
+    extra=""
+
+    if [[ "$method" == "vllm-0-7-3" && "$MODEL" == "llava-hf/llava-v1.6-vicuna-7b-hf" ]]; then
+        extra="--chat-template=${OUR_ROOT_PATH}/hydrainfer/model/chat_template/template_llava.jinja"
+    fi
+
     CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
     conda run -n ${method} --no-capture-output \
         vllm serve $MODEL_PATH \
@@ -80,6 +86,7 @@ start_vllm_server(){
         --tensor-parallel-size=${number_gpus_need} \
         --enforce-eager \
         $additional_server_config \
+        $extra \
         > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
 }
 
