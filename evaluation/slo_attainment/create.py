@@ -14,7 +14,7 @@ def create_conda_env(env_name, vllm_version):
             subprocess.run(f"conda create --name {env_name} python={args.python} -y", shell=True, check=True)
         else:
             print(f'conda env {env_name} already exists.')
-        subprocess.run(f"conda run -n {env_name} pip install {args.package}=={vllm_version}", shell=True, check=True)
+        subprocess.run(f"conda run -n {env_name} --no-capture-output pip install {args.package}=={vllm_version}", shell=True, check=True)
     except subprocess.CalledProcessError as e:
         print(e)
         print(f"creating env {env_name} failed.")
