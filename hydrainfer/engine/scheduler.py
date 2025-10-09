@@ -23,7 +23,7 @@ class BatchSchedulerConfig:
     priority: Literal['prefill', 'decode'] = 'prefill'
     max_running_requests: int = 15
     chunked_prefill: bool = True
-    max_queuing_delay: float = 4
+    ttft_slo: float = 4
     debug: bool = False
 
 
@@ -42,7 +42,7 @@ class BatchScheduler:
         self.image_budgets = self.profiler.profile_image_budgets()
         self.token_budgets = self.profiler.profile_token_budgets()
 
-        self.waiting = deque()
+        self.waiting: deque[RequestControlBlock] = deque()
 
         self.running: list[RequestControlBlock] = []
         self.step_cnt = 0
@@ -72,12 +72,25 @@ class BatchScheduler:
     def schedule_running(self, rcb: RequestControlBlock):
         self.running.append(rcb)
 
+
+    def _abondon_request(self, rcb: RequestControlBlock):
+        if rcb.virtual_kv_cache:
+            assert self.context.kv_cache_block_manager is not None
+            self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
+        if rcb.virtual_image_cache:
+            assert self.context.image_cache_block_manager is not None
+            self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
+
     def step(self) -> BatchRequest:
         self.step_cnt += 1
         schedule_time = time.perf_counter()
         # 1. get enough requests to participate in the batch
         while len(self.running) < self.config.max_running_requests - self.migrating_cnt and len(self.waiting) > 0:
             rcb = self.waiting.popleft()
+            if schedule_time - rcb.arrival_time > self.config.ttft_slo:
+                logger.info(f'abondon request {rcb.request_id} because of overload')
+                self._abondon_request(rcb)
+            
             self.schedule_running(rcb)
         # we are risking dead pull cache lock when ED Node' all requests are waiting P Node pull and P Node's all requests are waiting ED Node pull cache
         # so we need to limit the number of new requests
@@ -115,7 +128,7 @@ class BatchScheduler:
                 if isinstance(inst, Fill):
                     if not self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, max(rcb.virtual_kv_cache.n_cache_tokens, max(inst.cache_ids) + 1)):
                         logger.warning(f'kv cache is not enough, abandon request {rcb.request_id} decresaing max_running_requests')
-                        self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
+                        self._abondon_request(rcb)
                         self.max_overload_requests -= 1
                         self.config.max_running_requests -= 1
                         cache_is_enough = False

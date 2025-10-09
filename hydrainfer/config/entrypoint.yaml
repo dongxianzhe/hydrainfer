@@ -16,7 +16,7 @@ apiserver:
   port: 8888
   zmq: ${zmq}
   model: ${model}
-  tpot_slo: 0
+  tpot_slo: ${tpot_slo}
 
 cluster: 
   ebalancer:

@@ -1,3 +1,4 @@
+import time
 from typing import Optional
 from hydrainfer.engine import Instruction, InstructionList, OutputTokenProcessor, ScenarioType
 from hydrainfer.engine.output_token_processor import OutputTokenParams
@@ -20,6 +21,7 @@ class RequestControlBlock:
         self.output_token_ids: list[int] = []
         self.scenario_type: Optional[ScenarioType] = None
 
+        self.arrival_time = time.perf_counter()
         self.event_timestamps: list[tuple[str, float]] = []
 
     def current_instruction(self) -> Instruction:
