@@ -310,8 +310,8 @@ class AsyncEPDNode:
         try:
             while True:
                 logger.info(
-                    f'image cache usage {self.image_cache_block_manager.get_metrics()}, '
-                    f'kv cache usage {self.kv_cache_block_manager.get_metrics()}, '
+                    f'image cache usage {self.image_cache_block_manager.get_metrics() if self.image_cache_block_manager else ""}, '
+                    f'kv cache usage {self.kv_cache_block_manager.get_metrics()if self.kv_cache_block_manager else ""}, '
                     f'{self.batch_scheduler.get_metrics(), }'
                 )
                 await asyncio.sleep(5)
