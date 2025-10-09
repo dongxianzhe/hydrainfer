@@ -101,7 +101,9 @@ class PerformanceAnalyzer:
         date_pattern = re.compile(r'^\d{8}_\d{6}$')
         for folder_name in os.listdir(result_foler_path):
             folder_path = os.path.join(result_foler_path, folder_name)
-            if os.path.isdir(folder_path) and date_pattern.match(folder_name):
+            if not os.path.isdir(folder_path):
+                continue
+            if date_pattern.match(folder_name):
                 logger.info(f'scanning result folder {folder_path}')
                 # Iterate through all JSON files in the folder
                 for file_name in os.listdir(folder_path):
@@ -113,6 +115,8 @@ class PerformanceAnalyzer:
                             logger.info(f'load result {file_path}')
                         except Exception as e:
                             logger.info(f"error load result {file_path}: {e}")
+            else:
+                self.scan_results_folder(folder_path)
 
     def parse(self):
         """ build models, datasets, methods indexes """
