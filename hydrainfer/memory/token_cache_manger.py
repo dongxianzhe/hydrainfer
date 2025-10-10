@@ -97,7 +97,7 @@ class TokenCacheBlockManager:
     def _allocate_new_blocks(self, n_blocks: int) -> list[int]:
         block_ids = self.block_allocator.allocate(n_blocks)
         if len(block_ids) < n_blocks:
-            block_ids += self.shared_cache.allocate(n_blocks)
+            block_ids += self.shared_cache.allocate(n_blocks - len(block_ids))
         self.shared_cache.pin(block_ids)
         return block_ids
         

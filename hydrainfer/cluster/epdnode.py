@@ -367,8 +367,10 @@ class AsyncEPDNode:
     async def _execute_pull_cache(self, batch: BatchRequest):
         """3. called sender to send blocks and free blocks"""
         for rcb, inst in batch:
+            inst: PullCache
             src_node_actor_handle = inst.src_node_actor_handle
             if inst.virtual_kv_cache and rcb.virtual_kv_cache:
+                assert len(inst.virtual_kv_cache.block_table) == len(rcb.virtual_kv_cache.block_table), f'{len(inst.virtual_kv_cache.block_table)} {inst.virtual_kv_cache.n_cache_tokens} {len(rcb.virtual_kv_cache.block_table)} {rcb.virtual_kv_cache.n_cache_tokens}'
                 src_node_actor_handle.send_cache.remote(
                     src_virtual_cache=inst.virtual_kv_cache, 
                     dst_virtual_cache=rcb.virtual_kv_cache, 
@@ -376,6 +378,7 @@ class AsyncEPDNode:
                 )
                 self.kv_cache_block_manager.migrate_blocks(inst.virtual_kv_cache, rcb.virtual_kv_cache, is_send=False)
             if inst.virtual_image_cache and rcb.virtual_image_cache:
+                assert len(inst.virtual_image_cache.block_table) == len(rcb.virtual_image_cache.block_table), f'{len(inst.virtual_image_cache.block_table)} {len(rcb.virtual_image_cache.block_table)} {inst.virtual_image_cache.block_table} {rcb.virtual_image_cache.block_table}'
                 src_node_actor_handle.send_cache.remote(
                     src_virtual_cache=inst.virtual_image_cache, 
                     dst_virtual_cache=rcb.virtual_image_cache, 
