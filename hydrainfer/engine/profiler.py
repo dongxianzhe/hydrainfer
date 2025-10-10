@@ -1,3 +1,4 @@
+import traceback
 import copy
 import random
 import time
@@ -131,7 +132,6 @@ class BatchSchedulerProfiler:
             except Exception as e:
                 right = mid - 1
                 if self.config.debug:
-                    import traceback
                     traceback.print_exc()
 
         return left
@@ -181,7 +181,7 @@ class BatchSchedulerProfiler:
         logger.debug(f'start profile_token_budgets')
         token_budgets = self._binary_search_max_batch_size(
             left=1, 
-            right=2048, 
+            right=8192, 
             criterion=functools.partial(
                 self._criterion, 
                 prepare_batch=self._prepare_prefill_batch, 

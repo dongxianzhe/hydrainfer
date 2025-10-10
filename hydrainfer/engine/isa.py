@@ -1,5 +1,7 @@
+import ray
 from torch import Tensor
 from typing import Optional, Literal
+from hydrainfer.memory import VirtualTokenCache
 
 
 class Instruction:
@@ -187,6 +189,12 @@ class PDMigrate(MigrateRequest):
 
 
 class PullCache(Instruction):
+    def __init__(self):
+        super().__init__()
+        self.src_node_actor_handle: Optional[ray.actor.ActorHandle] = None
+        self.virtual_kv_cache: Optional[VirtualTokenCache] = None
+        self.virtual_image_cache: Optional[VirtualTokenCache] = None
+
     def __repr__(self):
         return f"PR"
 

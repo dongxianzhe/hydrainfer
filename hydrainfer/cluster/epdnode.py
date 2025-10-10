@@ -49,6 +49,9 @@ class AsyncEPDNode:
             raise Exception("AsyncEPDNode should be used as an ray actor")
         self._update_actor_name(context)
 
+    def __repr__(self):
+        return self.name
+
     def _update_actor_name(self, context: NodeContext):
         # the name is used in __repr__ which is used to log actor names
         self.name = f"{context.node_type.node_type}NodeRank{context.rank}"
@@ -287,7 +290,7 @@ class AsyncEPDNode:
         for batch in [batch_image_embed, batch_fill, batch_empty, batch_pull_cache]:
             for rcb, inst in batch:
                 if rcb.is_finished():
-                    await self._free_cache(rcb)
+                    self.batch_scheduler.free_request(rcb)
                 else:
                     self.batch_scheduler.schedule_running(rcb)
 
@@ -317,70 +320,36 @@ class AsyncEPDNode:
                 await asyncio.sleep(5)
         except Exception as e:
             traceback.print_exc()
-
-    async def pull_virtual_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
-        block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
-        block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True)
-
-    def _migrate_virtual_cache(self, src_node_actor_handle: ray.actor.ActorHandle, src_virtual_cache: VirtualTokenCache, is_kv_cache: bool) -> VirtualTokenCache:
-        block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
-
-        # todo support prefix cache after migrate
-        dst_virtual_cache = new_virtual_cache = block_manager.allocate_virtual_cache()
-        block_manager.realloc(dst_virtual_cache, src_virtual_cache.n_cache_tokens)
-
-        src_node_actor_handle.pull_virtual_cache.remote(
-            src_virtual_cache=src_virtual_cache, 
-            dst_virtual_cache=dst_virtual_cache, 
-            is_kv_cache=is_kv_cache, 
-        )
-        block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=False)
-
-        return new_virtual_cache
-
-    async def _execute_pull_cache(self, batch: BatchRequest):
-        """3. called sender's to send blocks and free blocks"""
-        for rcb, inst in batch:
-            old_rcb = copy.copy(rcb)
-            if rcb.virtual_kv_cache and self.context.node_type.has_kv_cache:
-                rcb.virtual_kv_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_kv_cache, is_kv_cache=True) 
-            else:
-                rcb.virtual_kv_cache = None
-            if rcb.virtual_image_cache and self.context.node_type.has_image_cache:
-                rcb.virtual_image_cache = self._migrate_virtual_cache(inst.src_node_actor_handle, rcb.virtual_image_cache, is_kv_cache=False) 
-            else:
-                rcb.virtual_image_cache = None
-            inst.src_node_actor_handle.free_migrate_request.remote(old_rcb)
-            rcb.step()
-
-
-    async def migrate(self, src_node_actor_handle: ray.actor.ActorHandle, rcb: RequestControlBlock):
-        """ 2. receiver allocate new cache and waiting scheduler to pull cache"""
-        rcb.current_instruction().src_node_actor_handle = src_node_actor_handle
-        self.batch_scheduler.schedule_new(rcb)
     
     async def _execute_batch_migrate(self, batch: BatchRequest):
         """ 1. sender send block table to receiver"""
         if len(batch) == 0:
             return
         for rcb, inst in batch:
-            rcb.step()
-            assert isinstance(rcb.current_instruction(), PullCache)
             loadbalancer = self.ep_loadbalancer if isinstance(inst, EPMigrate) else self.pd_loadbalancer
             node = loadbalancer.choice(key=rcb.scenario_type)
             if node.id == self.actor_id:
                 # if migrate to self, skip migrate and pull cache stage and continue schedule running
                 rcb.step()
+                rcb.step()
                 self.batch_scheduler.schedule_running(rcb)
                 continue
-            self.batch_scheduler.migrating_acquire()
+            self.batch_scheduler.schedule_waiting_to_be_pulled(rcb)
 
+            new_rcb = copy.deepcopy(rcb)
+            new_rcb.step()
+            assert isinstance(new_rcb.current_instruction(), PullCache)
+            new_rcb.current_instruction().src_node_actor_handle = self.actor_handle
+            new_rcb.current_instruction().virtual_kv_cache = rcb.virtual_kv_cache
+            new_rcb.current_instruction().virtual_image_cache = rcb.virtual_image_cache
+            new_rcb.virtual_kv_cache = None
+            new_rcb.virtual_image_cache = None
             # don't know why some rpc call will failed at pickle
             # we do some retries if it failed and terminate the request
             max_retries = 2
             for attempt in range(max_retries):
                 try:
-                    obj = node.actor.migrate.remote(self.actor_handle, rcb)
+                    obj = node.actor.add_migrate_request.remote(new_rcb)
                     break
                 except Exception as e:
                     logger.warning(f"{rcb.request_id} migrate attempt {attempt + 1} failed")
@@ -388,19 +357,48 @@ class AsyncEPDNode:
                     await asyncio.sleep(0.5)
             else:
                 logger.warning(f"{rcb.request_id} migrate failed after {max_retries} attempts")
-                self.free_migrate_request(rcb)
+                self.batch_scheduler.free_migrated_request(rcb.request_id)
                 self.zmq_send.send_pyobj((rcb.request_id, None)) # terminate the request
 
-    async def free_migrate_request(self, rcb: RequestControlBlock):
+    async def add_migrate_request(self, rcb: RequestControlBlock):
+        """ 2. receiver allocate new cache and waiting scheduler to pull cache"""
+        self.batch_scheduler.schedule_waiting_to_pull(rcb)
+
+    async def _execute_pull_cache(self, batch: BatchRequest):
+        """3. called sender to send blocks and free blocks"""
+        for rcb, inst in batch:
+            src_node_actor_handle = inst.src_node_actor_handle
+            if inst.virtual_kv_cache and rcb.virtual_kv_cache:
+                src_node_actor_handle.send_cache.remote(
+                    src_virtual_cache=inst.virtual_kv_cache, 
+                    dst_virtual_cache=rcb.virtual_kv_cache, 
+                    is_kv_cache=True, 
+                )
+                self.kv_cache_block_manager.migrate_blocks(inst.virtual_kv_cache, rcb.virtual_kv_cache, is_send=False)
+            if inst.virtual_image_cache and rcb.virtual_image_cache:
+                src_node_actor_handle.send_cache.remote(
+                    src_virtual_cache=inst.virtual_image_cache, 
+                    dst_virtual_cache=rcb.virtual_image_cache, 
+                    is_kv_cache=False, 
+                )
+                self.image_cache_block_manager.migrate_blocks(inst.virtual_image_cache, rcb.virtual_image_cache, is_send=False)
+            inst.src_node_actor_handle.free_migrated_request.remote(rcb.request_id)
+            rcb.step()
+
+    async def send_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
+        try:
+            block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
+            block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True)
+        except Exception as e:
+            traceback.print_exc()
+            # ray.actor.exit_actor()
+
+
+    async def free_migrated_request(self, request_id: int):
         """ 4. sender free request"""
-        await self._free_cache(rcb)
-        self.batch_scheduler.migrating_release()
-
-    async def _free_cache(self, rcb: RequestControlBlock):
-        if rcb.virtual_kv_cache: 
-            self.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
-        if rcb.virtual_image_cache:
-            self.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
-
-    def __repr__(self):
-        return self.name
+        try:
+            self.batch_scheduler.free_migrated_request(request_id)
+            pass
+        except Exception as e:
+            traceback.print_exc()
+            # ray.actor.exit_actor()

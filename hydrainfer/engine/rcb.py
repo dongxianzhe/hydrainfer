@@ -15,7 +15,6 @@ class RequestControlBlock:
         self.instructions: Optional[InstructionList] = None
         self.virtual_kv_cache: Optional[VirtualTokenCache] = None
         self.virtual_image_cache: Optional[VirtualTokenCache] = None
-        self.sid: int = -1
         self.output_token_processors: list[OutputTokenProcessor] = []
         self.output_token_params: Optional[OutputTokenParams] = None
         self.output_token_ids: list[int] = []

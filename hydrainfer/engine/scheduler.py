@@ -14,8 +14,10 @@ logger = getLogger(__name__)
 
 @dataclass
 class BatchSchedulerMetrics:
-    n_running_requests: int
-    n_requests_waiting_migrate: int
+    n_running: int
+    n_new: int
+    n_migrating: int
+    n_waiting_to_pull: int
 
 
 @dataclass
@@ -42,60 +44,60 @@ class BatchScheduler:
         self.image_budgets = self.profiler.profile_image_budgets()
         self.token_budgets = self.profiler.profile_token_budgets()
 
-        self.waiting: deque[RequestControlBlock] = deque()
+        self.waiting: queue.Queue[RequestControlBlock] = queue.Queue() # new rquest
+        self.running: list[RequestControlBlock] = [] # running request
+        self.migrating_requests: dict[int, RequestControlBlock] = {} # waiting to be pulled by dst node
+        self.pulling: queue.Queue[RequestControlBlock] = queue.Queue() # need pull cache from src node
 
-        self.running: list[RequestControlBlock] = []
         self.step_cnt = 0
-        self.sid_allocator = IncreaingAllocator(first_value=1)
 
         self.max_overload_requests = config.max_running_requests
         self.running_cnt = 0
-        self.migrating_cnt = 0
-
-    def migrating_acquire(self):
-        # migrating_acquire and migrating_release are used to count how many request need to be pulled
-        # we need this count because avoid sender OOM when there are too many waiting migrate requests and running requests
-        assert self.migrating_cnt < self.config.max_running_requests + self.max_overload_requests, f'invalid acquire'
-        self.migrating_cnt += 1
-
-    def migrating_release(self):
-        assert self.migrating_cnt > 0, f'invalid release'
-        self.migrating_cnt -= 1
 
     def schedule_new(self, rcb: RequestControlBlock):
-        rcb.sid = self.sid_allocator.allocate()
-        if isinstance(rcb.current_instruction(), PullCache):
-            self.waiting.appendleft(rcb)
-        else:
-            self.waiting.append(rcb)
+        self.waiting.put(rcb)
 
     def schedule_running(self, rcb: RequestControlBlock):
         self.running.append(rcb)
 
+    def schedule_waiting_to_be_pulled(self, rcb: RequestControlBlock):
+        assert rcb.request_id not in self.migrating_requests
+        self.migrating_requests[rcb.request_id] = rcb
 
-    def _abondon_request(self, rcb: RequestControlBlock):
+    def schedule_waiting_to_pull(self, rcb: RequestControlBlock):
+        self.pulling.put(rcb)
+
+    def free_request(self, rcb: RequestControlBlock):
         if rcb.virtual_kv_cache:
             assert self.context.kv_cache_block_manager is not None
             self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, 0)
         if rcb.virtual_image_cache:
             assert self.context.image_cache_block_manager is not None
             self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, 0)
+        if rcb.request_id in self.migrating_requests:
+            del self.migrating_requests[rcb.request_id]
+        curr_inst = rcb.current_instruction()
+        if isinstance(curr_inst, PullCache) and curr_inst.src_node_actor_handle:
+            curr_inst.src_node_actor_handle.free_migrating_request.remote(rcb.request_id)
+
+    def free_migrated_request(self, request_id: int):
+        assert request_id in self.migrating_requests
+        self.free_request(self.migrating_requests[request_id])
 
     def step(self) -> BatchRequest:
         self.step_cnt += 1
         schedule_time = time.perf_counter()
         # 1. get enough requests to participate in the batch
-        while len(self.running) < self.config.max_running_requests - self.migrating_cnt and len(self.waiting) > 0:
-            rcb = self.waiting.popleft()
+        while len(self.running) < self.config.max_running_requests - len(self.migrating_requests) and not self.waiting.empty():
+            rcb = self.waiting.get() 
             if schedule_time - rcb.arrival_time > self.config.ttft_slo:
                 logger.info(f'abondon request {rcb.request_id} because of overload')
-                self._abondon_request(rcb)
-            
+                self.free_request(rcb)
             self.schedule_running(rcb)
         # we are risking dead pull cache lock when ED Node' all requests are waiting P Node pull and P Node's all requests are waiting ED Node pull cache
         # so we need to limit the number of new requests
-        while len(self.running) < self.config.max_running_requests - self.migrating_cnt + self.max_overload_requests and len(self.waiting) > 0 and isinstance(self.waiting[0].current_instruction(), PullCache):
-            rcb = self.waiting.popleft()
+        while len(self.running) < self.config.max_running_requests - len(self.migrating_requests) + self.max_overload_requests and not self.pulling.empty():
+            rcb = self.pulling.get()
             self.schedule_running(rcb)
 
         self.running_cnt = len(self.running)
@@ -128,16 +130,27 @@ class BatchScheduler:
                 if isinstance(inst, Fill):
                     if not self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, max(rcb.virtual_kv_cache.n_cache_tokens, max(inst.cache_ids) + 1)):
                         logger.warning(f'kv cache is not enough, abandon request {rcb.request_id} decresaing max_running_requests')
-                        self._abondon_request(rcb)
                         self.max_overload_requests -= 1
                         self.config.max_running_requests -= 1
                         cache_is_enough = False
             elif isinstance(inst, ImageEmbed):
                 if rcb.virtual_image_cache is None:
                     rcb.virtual_image_cache = self.context.image_cache_block_manager.allocate_virtual_cache()
-                self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, max(rcb.virtual_image_cache.n_cache_tokens, max(inst.cache_ids) + 1))
+                if not self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, max(rcb.virtual_image_cache.n_cache_tokens, max(inst.cache_ids) + 1)):
+                    cache_is_enough = False
+            elif isinstance(inst, PullCache):
+                if inst.virtual_image_cache and rcb.virtual_image_cache is None and self.context.image_cache_block_manager:
+                    rcb.virtual_image_cache = self.context.image_cache_block_manager.allocate_virtual_cache()
+                    if not self.context.image_cache_block_manager.realloc(rcb.virtual_image_cache, inst.virtual_image_cache.n_cache_tokens):
+                        cache_is_enough = False
+                if inst.virtual_kv_cache and rcb.virtual_kv_cache is None and self.context.kv_cache_block_manager:
+                    rcb.virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache()
+                    if not self.context.kv_cache_block_manager.realloc(rcb.virtual_kv_cache, inst.virtual_kv_cache.n_cache_tokens):
+                        cache_is_enough = False
             if cache_is_enough:
                 after_allocated_cache.append(rcb)
+            else:
+                self.free_request(rcb)
             
                 
         # 2. classify seqs
@@ -184,7 +197,6 @@ class BatchScheduler:
 
         if self.config.debug:
             logger.debug(f'------------------------------ scheduler step {self.step_cnt} ------------------------------')
-            logger.debug(f'sid : ' + ' '.join(f'{rcb.sid: 2}'                 for rcb in this_step))
             logger.debug(f'inst: ' + ' '.join(f'{rcb.current_instruction()}' for rcb in this_step))
             logger.debug(f'batch images {batch_embed_images}')
             logger.debug(f'batch tokens {batch_fill_tokens}')
@@ -194,6 +206,8 @@ class BatchScheduler:
 
     def get_metrics(self) -> BatchSchedulerMetrics:
         return BatchSchedulerMetrics(
-            n_running_requests=self.running_cnt, 
-            n_requests_waiting_migrate = self.migrating_cnt, 
+            n_running=self.running_cnt, 
+            n_new=self.waiting.qsize(),
+            n_migrating=len(self.migrating_requests), 
+            n_waiting_to_pull=self.pulling.qsize(), 
         )
