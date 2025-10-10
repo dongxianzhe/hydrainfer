@@ -48,6 +48,7 @@ class AsyncEPDNode:
         except Exception as e:
             raise Exception("AsyncEPDNode should be used as an ray actor")
         self._update_actor_name(context)
+        self.prev = 0
 
     def __repr__(self):
         return self.name
@@ -279,20 +280,17 @@ class AsyncEPDNode:
 
         for future in futures:
             future.get()
-        asyncio.gather(*async_futures)
-        if self.kv_cache_block_manager:
-            self.kv_cache_block_manager.synchronize()
-        if self.image_cache_block_manager:
-            self.image_cache_block_manager.synchronize()
+        # asyncio.gather(*async_futures)
 
         # 3. scheduler requests
         t = time.perf_counter()
-        for batch in [batch_image_embed, batch_fill, batch_empty, batch_pull_cache]:
+        for batch in [batch_image_embed, batch_fill, batch_empty]:
             for rcb, inst in batch:
                 if rcb.is_finished():
                     self.batch_scheduler.free_request(rcb)
                 else:
                     self.batch_scheduler.schedule_running(rcb)
+        self.prev = time.perf_counter()
 
     async def loop(self):
         asyncio.gather(
@@ -349,7 +347,7 @@ class AsyncEPDNode:
             max_retries = 2
             for attempt in range(max_retries):
                 try:
-                    obj = node.actor.add_migrate_request.remote(new_rcb)
+                    node.actor.add_migrate_request.remote(new_rcb)
                     break
                 except Exception as e:
                     logger.warning(f"{rcb.request_id} migrate attempt {attempt + 1} failed")
@@ -364,13 +362,11 @@ class AsyncEPDNode:
         """ 2. receiver allocate new cache and waiting scheduler to pull cache"""
         self.batch_scheduler.schedule_waiting_to_pull(rcb)
 
-    async def _execute_pull_cache(self, batch: BatchRequest):
-        """3. called sender to send blocks and free blocks"""
+    def _sync_execute_pull_cache(self, batch: BatchRequest):
         for rcb, inst in batch:
             inst: PullCache
             src_node_actor_handle = inst.src_node_actor_handle
             if inst.virtual_kv_cache and rcb.virtual_kv_cache:
-                assert len(inst.virtual_kv_cache.block_table) == len(rcb.virtual_kv_cache.block_table), f'{len(inst.virtual_kv_cache.block_table)} {inst.virtual_kv_cache.n_cache_tokens} {len(rcb.virtual_kv_cache.block_table)} {rcb.virtual_kv_cache.n_cache_tokens}'
                 src_node_actor_handle.send_cache.remote(
                     src_virtual_cache=inst.virtual_kv_cache, 
                     dst_virtual_cache=rcb.virtual_kv_cache, 
@@ -378,7 +374,6 @@ class AsyncEPDNode:
                 )
                 self.kv_cache_block_manager.migrate_blocks(inst.virtual_kv_cache, rcb.virtual_kv_cache, is_send=False)
             if inst.virtual_image_cache and rcb.virtual_image_cache:
-                assert len(inst.virtual_image_cache.block_table) == len(rcb.virtual_image_cache.block_table), f'{len(inst.virtual_image_cache.block_table)} {len(rcb.virtual_image_cache.block_table)} {inst.virtual_image_cache.block_table} {rcb.virtual_image_cache.block_table}'
                 src_node_actor_handle.send_cache.remote(
                     src_virtual_cache=inst.virtual_image_cache, 
                     dst_virtual_cache=rcb.virtual_image_cache, 
@@ -387,15 +382,22 @@ class AsyncEPDNode:
                 self.image_cache_block_manager.migrate_blocks(inst.virtual_image_cache, rcb.virtual_image_cache, is_send=False)
             inst.src_node_actor_handle.free_migrated_request.remote(rcb.request_id)
             rcb.step()
+            self.batch_scheduler.schedule_running(rcb)
 
-    async def send_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
+    async def _execute_pull_cache(self, batch: BatchRequest):
+        """3. called sender to send blocks and free blocks"""
+        await asyncio.get_event_loop().run_in_executor(None, self._sync_execute_pull_cache, batch)
+
+    def _sync_send_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
         try:
             block_manager = self.kv_cache_block_manager if is_kv_cache else self.image_cache_block_manager
             block_manager.migrate_blocks(src_virtual_cache, dst_virtual_cache, is_send=True)
         except Exception as e:
             traceback.print_exc()
-            # ray.actor.exit_actor()
+            ray.actor.exit_actor()
 
+    async def send_cache(self, src_virtual_cache: VirtualTokenCache, dst_virtual_cache: VirtualTokenCache, is_kv_cache: bool):
+        await asyncio.get_event_loop().run_in_executor(None, self._sync_send_cache, src_virtual_cache, dst_virtual_cache, is_kv_cache)
 
     async def free_migrated_request(self, request_id: int):
         """ 4. sender free request"""
@@ -404,4 +406,4 @@ class AsyncEPDNode:
             pass
         except Exception as e:
             traceback.print_exc()
-            # ray.actor.exit_actor()
+            ray.actor.exit_actor()

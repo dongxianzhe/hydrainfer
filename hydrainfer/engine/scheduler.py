@@ -1,3 +1,4 @@
+import threading
 from collections import deque
 import time
 import queue
@@ -48,6 +49,7 @@ class BatchScheduler:
         self.running: list[RequestControlBlock] = [] # running request
         self.migrating_requests: dict[int, RequestControlBlock] = {} # waiting to be pulled by dst node
         self.pulling: queue.Queue[RequestControlBlock] = queue.Queue() # need pull cache from src node
+        self.mutex = threading.Lock()
 
         self.step_cnt = 0
 
@@ -58,7 +60,8 @@ class BatchScheduler:
         self.waiting.put(rcb)
 
     def schedule_running(self, rcb: RequestControlBlock):
-        self.running.append(rcb)
+        with self.mutex:
+            self.running.append(rcb)
 
     def schedule_waiting_to_be_pulled(self, rcb: RequestControlBlock):
         assert rcb.request_id not in self.migrating_requests
