@@ -2,26 +2,24 @@ import os
 import json
 from datasets import load_dataset, Dataset
 from dataclasses import dataclass, field, asdict
+from typing import Union
 import argparse
 
 
 @dataclass
 class ProcessedRequestResult:
-    prompt: list[str] = field(default_factory=list)
-    images_size: list[tuple[int, int]] = field(default_factory=list) 
-    # input_text: list[str] = field(default_factory=list)
-    # input_tokens: list[int] = field(default_factory=list)
-    n_input_tokens: list[int] = field(default_factory=list)
-    # output_tokens: list[int] = field(default_factory=list)
-    n_output_tokens: list[int] = field(default_factory=list)
-    output: list[str] = field(default_factory=list)
+    prompt: str=""
+    images_size: list[Union[tuple[int, int], list[int]]]=field(default_factory=list)
+    n_input_tokens: int=0
+    n_output_tokens: int=0
+    output: str=""
 
 
 @dataclass
 class PreProcessedResult:
-    dataset: str
-    model_path: str
-    requests: list[ProcessedRequestResult] = field(default_factory=list)
+    dataset: str=""
+    model_path: str=""
+    requests: list[ProcessedRequestResult]=field(default_factory=list)
 
 
 def preprocess_dataset(path: str, split: str, model_path: str) -> Dataset:
