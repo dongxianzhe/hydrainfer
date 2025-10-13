@@ -25,6 +25,7 @@ cluster:
     policy: "round"
   ray_cluster_port: -1
   debug: false
+  log_server_path: "hydrainfer_log_server.json"
 
 intranode_migrate_backend: "auto"
 internode_migrate_backend: "nccl"
@@ -38,3 +39,5 @@ hydra:
 
 ttft_slo: 2
 tpot_slo: 0.4
+
+log_latency_breakdown: false

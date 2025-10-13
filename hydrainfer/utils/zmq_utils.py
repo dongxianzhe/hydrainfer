@@ -11,6 +11,7 @@ import zmq.asyncio
     zmq_send.send_pyobj(pyobj)
     output = await zmq_recv.recv_pyobj()
 """
+@dataclass
 class ZMQConfig:
     host: str = "127.0.0.1"
     port: int = 40832

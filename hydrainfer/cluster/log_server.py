@@ -11,6 +11,7 @@ logger = getLogger(__file__)
 
 @dataclass
 class LatencyBreakDownMetric:
+    request_id: str
     name: str
     time_stamp: float
 

@@ -9,6 +9,7 @@ import ray.actor
 import torch.distributed as dist
 from torch.distributed import P2POp, batch_isend_irecv
 from dataclasses import dataclass, field
+from hydrainfer.cluster.log_server import LogServer, LatencyBreakDownMetric
 from hydrainfer.utils.socket_utils import parse_address, find_free_port, get_host
 from hydrainfer.request import Request
 from hydrainfer.model import getModelFactory, ModelFactoryContext
@@ -48,7 +49,9 @@ class AsyncEPDNode:
         except Exception as e:
             raise Exception("AsyncEPDNode should be used as an ray actor")
         self._update_actor_name(context)
-        self.prev = 0
+
+        log_server_found: ray.actor.ActorHandle[LogServer] = ray.get_actor('log_server')
+        self.log_server_send = init_zmq_send(ray.get(log_server_found.get_zmq_config.remote()))
 
     def __repr__(self):
         return self.name
@@ -236,6 +239,8 @@ class AsyncEPDNode:
         return self.context.rank, get_host()
 
     async def add_request(self, request: Request, params: RequestProcessParameters):
+        if self.config.log_latency_breakdown:
+            self.log_server_send.send_pyobj(LatencyBreakDownMetric(request_id=request.request_id, name='arrival', time_stamp=time.perf_counter()))
         self.request_processor.process(request, params)
 
     async def step(self):
@@ -244,6 +249,12 @@ class AsyncEPDNode:
         if len(batch) == 0:
             return
 
+        # if self.config.log_latency_breakdown:
+        if self.config.log_latency_breakdown:
+            t = time.perf_counter()
+            for rcb, inst in batch:
+                self.log_server_send.send_pyobj(LatencyBreakDownMetric(request_id=rcb.request_id, name=str(inst), time_stamp=t))
+                
         # 2. execute instructions
         batch_fill = BatchRequest()
         batch_image_embed = BatchRequest()
@@ -290,7 +301,6 @@ class AsyncEPDNode:
                     self.batch_scheduler.free_request(rcb)
                 else:
                     self.batch_scheduler.schedule_running(rcb)
-        self.prev = time.perf_counter()
 
     async def loop(self):
         asyncio.gather(
