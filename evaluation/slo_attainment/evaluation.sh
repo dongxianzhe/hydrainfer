@@ -20,9 +20,9 @@ log_latency_breakdown=true
 gpu_configs=(
     # 1
     # 2
-    3
+    # 3
     # 4
-    # 8
+    8
     # 16
     # 32
 )
@@ -80,8 +80,16 @@ start_hydrainfer_server(){
         ttft_slo=$ttft_slo \
         tpot_slo=$tpot_slo \
         log_latency_breakdown=$log_latency_breakdown \
+        cluster=general \
+        cluster.n_enode=0 \
+        cluster.n_epnode=0 \
+        cluster.n_ednode=0 \
+        cluster.n_epdnode=8 \
+        cluster.n_pnode=0 \
+        cluster.n_pdnode=0 \
+        cluster.n_dnode=0 \
         cluster.log_server_path=${log_server_path} \
-        > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
+        > $api_server_log_path 2>&1 &
 }
 
 start_vllm_server(){
@@ -103,7 +111,7 @@ start_vllm_server(){
         --enforce-eager \
         $additional_server_config \
         $extra \
-        > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
+        > $api_server_log_path 2>&1 &
 }
 
 start_sglang_server(){
@@ -117,7 +125,7 @@ start_sglang_server(){
         --disable-cuda-graph-padding \
         --enable-multimodal \
         $additional_server_config \
-        > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
+        > $api_server_log_path 2>&1 &
 }
 
 start_lmdeploy_server(){
@@ -129,7 +137,7 @@ start_lmdeploy_server(){
         --server-name=$host \
         --server-port=$port \
         $additional_server_config \
-        > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
+        > $api_server_log_path 2>&1 &
 }
 
 start_apiserver(){
@@ -137,6 +145,9 @@ start_apiserver(){
     attempt=0
     while [ $attempt -lt $start_server_max_retry ]; do
         timestamp=$(date +"%Y%m%d_%H%M%S")
+        api_server_log_path="$RESULT_PATH/${log_prefix}-${timestamp}-api_server.log"
+        ln -s $api_server_log_path latest_api_server.log
+
         $server_start_method
         apiserver_pid=$!
         if wait_api_server $host $port $apiserver_pid; then
