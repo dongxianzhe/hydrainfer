@@ -344,7 +344,8 @@ class AsyncEPDNode:
                 continue
             self.batch_scheduler.schedule_waiting_to_be_pulled(rcb)
 
-            new_rcb = copy.deepcopy(rcb)
+            # todo optimize the deepcopy speed and replace with deep copy
+            new_rcb = copy.copy(rcb)
             new_rcb.step()
             assert isinstance(new_rcb.current_instruction(), PullCache)
             new_rcb.current_instruction().src_node_actor_handle = self.actor_handle
@@ -352,21 +353,9 @@ class AsyncEPDNode:
             new_rcb.current_instruction().virtual_image_cache = rcb.virtual_image_cache
             new_rcb.virtual_kv_cache = None
             new_rcb.virtual_image_cache = None
-            # don't know why some rpc call will failed at pickle
-            # we do some retries if it failed and terminate the request
-            max_retries = 2
-            for attempt in range(max_retries):
-                try:
-                    node.actor.add_migrate_request.remote(new_rcb)
-                    break
-                except Exception as e:
-                    logger.warning(f"{rcb.request_id} migrate attempt {attempt + 1} failed")
-                    traceback.print_exc()
-                    await asyncio.sleep(0.5)
-            else:
-                logger.warning(f"{rcb.request_id} migrate failed after {max_retries} attempts")
-                self.batch_scheduler.free_migrated_request(rcb.request_id)
-                self.zmq_send.send_pyobj((rcb.request_id, None)) # terminate the request
+            node.actor.add_migrate_request.remote(new_rcb)
+
+            rcb.instructions.curr = rcb.instructions.curr.prev
 
     async def add_migrate_request(self, rcb: RequestControlBlock):
         """ 2. receiver allocate new cache and waiting scheduler to pull cache"""
