@@ -2,10 +2,10 @@
 source ../common.sh
 
 ############################## params ##############################
-# REQUEST_RATES="0.5 1 1.5 2 2.5 3 3.5 4 4.5 5"
-# NUM_REQUESTS=30
-REQUEST_RATES=12
-NUM_REQUESTS=3
+REQUEST_RATES="0.5 1 1.5 2 2.5 3 3.5 4 4.5 5"
+NUM_REQUESTS=30
+# REQUEST_RATES=12
+# NUM_REQUESTS=3
 ttft_slo=4
 tpot_slo=0.2
 timeout=30
@@ -146,7 +146,7 @@ start_apiserver(){
     while [ $attempt -lt $start_server_max_retry ]; do
         timestamp=$(date +"%Y%m%d_%H%M%S")
         api_server_log_path="$RESULT_PATH/${log_prefix}-${timestamp}-api_server.log"
-        ln -s $api_server_log_path latest_api_server.log
+        ln -sf $api_server_log_path latest_api_server.log
 
         $server_start_method
         apiserver_pid=$!
