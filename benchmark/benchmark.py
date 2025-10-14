@@ -8,23 +8,10 @@ import numpy as np
 from tqdm import tqdm
 from typing import AsyncGenerator
 from dataclasses import dataclass, field, asdict
-from metric import OnlineRequestOutput, BenchmarkResult, MethodResults, Statistics
+from metric import OnlineRequestOutput, BenchmarkResult, MethodResults, Statistics, make_statistic
 from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
 from backend import get_server_proxy
 from timestamp import get_intervals
-
-def make_statistic(values: list[float]) -> Statistics:
-    if len(values) == 0:
-        return None
-    return Statistics(
-        max = max(values), 
-        min = min(values), 
-        mean = np.mean(values), 
-        median = np.median(values), 
-        p90 = np.percentile(values, 90), 
-        p99 = np.percentile(values, 99), 
-        var = np.var(values), 
-    )
 
 def analyze_result(args: argparse.Namespace, method_results: MethodResults):
     pbar = tqdm(range(sum([len(result.outputs) for result in method_results.results])), desc="analyzing result")

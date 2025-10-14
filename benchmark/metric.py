@@ -1,3 +1,4 @@
+import numpy as np
 from typing import Optional
 from dataclasses import dataclass, field
 from synthetic_dataset import SyntheticDataEntry
@@ -12,6 +13,20 @@ class Statistics:
     p90: Optional[float] = None
     p99: Optional[float] = None
     var: Optional[float] = None
+
+
+def make_statistic(values: list[float]) -> Statistics:
+    if len(values) == 0:
+        return None
+    return Statistics(
+        max = max(values), 
+        min = min(values), 
+        mean = np.mean(values), 
+        median = np.median(values), 
+        p90 = np.percentile(values, 90), 
+        p99 = np.percentile(values, 99), 
+        var = np.var(values), 
+    )
 
 
 @dataclass
