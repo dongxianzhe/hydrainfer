@@ -2,11 +2,13 @@
 source ../common.sh
 
 ############################## params ##############################
-REQUEST_RATES="1 2 3 4 5 6 7 8 9 10 11 12"
-NUM_REQUESTS=30
-# REQUEST_RATES=3
-# NUM_REQUESTS=3
-timeout=40
+# REQUEST_RATES="0.5 1 1.5 2 2.5 3 3.5 4 4.5 5"
+# NUM_REQUESTS=30
+REQUEST_RATES=12
+NUM_REQUESTS=3
+ttft_slo=4
+tpot_slo=0.2
+timeout=30
 host="127.0.0.1"
 port="8891"
 start_server_max_retry=5
@@ -14,24 +16,31 @@ find_free_gpus_max_retry=1000
 only_text=0
 start_server=1
 start_benchmark=1
+log_latency_breakdown=true
 gpu_configs=(
-    1
+    # 1
     # 2
+    3
     # 4
     # 8
     # 16
     # 32
 )
 declare -A methods=(
-    # ["ours"]="start_hydrainfer_server"
+    ["ours"]="start_hydrainfer_server"
     # ["vllm"]="start_vllm_server"
     # ["vllm-0-11-0"]="start_vllm_server"
     # ["vllm-0-10-2"]="start_vllm_server"
     # ["vllm-0-9-2"]="start_vllm_server"
     # ["vllm-0-8-5"]="start_vllm_server"
-    ["vllm-0-7-3"]="start_vllm_server"
+    # ["vllm-0-7-3"]="start_vllm_server"
     # ["vllm-0-6-6"]="start_vllm_server"
     # ["sglang"]="start_sglang_server"
+    # ["sglang-0-5-3"]=start_sglang_server
+    # ["sglang-0-4-10"]=start_sglang_server
+    # ["sglang-0-4-3"]=start_sglang_server
+    # ["sglang-0-3-6"]=start_sglang_server
+    # ["sglang-0-2-15"]=start_sglang_server
     # ["lmdeploy"]="start_lmdeploy_server"
 )
 additional_server_configs=(
@@ -59,6 +68,7 @@ trace_configs=(
 ####################################################################
 
 start_hydrainfer_server(){
+    log_server_path="$RESULT_PATH/${timestamp}-log_server.jsonl"
     CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
     RAY_DEDUP_LOGS=0 \
         conda run -n hydrainfer --no-capture-output \
@@ -67,7 +77,10 @@ start_hydrainfer_server(){
         apiserver.host=$host \
         apiserver.port=$port \
         ignore_eos=true \
-        $additional_server_config \
+        ttft_slo=$ttft_slo \
+        tpot_slo=$tpot_slo \
+        log_latency_breakdown=$log_latency_breakdown \
+        cluster.log_server_path=${log_server_path} \
         > $RESULT_PATH/${log_prefix}-${timestamp}-api_server.log 2>&1 &
 }
 
@@ -75,6 +88,9 @@ start_vllm_server(){
     extra=""
 
     if [[ "$method" == "vllm-0-7-3" && "$MODEL" == "llava-hf/llava-v1.6-vicuna-7b-hf" ]]; then
+        extra="--chat-template=${OUR_ROOT_PATH}/hydrainfer/model/chat_template/template_llava.jinja"
+    fi
+    if [[ "$method" == "vllm-0-6-6" && "$MODEL" == "llava-hf/llava-v1.6-vicuna-7b-hf" ]]; then
         extra="--chat-template=${OUR_ROOT_PATH}/hydrainfer/model/chat_template/template_llava.jinja"
     fi
 
@@ -172,6 +188,15 @@ evaluation(){
         echo "server is running..."
         sleep 7200
     fi
+
+    if [[ "$log_latency_breakdown" == "true" || "$method" != "ours" ]]; then
+        conda run -n hydrainfer --no-capture-output \
+            python latency_breakdown.py \
+            --path=${log_server_path} \
+            > $RESULT_PATH/${log_prefix}-${timestamp}-latency_breakdown.log 2>&1
+    else
+        echo "Latency breakdown logging is disabled."
+        fi
 
     clean_up
     sleep 10
