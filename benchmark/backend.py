@@ -59,17 +59,18 @@ async def send_request(payload: dict, entry: SyntheticDataEntry, str, base_url="
     except Exception:
         output.success = False
         output.error_msg = traceback.format_exc()
+    return output
 
 async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
     send_pbar.update(1)
-    payload = prepare_openai_compatible_payload()
+    payload = prepare_openai_compatible_payload(model_path, entry)
     output = await send_request(payload, entry, base_url, timeout)
     recv_pbar.update(1)
     return output
 
 async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
     send_pbar.update(1)
-    payload = prepare_openai_compatible_payload()
+    payload = prepare_openai_compatible_payload(model_path, entry)
     payload['ignore_eos']=True
     output = await send_request(payload, entry, base_url, timeout)
     recv_pbar.update(1)

@@ -1,12 +1,10 @@
-import os
 import base64
 import random
-from data_preprocess import load_processed_dataset
 from dataclasses import dataclass
 from PIL import Image
 from io import BytesIO
-from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, Union
+from utils import load_json
 
 
 def encode_base64_content_from_image(image: Image.Image) -> str:
@@ -22,98 +20,38 @@ def encode_base64_content_from_image(image: Image.Image) -> str:
 class SyntheticDataEntry:
     prompt: str
     images: Optional[list[str]]
-    max_tokens: int
+    n_output_tokens: int
     images_size: list[Union[tuple[int, int], list[int]]] # (width, height) we need union because dump json wil convert tuple to list but load json can't convert list to tuple
     dataset: str
+    n_input_tokens_ref: int = 0
+    output_ref: str = ""
+
+
+@dataclass
+class SyntheticSourceDataset:
+    model: str
+    dataset: str
+    model_path: str
+    dataset_path: str
+    entries: list[SyntheticDataEntry]
 
 
 class SyntheticDataset:
-    def __init__(
-        self, 
-        model_path: str, 
-        num_requests: int,
-        textcaps: int = 0, 
-        pope: int = 0, 
-        mme: int = 0, 
-        text_vqa: int = 0, 
-        vizwiz_vqa: int = 0, 
-    ):
-        self.model_path = model_path
-        datasets_metadata = [
-            (textcaps, "lmms-lab/TextCaps"), 
-            (pope, "lmms-lab/POPE"), 
-            (mme, "lmms-lab/MME"), 
-            (text_vqa, "lmms-lab/textvqa"), 
-            (vizwiz_vqa, "lmms-lab/VizWiz-VQA"), 
-        ]
-
+    def __init__(self, num_requests: int, dataset_path_to_weight: dict[str, int]):
+        from data_preprocess import get_preprocessed_data_path
         self.num_requests = num_requests
-        datasets = []
-        dataset_iters = []
-        datasets_name: list[str] = []
-        weights: list[int] = []
-        for weight, path in datasets_metadata:
-            if weight > 0:
-                dataset = load_processed_dataset(path=path, split="test", model_path=self.model_path)
-                datasets.append(dataset)
-                dataset_iters.append(iter(dataset))
-                datasets_name.append(path)
-                weights.append(weight)
-
+        source_datasets: list[SyntheticSourceDataset] = [load_json(data_class=SyntheticSourceDataset, data_path=get_preprocessed_data_path(dataset_path)) for dataset_path, weight in dataset_path_to_weight.items() if weight > 0]
+        weights: list[int] = [weight for weight in dataset_path_to_weight.values() if weight > 0]
         assert len(weights) > 0, "no dataset source is chosen"
-        chosen_dataset_ids = random.choices(population=range(len(weights)), weights=weights, k=num_requests)
-
-        tasks = []
-        for i in chosen_dataset_ids:
-            dataset = datasets[i]
-            name = datasets_name[i]
-
-            dataset_iter = dataset_iters[i]
-            try:
-                data = next(dataset_iter)
-            except StopIteration:
-                dataset_iters[i] = iter(dataset)
-                dataset_iter = dataset_iters[i]
-                data = next(dataset_iter)
-            tasks.append((name, data))
-
-        def create_entry(task):
-            name, data = task
-            entry = SyntheticDataEntry(
-                prompt = data['question'], 
-                images = [encode_base64_content_from_image(data['image'])], 
-                max_tokens = data['max_tokens'], 
-                images_size = [data['image'].size], 
-                dataset = name, 
-            )
-            return entry
 
         self.entries: list[SyntheticDataEntry] = []
-        with ThreadPoolExecutor(max_workers=32) as executor:
-            self.entries = list(executor.map(create_entry, tasks))
+        chosen_dataset_ids = random.choices(population=range(len(source_datasets)), weights=weights, k=num_requests)
+        for dataset_id, source_dataset in enumerate(source_datasets):
+            n_samples = sum([chosen_dataset_id == dataset_id for chosen_dataset_id in chosen_dataset_ids])
+            self.entries.extend(source_dataset.entries * (n_samples // len(source_dataset.entries)) + source_dataset.entries[:n_samples % len(source_dataset.entries)])
 
     def __len__(self):
         return self.num_requests
 
     def __getitem__(self, i: int) -> SyntheticDataEntry:
         return self.entries[i]
-
-if __name__ == '__main__':
-    import time
-    start = time.perf_counter()
-    dataset = SyntheticDataset(
-        model_path='/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf', 
-        num_requests=3000, 
-        textcaps = 0, 
-        pope = 0, 
-        mme = 1, 
-        text_vqa = 0,
-        vizwiz_vqa = 0, 
-    )
-    end = time.perf_counter()
-    print(f'dur {end - start}')
-    print(len(dataset))
-    for i in range(3):
-        print(dataset[i].prompt)
-        print(dataset[i].images_size)
-        print(dataset[i].dataset)

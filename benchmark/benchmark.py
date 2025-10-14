@@ -124,14 +124,16 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
 def main(args: argparse.Namespace):
     random.seed(args.seed)
     np.random.seed(args.seed)
+    dataset_path_to_weight = {
+        "/datasets/lmms-lab/TextCaps": args.textcaps, 
+        "/datasets/lmms-lab/POPE": args.pope, 
+        "/datasets/lmms-lab/MME": args.mme, 
+        "/datasets/lmms-lab/textvqa": args.text_vqa, 
+        "/datasets/lmms-lab/VizWiz-VQA": args.vizwiz_vqa, 
+    }
     dataset = SyntheticDataset(
-        model_path   = args.model_path, 
         num_requests = int(args.num_requests * args.request_rate_num_requests_scale * max(args.request_rate)), 
-        textcaps     = args.textcaps, 
-        pope         = args.pope, 
-        mme          = args.mme, 
-        text_vqa     = args.text_vqa, 
-        vizwiz_vqa   = args.vizwiz_vqa, 
+        dataset_path_to_weight = dataset_path_to_weight, 
     )                 
     method_results = benchmarks(args, dataset)
     analyze_result(args, method_results)
