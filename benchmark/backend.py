@@ -3,17 +3,13 @@ import time
 import traceback
 import json
 import time
-import argparse
 import traceback
 from tqdm import tqdm
-from openai import AsyncOpenAI
 from metric import OnlineRequestOutput
 from synthetic_dataset import SyntheticDataEntry
 
-async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
-    send_pbar.update(1)
-    output = OnlineRequestOutput(entry=entry)
-    output.start_time = time.perf_counter()
+
+def prepare_openai_compatible_payload(model_path: str, entry: SyntheticDataEntry) -> dict:
     content = [
         {
             "type": "text",
@@ -27,20 +23,24 @@ async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEn
                 "url": f"data:image/png;base64,{image}"
             },
         })
-    try:
-        payload = {
-            "model": model_path,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": content, 
-                }
-            ],
-            "max_tokens": entry.max_tokens,
-            "temperature": 0.0,
-            "stream": True,
-        }
+    payload = {
+        "model": model_path,
+        "messages": [
+            {
+                "role": "user",
+                "content": content, 
+            }
+        ],
+        "max_tokens": entry.n_output_tokens,
+        "temperature": 0.0,
+        "stream": True,
+    }
+    return payload
 
+async def send_request(payload: dict, entry: SyntheticDataEntry, str, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
+    output = OnlineRequestOutput(entry=entry)
+    output.start_time = time.perf_counter()
+    try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             async with client.stream("POST", f"{base_url}/chat/completions", json=payload) as response:
                 async for line in response.aiter_lines():
@@ -60,15 +60,24 @@ async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEn
         output.success = False
         output.error_msg = traceback.format_exc()
 
+async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
+    send_pbar.update(1)
+    payload = prepare_openai_compatible_payload()
+    output = await send_request(payload, entry, base_url, timeout)
     recv_pbar.update(1)
     return output
 
+async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
+    send_pbar.update(1)
+    payload = prepare_openai_compatible_payload()
+    payload['ignore_eos']=True
+    output = await send_request(payload, entry, base_url, timeout)
+    recv_pbar.update(1)
+    return output
 
 def get_server_proxy(backend: str):
-    if backend == 'ours':
+    if backend in ['ours', 'tgi', 'sglang']:
         return openai_compatible_server_proxy
-    if backend in ['vllm', 'tgi']:
-        return openai_compatible_server_proxy
-    if backend == 'sglang':
-        return openai_compatible_server_proxy
+    if 'vllm' in backend:
+        return vllm_server_proxy
     return openai_compatible_server_proxy
