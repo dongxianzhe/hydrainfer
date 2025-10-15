@@ -75,7 +75,7 @@ def preprocess(args: argparse.Namespace):
     )
 
     synthetic_source_dataset.entries = [entry for entry in synthetic_source_dataset.entries if entry.n_output_tokens_ref != get_limit_max_tokens()]
-    print(f'Discard requests {len(synthetic_source_dataset.entries) - n_requests} that exceed the length')
+    print(f'Discard {n_requests - len(synthetic_source_dataset.entries)} requests that exceed the length')
     with open(get_preprocessed_data_path(args.dataset_path), "w") as file:
         json.dump(asdict(synthetic_source_dataset), fp=file, indent=4)
 

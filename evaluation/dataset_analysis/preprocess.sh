@@ -14,7 +14,8 @@ declare -A dataset_to_path=(
 
 for dataset in "${!dataset_to_path[@]}"; do
     dataset_path="${dataset_to_path[$dataset]}"
-    echo ${dataset} ${dataset_path}
+    echo "==================== ${model} ${dataset} =============================="
+    TOKENIZERS_PARALLELISM=true \
     conda run -n vllm --no-capture-output \
         python ${OUR_ROOT_PATH}/benchmark/data_preprocess.py \
             --dataset=${dataset} \
