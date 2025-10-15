@@ -50,7 +50,6 @@ def partition_nodes(n_nodes: int, ratios: list[float]) -> list[int]:
 class DisaggregationProfiler:
     def __init__(self, history: SyntheticDataset, n_nodes: int, model_path: str, tpot_slo: float, ttft_slo: float) -> None:
         config, context = ModelFactoryConfig(path=model_path), ModelFactoryContext()
-        self.dtype: str = config.dtype
         self.model_factory = getModelFactory(config, context)
         self.tokenizer = self.model_factory.getTokenizer()
         self.image_token_caculator = self.model_factory.getVisionModelConfig().image_token_caculator
@@ -62,8 +61,9 @@ class DisaggregationProfiler:
         self.batch_profiler = BatchSizeProfiler(config, context)
         self.ttft_slo = ttft_slo
         self.tpot_slo = tpot_slo
+        self.dtype: str = config.dtype
 
-    def estimate_encode_throughput(self, ttft_slo: float, tpot_slo: float, max_batch_size: int) -> BatchSizeBenchmarkMetric:
+    def estimate_encode_throughput(self, ttft_slo: float) -> BatchSizeBenchmarkMetric:
         l, r = 1, 16
         mid: int = None 
         metric = None
@@ -71,49 +71,49 @@ class DisaggregationProfiler:
             mid = (l + r) // 2
             metric = self.batch_profiler.profile_encode(mid)
             if metric.latency < 0.5 * ttft_slo:
-                r = mid - 1
-            else: 
                 l = mid + 1
-        print(f'estimate throughput {metric}')
+            else: 
+                r = mid - 1
+        print(f'estimate throughput {metric} target latency {0.5 * ttft_slo}')
         return metric
 
-    def estimate_prefill_throughput(self, ttft_slo: float, tpot_slo: float, n_prefill_tokens: int) -> BatchSizeBenchmarkMetric:
-        l, r = 1, 16
+    def estimate_prefill_throughput(self, ttft_slo: float, n_prefill_tokens: int) -> BatchSizeBenchmarkMetric:
+        l, r = 1, 8
         mid = None
         metric = None
         while l < r:
             mid = (l + r) // 2
-            metric = self.batch_profiler.profile_prefill(mid)
+            metric = self.batch_profiler.profile_prefill(mid, n_prompt_tokens=n_prefill_tokens)
             if metric.latency < 0.5 * ttft_slo:
-                r = mid - 1
-            else:
                 l = mid + 1
-        print(f'estimate throughput {metric}')
+            else:
+                r = mid - 1
+        print(f'estimate throughput {metric} target latency {0.5 * ttft_slo}')
         return metric
 
     def estimate_max_running_requests(self, n_kv_cache_tokens: int) -> int:
         device = torch.cuda.current_device()
         props = torch.cuda.get_device_properties(device)
         total_memory = props.total_memory
-        dtype_size = get_dtype_size(str2dtype(self.dtypype))
-        each_request_memory = 2 * self.language_config.n_layers * self.language_config.n_kv_heads * self.language_config.head_dim * dtype_size
+        dtype_size = get_dtype_size(str2dtype(self.dtype))
+        each_request_memory = n_kv_cache_tokens * 2 * self.language_config.n_layers * self.language_config.n_kv_heads * self.language_config.head_dim * dtype_size
         model_params = self.model_profiler.profile_model_params()
-        max_running_reqeusts: int = int((total_memory - model_params.language_model_parmas() * dtype_size) * 0.9 / each_request_memory)
+        max_running_reqeusts: int = int((total_memory - model_params.language_model_parmas * dtype_size) * 0.9 / each_request_memory)
         print(f'estimate_max_running_requests = {max_running_reqeusts}')
         return max_running_reqeusts
 
-    def estimate_decode_throughput(self, ttft_slo: float, tpot_slo: float, n_kv_cache_tokens: str) -> BatchSizeBenchmarkMetric:
+    def estimate_decode_throughput(self, tpot_slo: float, n_kv_cache_tokens: str) -> BatchSizeBenchmarkMetric:
         l, r = 1, self.estimate_max_running_requests(n_kv_cache_tokens)
         mid = None
         metric = None
         while l < r:
             mid = (l + r) // 2
-            metric = self.batch_profiler.profile_decode(mid)
+            metric = self.batch_profiler.profile_decode(mid, n_kv_cache_tokens)
             if metric.latency < tpot_slo:
-                r = mid - 1
-            else:
                 l = mid + 1
-        print(f'estimate throughput {metric}')
+            else:
+                r = mid - 1
+        print(f'estimate throughput {metric} target latency {tpot_slo}')
         return metric
 
     def profile(self):
@@ -135,25 +135,30 @@ class DisaggregationProfiler:
         avg_prefill_tokens: int = total_prefill_tokens / n_requests
         avg_decode_tokens: int = total_decode_tokens / n_requests
 
-        t_e = self.estimate_encode_throughput().throughput
-        t_p = self.estimate_prefill_throughput().throughput
-        t_d = self.estimate_decode_throughput().throughput
+        t_e = self.estimate_encode_throughput(ttft_slo=self.ttft_slo).throughput
+        t_p = self.estimate_prefill_throughput(ttft_slo=self.ttft_slo, n_prefill_tokens=int(avg_prefill_tokens)).throughput
+        t_d = self.estimate_decode_throughput(tpot_slo=self.tpot_slo, n_kv_cache_tokens=int(avg_prefill_tokens + avg_decode_tokens)).throughput
 
         t1 = total_encode_tokens // t_e
         t2 = total_prefill_tokens // t_p
         t3 = total_decode_tokens // t_d
 
         partitions = partition_nodes(n_nodes=self.n_nodes, ratios=[t1, t2, t3]) 
+        n_e, n_p, n_d = partitions
         print(f'avg_encode_tokens, avg_prefill_tokens, avg_decode_tokens: {avg_encode_tokens} {avg_prefill_tokens} {avg_decode_tokens}')
         print(f'encode_workload, prefill_workload, decode_workload: {t1} {t2} {t3}')
         print(f'e p d instacnes numbers{partitions}')
+        print(f'possible deploy params: ')
+        print(f"cluster=general cluster.n_enode={n_e} cluster.n_epnode=0 cluster.n_ednode=0 cluster.n_epdnode=0 cluster.n_pnode={n_p} cluster.n_pdnode=0 cluster.n_dnode={n_d}")
+        print(f"cluster=general cluster.n_enode=0 cluster.n_epnode={n_e + n_p} cluster.n_ednode=0 cluster.n_epdnode=0 cluster.n_pnode=0 cluster.n_pdnode=0 cluster.n_dnode={n_d}")
+        print(f"cluster=general cluster.n_enode=0 cluster.n_epnode=0 cluster.n_ednode={n_e + n_d} cluster.n_epdnode=0 cluster.n_pnode={n_p} cluster.n_pdnode=0 cluster.n_dnode=0")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='profiler workload to get disaggregation methods and instances number', conflict_handler='resolve')
     parser.add_argument(f'--model-path', type=str, default="/models/llava-v1.6-vicuna-7b-hf", help='The path of the model.')
-    parser.add_argument(f'--tpot_slo', type=float, default=8)
-    parser.add_argument(f'--ttft_slo', type=float, default=0.4)
+    parser.add_argument(f'--ttft_slo', type=float, default=8)
+    parser.add_argument(f'--tpot_slo', type=float, default=0.4)
     parser.add_argument(f'--n_nodes', type=int, default=8)
     SyntheticDataset.add_cli_args(parser)
     args, remain_args = parser.parse_known_args()
