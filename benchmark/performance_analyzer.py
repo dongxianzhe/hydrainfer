@@ -278,11 +278,11 @@ class PerformanceAnalyzer:
             "Qwen/Qwen2-VL-7B": "Qwen2-VL-7B", 
         }, 
         dataset_labels: dict[str, str] = {
-            '{"textcaps": 1, "pope": 0, "mme": 0, "text_vqa": 0, "vizwiz_vqa": 0}': "TextCaps", 
-            '{"textcaps": 0, "pope": 1, "mme": 0, "text_vqa": 0, "vizwiz_vqa": 0}': "POPE", 
-            '{"textcaps": 0, "pope": 0, "mme": 1, "text_vqa": 0, "vizwiz_vqa": 0}': "MME", 
-            '{"textcaps": 0, "pope": 0, "mme": 0, "text_vqa": 1, "vizwiz_vqa": 0}': "TextVQA", 
-            '{"textcaps": 0, "pope": 0, "mme": 0, "text_vqa": 0, "vizwiz_vqa": 1}': "VizWiz", 
+            "{\"/datasets/lmms-lab/TextCaps\": 1, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "TextCaps", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 1, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "POPE", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 1, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "MME", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 1, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "TextVQA", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 1}" : "VizWiz", 
         }, 
         metric_labels: dict[str, str] = {
             'ttft_attainments': 'TTFT SLO Attainment', 
