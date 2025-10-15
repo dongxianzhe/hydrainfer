@@ -2,8 +2,8 @@
 
 source ../common.sh
 
-model="llava-hf/llava-v1.6-vicuna-7b-hf"
-model_path="/models/llava-v1.6-vicuna-7b-hf"
+model="llava-hf/llava-1.5-7b-hf"
+model_path="/models/llava-1.5-7b-hf"
 declare -A dataset_to_path=(
     ["lmms-lab/MME"]="/datasets/lmms-lab/MME"
     ["lmms-lab/TextCaps"]="/datasets/lmms-lab/TextCaps"

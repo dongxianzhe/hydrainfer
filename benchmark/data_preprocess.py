@@ -1,3 +1,4 @@
+import concurrent
 import os
 from tqdm import tqdm
 import argparse
@@ -13,6 +14,30 @@ def get_preprocessed_data_path(path: str) -> str:
 
 def get_limit_max_tokens() -> int:
     return 1024
+
+
+def process_entry(i: int, dataset: list[dict], outputs: list[dict], args: argparse.Namespace) -> SyntheticDataEntry:
+    """
+    This function processes each entry and returns a SyntheticDataEntry.
+    
+    Args:
+        i (int): The index for the current entry.
+        dataset (List[dict]): A list of datasets containing 'question' and 'image'.
+        outputs (List[dict]): A list of output objects containing token information and text.
+        args (object): The arguments containing dataset and model information.
+    
+    Returns:
+        SyntheticDataEntry: The processed data entry with the appropriate fields.
+    """
+    return SyntheticDataEntry(
+        prompt=dataset[i]['question'], 
+        images=[encode_base64_content_from_image(dataset[i]['image'])], 
+        images_size=[dataset[i]['image'].size], 
+        dataset=args.dataset, 
+        n_output_tokens_ref=len(outputs[i].outputs[0].token_ids), 
+        output_ref=outputs[i].outputs[0].text, 
+        n_input_tokens_ref=len(outputs[i].prompt_token_ids)
+    )
 
 
 def preprocess(args: argparse.Namespace):
@@ -32,24 +57,25 @@ def preprocess(args: argparse.Namespace):
     entrypoint = LLM(model=args.model_path)
     outputs = entrypoint.generate(requests, sampling_params=sampling_params)
     
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_entry, 
+                                        range(n_requests), 
+                                        [dataset] * n_requests, 
+                                        [outputs] * n_requests, 
+                                        [args] * n_requests),
+                            total=n_requests, 
+                            desc="Processing synthetic source dataset"))
+
     synthetic_source_dataset = SyntheticSourceDataset(
         dataset=args.dataset, 
         model=args.model,
         dataset_path=args.dataset_path, 
         model_path=args.model_path, 
-        entries=[SyntheticDataEntry(
-            prompt=dataset[i]['question'], 
-            images=[encode_base64_content_from_image(dataset[i]['image'])], 
-            images_size=[dataset[i]['image'].size], 
-            dataset=args.dataset, 
-            n_output_tokens=len(outputs[i].outputs[0].token_ids), 
-            output_ref=outputs[i].outputs[0].text, 
-            n_input_tokens_ref=len(outputs[i].prompt_token_ids)
-        ) for i in tqdm(range(n_requests), desc="Processing synthetic source dataset")]
+        entries=results
     )
 
-    synthetic_source_dataset.entries = [entry for entry in synthetic_source_dataset.entries if entry.n_output_tokens != get_limit_max_tokens()]
-    print(f'Discard requests {len(synthetic_source_dataset.entries) - args.n_requests} that exceed the length')
+    synthetic_source_dataset.entries = [entry for entry in synthetic_source_dataset.entries if entry.n_output_tokens_ref != get_limit_max_tokens()]
+    print(f'Discard requests {len(synthetic_source_dataset.entries) - n_requests} that exceed the length')
     with open(get_preprocessed_data_path(args.dataset_path), "w") as file:
         json.dump(asdict(synthetic_source_dataset), fp=file, indent=4)
 

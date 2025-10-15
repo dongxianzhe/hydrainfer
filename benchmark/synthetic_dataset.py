@@ -23,7 +23,7 @@ def encode_base64_content_from_image(image: Image.Image) -> str:
 class SyntheticDataEntry:
     prompt: str
     images: Optional[list[str]]
-    n_output_tokens: int
+    n_output_tokens_ref: int
     images_size: list[Union[tuple[int, int], list[int]]] # (width, height) we need union because dump json wil convert tuple to list but load json can't convert list to tuple
     dataset: str
     n_input_tokens_ref: int = 0
