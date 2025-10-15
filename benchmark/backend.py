@@ -64,9 +64,7 @@ async def send_request(payload: dict, entry: SyntheticDataEntry, base_url: str="
 async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
     send_pbar.update(1)
     payload = prepare_openai_compatible_payload(model_path, entry)
-    print('request is send')
     output = await send_request(payload, entry, base_url, timeout)
-    print('request is finished')
     recv_pbar.update(1)
     return output
 

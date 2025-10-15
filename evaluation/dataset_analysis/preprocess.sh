@@ -2,13 +2,25 @@
 
 source ../common.sh
 
-MODEL_PATH="/mnt/cfs/9n-das-admin/llm_models/llava-v1.6-vicuna-7b-hf"
-datasets=("lmms-lab/MME" "lmms-lab/TextCaps" "lmms-lab/POPE" "lmms-lab/textvqa" "lmms-lab/VizWiz-VQA")
+model="llava-hf/llava-v1.6-vicuna-7b-hf"
+model_path="/models/llava-v1.6-vicuna-7b-hf"
+declare -A dataset_to_path=(
+    ["lmms-lab/MME"]="/datasets/lmms-lab/MME"
+    ["lmms-lab/TextCaps"]="/datasets/lmms-lab/TextCaps"
+    ["lmms-lab/POPE"]="/datasets/lmms-lab/POPE"
+    ["lmms-lab/textvqa"]="/datasets/lmms-lab/textvqa"
+    ["lmms-lab/VizWiz-VQA"]="/datasets/lmms-lab/VizWiz-VQA"
+)
 
-for i in {0..4}; do
-    CUDA_VISIBLE_DEVICES=$i conda run -n vllm --no-capture-output python $OUR_ROOT_PATH/benchmark/data_preprocess.py --model-path=$MODEL_PATH --dataset="${datasets[$i]}" &
+for dataset in "${!dataset_to_path[@]}"; do
+    dataset_path="${dataset_to_path[$dataset]}"
+    echo ${dataset} ${dataset_path}
+    conda run -n vllm --no-capture-output \
+        python ${OUR_ROOT_PATH}/benchmark/data_preprocess.py \
+            --dataset=${dataset} \
+            --dataset-path=${dataset_path} \
+            --model=${model} \
+            --model-path=${model_path}
 done
-
-wait
 
 echo "all dataset preprocess finished"
