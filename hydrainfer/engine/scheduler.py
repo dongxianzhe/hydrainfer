@@ -81,7 +81,7 @@ class BatchScheduler:
             del self.migrating_requests[rcb.request_id]
         curr_inst = rcb.current_instruction()
         if isinstance(curr_inst, PullCache) and curr_inst.src_node_actor_handle:
-            curr_inst.src_node_actor_handle.free_migrating_request.remote(rcb.request_id)
+            curr_inst.src_node_actor_handle.free_migrated_request.remote(rcb.request_id)
 
     def free_migrated_request(self, request_id: int):
         assert request_id in self.migrating_requests

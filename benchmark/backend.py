@@ -31,7 +31,7 @@ def prepare_openai_compatible_payload(model_path: str, entry: SyntheticDataEntry
                 "content": content, 
             }
         ],
-        "max_tokens": entry.n_output_tokens,
+        "max_tokens": entry.n_output_tokens_ref,
         "temperature": 0.0,
         "stream": True,
     }
