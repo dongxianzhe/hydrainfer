@@ -31,3 +31,5 @@ outputs/
 **/out/**
 **/hydra_log/**
 **/*.json
+**/*.pdf
+**/*.tex
