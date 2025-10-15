@@ -37,7 +37,7 @@ def prepare_openai_compatible_payload(model_path: str, entry: SyntheticDataEntry
     }
     return payload
 
-async def send_request(payload: dict, entry: SyntheticDataEntry, str, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
+async def send_request(payload: dict, entry: SyntheticDataEntry, base_url: str="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
     output = OnlineRequestOutput(entry=entry)
     output.start_time = time.perf_counter()
     try:
@@ -64,7 +64,9 @@ async def send_request(payload: dict, entry: SyntheticDataEntry, str, base_url="
 async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
     send_pbar.update(1)
     payload = prepare_openai_compatible_payload(model_path, entry)
+    print('request is send')
     output = await send_request(payload, entry, base_url, timeout)
+    print('request is finished')
     recv_pbar.update(1)
     return output
 
