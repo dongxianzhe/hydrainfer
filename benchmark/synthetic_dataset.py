@@ -1,3 +1,6 @@
+import json
+import os
+import argparse
 import base64
 import random
 from dataclasses import dataclass
@@ -39,11 +42,14 @@ class SyntheticSourceDataset:
 class SyntheticDataset:
     def __init__(self, num_requests: int, dataset_path_to_weight: dict[str, int]):
         from data_preprocess import get_preprocessed_data_path
-        self.num_requests = num_requests
+        self.dataset_path_to_weight = dataset_path_to_weight
         source_datasets: list[SyntheticSourceDataset] = [load_json(data_class=SyntheticSourceDataset, data_path=get_preprocessed_data_path(dataset_path)) for dataset_path, weight in dataset_path_to_weight.items() if weight > 0]
         weights: list[int] = [weight for weight in dataset_path_to_weight.values() if weight > 0]
         assert len(weights) > 0, "no dataset source is chosen"
 
+        if num_requests == -1:
+            num_requests = sum([len(source_dataset.entries) for source_dataset in source_datasets])
+        self.num_requests = num_requests
         self.entries: list[SyntheticDataEntry] = []
         chosen_dataset_ids = random.choices(population=range(len(source_datasets)), weights=weights, k=num_requests)
         for dataset_id, source_dataset in enumerate(source_datasets):
@@ -55,3 +61,25 @@ class SyntheticDataset:
 
     def __getitem__(self, i: int) -> SyntheticDataEntry:
         return self.entries[i]
+
+    @classmethod
+    def add_cli_args(cls, parser: argparse.ArgumentParser):
+        parser.add_argument("--textcaps", type=int, default=int(os.environ.get("TEXTCAPS", 0)))
+        parser.add_argument("--pope", type=int, default=int(os.environ.get("POPE", 0)))
+        parser.add_argument("--mme", type=int, default=int(os.environ.get("MME", 0)))
+        parser.add_argument("--text_vqa", type=int, default=int(os.environ.get("TEXT_VQA", 0)))
+        parser.add_argument("--vizwiz_vqa", type=int, default=int(os.environ.get("VIZWIZ_VQA", 0)))
+
+    @classmethod
+    def from_cli_args(cls, args: argparse.Namespace, num_requests=-1):
+        dataset_path_to_weight = {
+            "/datasets/lmms-lab/TextCaps": args.textcaps, 
+            "/datasets/lmms-lab/POPE": args.pope, 
+            "/datasets/lmms-lab/MME": args.mme, 
+            "/datasets/lmms-lab/textvqa": args.text_vqa, 
+            "/datasets/lmms-lab/VizWiz-VQA": args.vizwiz_vqa, 
+        }
+        return cls(num_requests, dataset_path_to_weight)
+        
+    def get_dataset_name(self) -> str:
+        return self.dataset_path_to_weight

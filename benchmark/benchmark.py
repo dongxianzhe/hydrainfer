@@ -108,13 +108,7 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
         results.append(result)
     return MethodResults(
         method_name = args.method_name, 
-        datasets = {
-            "textcaps" : args.textcaps, 
-            "pope" : args.pope, 
-            "mme" : args.mme, 
-            "text_vqa" : args.text_vqa, 
-            "vizwiz_vqa" : args.vizwiz_vqa,
-        }, 
+        datasets = dataset.get_dataset_name(), 
         model = args.model, 
         model_path = args.model_path, 
         results = results, 
@@ -124,17 +118,7 @@ async def benchmarks(args: argparse.Namespace, dataset: SyntheticDataset) -> Met
 def main(args: argparse.Namespace):
     random.seed(args.seed)
     np.random.seed(args.seed)
-    dataset_path_to_weight = {
-        "/datasets/lmms-lab/TextCaps": args.textcaps, 
-        "/datasets/lmms-lab/POPE": args.pope, 
-        "/datasets/lmms-lab/MME": args.mme, 
-        "/datasets/lmms-lab/textvqa": args.text_vqa, 
-        "/datasets/lmms-lab/VizWiz-VQA": args.vizwiz_vqa, 
-    }
-    dataset = SyntheticDataset(
-        num_requests = int(args.num_requests * args.request_rate_num_requests_scale * max(args.request_rate)), 
-        dataset_path_to_weight = dataset_path_to_weight, 
-    )                 
+    dataset = SyntheticDataset.from_cli_args(args, int(args.num_requests * args.request_rate_num_requests_scale * max(args.request_rate)))
     method_results = benchmarks(args, dataset)
     analyze_result(args, method_results)
     log_result(args, method_results)
@@ -182,13 +166,9 @@ if __name__ == '__main__':
         default="poisson", 
         help="choose the request rate sampling method", 
     )
+    SyntheticDataset.add_cli_args(parser)
     parser.add_argument("--host", type=str, default="localhost")
     parser.add_argument("--port", type=int, default=8888)
-    parser.add_argument("--textcaps", type=int, default=int(os.environ.get("TEXTCAPS", 0)))
-    parser.add_argument("--pope", type=int, default=int(os.environ.get("POPE", 0)))
-    parser.add_argument("--mme", type=int, default=int(os.environ.get("MME", 0)))
-    parser.add_argument("--text_vqa", type=int, default=int(os.environ.get("TEXT_VQA", 0)))
-    parser.add_argument("--vizwiz_vqa", type=int, default=int(os.environ.get("VIZWIZ_VQA", 0)))
     parser.add_argument("--result-path", type=str)
     parser.add_argument("--method-name", type=str)
     parser.add_argument("--timeout", type=float, default=30)
