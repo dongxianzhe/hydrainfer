@@ -41,3 +41,14 @@ get_free_gpus() {
     free_gpus=$(conda run -n hydrainfer --no-capture-output python $COMMON_SCRIPT_PATH/get_free_gpus.py)
     echo "$free_gpus"
 }
+
+find_free_port() {
+  local port=10000
+
+  while true; do
+    if ! lsof -i :$port &>/dev/null; then
+      echo "$port"
+    fi
+    ((port++))
+  done
+}

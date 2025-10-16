@@ -2,15 +2,15 @@
 source ../common.sh
 
 ############################## params ##############################
-REQUEST_RATES="0.5 1 1.5 2 2.5 3 3.5 4 4.5 5"
-NUM_REQUESTS=30
-# REQUEST_RATES=12
-# NUM_REQUESTS=3
-ttft_slo=4
+# REQUEST_RATES="0.5 1 1.5 2 2.5 3 3.5 4 4.5 5"
+# NUM_REQUESTS=30
+REQUEST_RATES=5
+NUM_REQUESTS=3
+ttft_slo=8
 tpot_slo=0.2
 timeout=30
 host="127.0.0.1"
-port="8891"
+port=$(find_free_port)
 start_server_max_retry=5
 find_free_gpus_max_retry=1000
 only_text=0
@@ -18,18 +18,18 @@ start_server=1
 start_benchmark=1
 log_latency_breakdown=true
 gpu_configs=(
-    # 1
+    1
     # 2
     # 3
     # 4
-    8
+    # 8
     # 16
     # 32
 )
 declare -A methods=(
-    ["ours"]="start_hydrainfer_server"
+    # ["ours"]="start_hydrainfer_server"
     # ["vllm"]="start_vllm_server"
-    # ["vllm-0-11-0"]="start_vllm_server"
+    ["vllm-0-11-0"]="start_vllm_server"
     # ["vllm-0-10-2"]="start_vllm_server"
     # ["vllm-0-9-2"]="start_vllm_server"
     # ["vllm-0-8-5"]="start_vllm_server"
@@ -80,16 +80,9 @@ start_hydrainfer_server(){
         ttft_slo=$ttft_slo \
         tpot_slo=$tpot_slo \
         log_latency_breakdown=$log_latency_breakdown \
-        cluster=general \
-        cluster.n_enode=0 \
-        cluster.n_epnode=0 \
-        cluster.n_ednode=0 \
-        cluster.n_epdnode=8 \
-        cluster.n_pnode=0 \
-        cluster.n_pdnode=0 \
-        cluster.n_dnode=0 \
         cluster.log_server_path=${log_server_path} \
         > $api_server_log_path 2>&1 &
+    # cluster=general cluster.n_enode=0 cluster.n_epnode=0 cluster.n_ednode=2 cluster.n_epdnode=0 cluster.n_pnode=6 cluster.n_pdnode=0 cluster.n_dnode=0 \
 }
 
 start_vllm_server(){
