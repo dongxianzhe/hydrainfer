@@ -48,6 +48,7 @@ find_free_port() {
   while true; do
     if ! lsof -i :$port &>/dev/null; then
       echo "$port"
+      return 0
     fi
     ((port++))
   done
