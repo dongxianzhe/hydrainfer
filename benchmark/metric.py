@@ -41,8 +41,9 @@ class OnlineRequestOutput:
     total_tokens: int = 0
     latency: Optional[float] = None
     ttft: Optional[float] = None
-    tpots: list[float] = field(default_factory=list)
-    tpot_statistics: Optional[Statistics] = None
+    tbts: list[float] = field(default_factory=(list))
+    tbt_statistics: Optional[Statistics] = None
+    tpot: Optional[float] = None
 
 
 @dataclass
@@ -60,10 +61,12 @@ class BenchmarkResult:
     request_throughput: float = 0
     latencies: list[float] = field(default_factory=list)
     ttfts: list[float] = field(default_factory=list)
+    tbts: list[float] = field(default_factory=list)
     tpots: list[float] = field(default_factory=list)
     latency_statistics: Optional[Statistics] = None
     ttft_statistics: Optional[Statistics] = None
     tpot_statistics: Optional[Statistics] = None
+    tbt_statistics: Optional[Statistics] = None
 
 
 @dataclass

@@ -23,13 +23,15 @@ def analyze_result(args: argparse.Namespace, method_results: MethodResults):
             output.total_tokens = len(output.token_times)
             output.latency = output.token_times[-1] - output.start_time
             output.ttft = output.token_times[0] - output.start_time
-            output.tpots = sorted([output.token_times[i] - output.token_times[i - 1] for i in range(1, len(output.token_times))])
-            output.tpot_statistics = make_statistic(output.tpots)
+            output.tbts = sorted([output.token_times[i] - output.token_times[i - 1] for i in range(1, len(output.token_times))])
+            output.tbt_statistics = make_statistic(output.tbts)
+            output.tpot = output.tbt_statistics.mean
             result.total_tokens += output.total_tokens
             result.total_success += output.success
             result.latencies.append(output.latency)
             result.ttfts.append(output.ttft)
-            result.tpots.extend(output.tpots)
+            result.tpots.append(output.tpot)
+            result.tbts.extend(output.tbts)
         result.latencies.sort()
         result.ttfts.sort()
         result.tpots.sort()
@@ -38,6 +40,7 @@ def analyze_result(args: argparse.Namespace, method_results: MethodResults):
         result.latency_statistics = make_statistic(result.latencies)
         result.ttft_statistics = make_statistic(result.ttfts)
         result.tpot_statistics = make_statistic(result.tpots)
+        result.tbt_statistics = make_statistic(result.tbts)
 
 def log_result(args: argparse.Namespace, method_results: MethodResults):
     # we do not log images to speed up log time

@@ -136,8 +136,8 @@ class PerformanceAnalyzer:
         def get_success_outputs(outputs: list[OnlineRequestOutput]) -> list[OnlineRequestOutput]:
             return [output for output in outputs if output.success]
         ttft_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
-        tpot_attainments = [sum(output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
-        slo_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] and output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
+        tpot_attainments = [sum(output.tbt_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
+        slo_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] and output.tpot_statistics.mean < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
         _, ttft_attainments = self.smooth_curve(self.request_rates, ttft_attainments)
         _, tpot_attainments = self.smooth_curve(self.request_rates, tpot_attainments)
         _, slo_attainments = self.smooth_curve(self.request_rates, slo_attainments)
