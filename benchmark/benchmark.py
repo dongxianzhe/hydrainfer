@@ -35,6 +35,7 @@ def analyze_result(args: argparse.Namespace, method_results: MethodResults):
         result.latencies.sort()
         result.ttfts.sort()
         result.tpots.sort()
+        result.tbts.sort()
         result.token_throughput = result.total_tokens / (result.end_time - result.start_time)
         result.request_throughput = result.total_success / (result.end_time - result.start_time)
         result.latency_statistics = make_statistic(result.latencies)
