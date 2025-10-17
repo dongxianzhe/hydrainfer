@@ -111,9 +111,9 @@ class AsyncEPDNode:
         reserved_memory = total_memory - model_memory
         activation_memory_utilization = 0.
         if context.node_type.has_vision_model:
-            activation_memory_utilization += 0.1
+            activation_memory_utilization += 0.05
         if context.node_type.has_language_model:
-            activation_memory_utilization += 0.1
+            activation_memory_utilization += 0.05
         cache_memory_utilization = 1 - activation_memory_utilization
         if context.node_type.has_image_cache and context.node_type.has_kv_cache:
             image_cache_memory_utilization = cache_memory_utilization * 0.1

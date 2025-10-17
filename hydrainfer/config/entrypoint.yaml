@@ -41,3 +41,4 @@ ttft_slo: 2
 tpot_slo: 0.4
 
 log_latency_breakdown: false
+enable_prefix_cache: false

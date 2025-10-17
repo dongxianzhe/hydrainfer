@@ -28,6 +28,7 @@ class BatchSchedulerConfig:
     chunked_prefill: bool = True
     ttft_slo: float = 4
     debug: bool = False
+    enable_prefix_cache: bool = False
 
 
 @dataclass
@@ -122,7 +123,10 @@ class BatchScheduler:
             cache_is_enough: bool = True
             if isinstance(inst, Fill):
                 if rcb.virtual_kv_cache is None:
-                    rcb.virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache(inst.hashes)
+                    hashes = None
+                    if self.config.enable_prefix_cache:
+                        hashes = inst.hashes
+                    rcb.virtual_kv_cache = self.context.kv_cache_block_manager.allocate_virtual_cache(hashes)
                     num_prefix_cache_matched = rcb.virtual_kv_cache.n_cache_tokens
                     if num_prefix_cache_matched > 0:
                         assert num_prefix_cache_matched <= len(inst.token_ids)

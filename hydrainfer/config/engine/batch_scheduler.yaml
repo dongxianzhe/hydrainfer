@@ -3,3 +3,4 @@ max_running_requests: -1
 ttft_slo: ${ttft_slo}
 chunked_prefill: True
 debug: False
+enable_prefix_cache: ${enable_prefix_cache}
