@@ -316,12 +316,13 @@ class PerformanceAnalyzer:
             return ax_id
 
         for methods_comparion_data in self.all_methods_comparion_data:
+            request_rates=[result.request_rate for result in methods_comparion_data.methods_attainemnts[0].method_results.results]
             for method_attainment in methods_comparion_data.methods_attainemnts:
                 model_id = self.models.get_id(method_attainment.method_results.model)
                 dataset_id = self.datasets.get_id(json.dumps(method_attainment.method_results.datasets))
                 method_id = self.methods.get_id(method_attainment.method_results.method_name)
                 for metric_id, metric in enumerate(self.metrics):
-                    x = self.request_rates
+                    x = request_rates
                     y = getattr(method_attainment, metric)
                     ax = axes[compute_ax_id(model_id=model_id, dataset_id=dataset_id, metric_id=metric_id)]
                     ax.plot(x, y, color=color_list[method_id], marker=marker_list[method_id])
@@ -343,7 +344,7 @@ class PerformanceAnalyzer:
                         ax.text(-0.30, 0.5, model_labels.get(self.models[i], self.models[i]), transform=ax.transAxes, ha='right', va='center', rotation=90, fontsize=fontsize)
                     if i == n_models - 1 and k == n_metrics - 1:
                         ax.set_xlabel('Request Rate (req/s)', fontsize=fontsize)
-                        ax.text(7, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', fontsize=fontsize)
+                        ax.text(j, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', fontsize=fontsize)
                     for label in ax.get_xticklabels():
                         label.set_fontsize(fontsize - 5)
                     for label in ax.get_yticklabels():
