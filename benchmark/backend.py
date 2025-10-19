@@ -77,8 +77,10 @@ async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pba
     return output
 
 def get_server_proxy(backend: str):
-    if backend in ['ours', 'tgi', 'sglang']:
+    if backend in ['ours', 'tgi']:
         return openai_compatible_server_proxy
     if 'vllm' in backend:
+        return vllm_server_proxy
+    if 'sglang' in backend:
         return vllm_server_proxy
     return openai_compatible_server_proxy
