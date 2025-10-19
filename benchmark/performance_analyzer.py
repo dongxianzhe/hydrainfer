@@ -251,10 +251,17 @@ class PerformanceAnalyzer:
         sorted_groups = sorted(groups, key=lambda methods_comprion_data: np.var([attainment.goodput for attainment in methods_comprion_data.methods_attainemnts]), reverse=True)
         return sorted_groups[:num_groups_selected]
 
-    def analyze_results(self, ttft_slo_settings: Optional[list[float]]=None, tpot_slo_settings: Optional[list[float]]=None):
+    def analyze_results(self, 
+        model_dataset_to_ttft_tpot_slo_settings: Optional[dict[tuple[str, str], tuple[list[float], list[float]]]]=None, 
+        ttft_slo_settings:Optional[list[float]]=None, 
+        tpot_slo_settings:Optional[list[float]]=None, 
+    ):
         self.all_methods_comparion_data: list[MethodsComparionData] = []
         for model, model_methods_results in bucket_by_attr(self.methods_results, lambda m: m.model).items():
             for dataset, model_dataset_methods_results in bucket_by_attr(model_methods_results, lambda m: json.dumps(m.datasets)).items():
+                if model_dataset_to_ttft_tpot_slo_settings is not None and (model, dataset) in model_dataset_to_ttft_tpot_slo_settings:
+                    ttft_slo_settings = model_dataset_to_ttft_tpot_slo_settings[(model, dataset)][0]
+                    tpot_slo_settings = model_dataset_to_ttft_tpot_slo_settings[(model, dataset)][1]
                 methods_comparion_data: MethodsComparionData = self.auto_select_slo_settings(
                     model_dataset_methods_results, 
                     ttft_slo_settings=ttft_slo_settings, 
