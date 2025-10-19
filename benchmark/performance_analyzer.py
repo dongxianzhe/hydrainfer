@@ -355,8 +355,8 @@ class PerformanceAnalyzer:
                     for spine in ax.spines.values():
                         spine.set_edgecolor('black')
                         
-        legend_labels = [method for method in self.methods]
-        legend_lines = [Line2D([0], [0], color=color_list[i], marker=marker_list[i]) for i, method in enumerate(self.methods)]
+        legend_labels = [method_labels.get(method, method) for method in self.methods]
+        legend_lines = [Line2D([0], [0], color=color_list[i], marker=marker_list[i]) for i, method in enumerate(legend_labels)]
         legend_n_cols = n_methods
         fig.legend(
             legend_lines, 
