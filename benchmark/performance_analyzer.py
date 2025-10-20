@@ -308,7 +308,7 @@ class PerformanceAnalyzer:
         self.metrics = NameIndexer(metrics)
         n_models, n_metrics, n_datasets, n_methods = len(self.models), len(self.metrics), len(self.datasets), len(self.methods)
         n_rows, n_cols = n_models * n_metrics, len(self.datasets)
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4 * n_rows))
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4.2 * n_rows))
         axes = np.array(axes).reshape(n_rows * n_cols)
         def compute_ax_id(model_id: int, dataset_id: int, metric_id: int) -> int:
             axes_stride = (n_metrics * n_datasets, n_datasets, 1)
@@ -344,7 +344,7 @@ class PerformanceAnalyzer:
                         ax.text(-0.30, 0.5, model_labels.get(self.models[i], self.models[i]), transform=ax.transAxes, ha='right', va='center', rotation=90, fontsize=fontsize)
                     if i == n_models - 1 and k == n_metrics - 1:
                         ax.set_xlabel('Request Rate (req/s)', fontsize=fontsize)
-                        ax.text(j, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', fontsize=fontsize)
+                        ax.text(0.5, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', transform=ax.transAxes, fontsize=fontsize)
                     for label in ax.get_xticklabels():
                         label.set_fontsize(fontsize - 5)
                     for label in ax.get_yticklabels():
