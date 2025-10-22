@@ -304,6 +304,12 @@ class PerformanceAnalyzer:
         marker_list: list[str]=['o', 's', '^', 'v', '>', '<', 'd', 'p', '*', 'h', 'H', 'x', '+', '.', ',', '|', '_'], 
         color_list: list[str]=["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"], 
         fontsize: int=22, 
+        legend_n_cols: int = -1, 
+        legend_bbox_to_anchor: tuple[float, float]=(0.5, 1.0), 
+        legend_line_swap: list[tuple[int, int]] = [], 
+        show_dataset_labels: bool = True, 
+        show_model_labels: bool = True, 
+        legend_fontsize_offset: int = 2, 
     ):
         self.metrics = NameIndexer(metrics)
         n_models, n_metrics, n_datasets, n_methods = len(self.models), len(self.metrics), len(self.datasets), len(self.methods)
@@ -341,10 +347,12 @@ class PerformanceAnalyzer:
                     metric = self.metrics[k]
                     if j == 0:
                         ax.set_ylabel(metric_labels.get(self.metrics[k], self.metrics[k]), fontsize=fontsize)
+                    if show_model_labels and j == 0: 
                         ax.text(-0.30, 0.5, model_labels.get(self.models[i], self.models[i]), transform=ax.transAxes, ha='right', va='center', rotation=90, fontsize=fontsize)
                     if i == n_models - 1 and k == n_metrics - 1:
                         ax.set_xlabel('Request Rate (req/s)', fontsize=fontsize)
-                        ax.text(0.5, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', transform=ax.transAxes, fontsize=fontsize)
+                    if show_dataset_labels and i == n_models - 1 and k == n_metrics - 1:
+                            ax.text(0.5, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', transform=ax.transAxes, fontsize=fontsize)
                     for label in ax.get_xticklabels():
                         label.set_fontsize(fontsize - 5)
                     for label in ax.get_yticklabels():
@@ -357,9 +365,21 @@ class PerformanceAnalyzer:
                         
         legend_labels = [method_labels.get(method, method) for method in self.methods]
         legend_lines = [Line2D([0], [0], color=color_list[i], marker=marker_list[i]) for i, method in enumerate(legend_labels)]
-        legend_n_cols = n_methods
+        if legend_n_cols == -1:
+            legend_n_cols = n_methods
+        legend_n_rows = (n_methods + legend_n_cols - 1) // legend_n_cols
+        for i in range(legend_n_rows * legend_n_cols - n_methods):
+            legend_lines.append(Line2D([], [], color='none'))
+            legend_labels.append('')
+        def swap(l: list, i: int, j: int):
+            l[i], l[j] = l[j], l[i]
+        def swap_legend(i, j):
+            swap(legend_lines, i, j)
+            swap(legend_labels, i, j)
+        for i, j in legend_line_swap:
+            swap_legend(i, j)
         fig.legend(
             legend_lines, 
             legend_labels, 
-            loc='upper center', ncol=legend_n_cols, fontsize=fontsize + 2, frameon=False, bbox_to_anchor=(0.5, 1.0))
+            loc='upper center', ncol=legend_n_cols, fontsize=fontsize + legend_fontsize_offset, frameon=False, bbox_to_anchor=legend_bbox_to_anchor)
         fig.savefig(figure_path, bbox_inches="tight")
