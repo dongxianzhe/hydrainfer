@@ -10,7 +10,7 @@ from typing import AsyncGenerator
 from dataclasses import dataclass, field, asdict
 from metric import OnlineRequestOutput, BenchmarkResult, MethodResults, Statistics, make_statistic
 from synthetic_dataset import SyntheticDataset, SyntheticDataEntry
-from backend import get_server_proxy
+from backend import get_server_proxy, initialize_client
 from timestamp import get_intervals
 
 def analyze_result(args: argparse.Namespace, method_results: MethodResults):
@@ -75,6 +75,7 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, request
     num_requests_scaled = int(args.num_requests * request_rate * args.request_rate_num_requests_scale)
     send_pbar = tqdm(total = num_requests_scaled, desc='send')
     recv_pbar = tqdm(total = num_requests_scaled, desc='recv')
+    initialize_client(args.timeout)
     server_proxy = get_server_proxy(args.backend)
     
     intervals = get_intervals(method=args.request_rate_method, request_rate=request_rate_scaled)
@@ -87,7 +88,7 @@ async def benchmark(args: argparse.Namespace, dataset: SyntheticDataset, request
         if args.only_text:
             entry.images = []
             entry.images_size = []
-        tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, base_url=f"http://{args.host}:{args.port}/v1", timeout=args.timeout)))
+        tasks.append(asyncio.create_task(server_proxy(args.model_path, entry, send_pbar=send_pbar, recv_pbar=recv_pbar, base_url=f"http://{args.host}:{args.port}/v1")))
     outputs: list[OnlineRequestOutput] = await asyncio.gather(*tasks)
     end_time = time.perf_counter()
     recv_pbar.close()
