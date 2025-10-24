@@ -334,9 +334,15 @@ class AsyncEPDNode:
         if len(batch) == 0:
             return
         for rcb, inst in batch:
-            loadbalancer = self.ep_loadbalancer if isinstance(inst, EPMigrate) else self.pd_loadbalancer
+            migrate_to_self = False
+            if isinstance(inst, EPMigrate):
+                loadbalancer = self.ep_loadbalancer
+                migrate_to_self = self.context.node_type.enable_prefill
+            else: 
+                loadbalancer = self.pd_loadbalancer
+                migrate_to_self = self.context.node_type.enable_decode
             node = loadbalancer.choice(key=rcb.scenario_type)
-            if node.id == self.actor_id:
+            if node.id == self.actor_id or migrate_to_self:
                 # if migrate to self, skip migrate and pull cache stage and continue schedule running
                 rcb.step()
                 rcb.step()

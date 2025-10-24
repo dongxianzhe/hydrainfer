@@ -166,7 +166,7 @@ class BatchSchedulerProfiler:
         logger.debug(f'start profile_image_budgets')
         image_budgets = self._binary_search_max_batch_size(
             left=1, 
-            right=8, 
+            right=32, 
             criterion=functools.partial(
                 self._criterion, 
                 prepare_batch=self._prepare_encode_batch, 
