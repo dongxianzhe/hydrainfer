@@ -6,7 +6,7 @@ import os
 import json
 import numpy as np
 from collections import defaultdict
-from metric import MethodResults
+from metric import MethodResults, OnlineRequestOutput
 from dataclasses import dataclass
 from utils import load_json
 from hydrainfer.utils.logger import getLogger
@@ -83,7 +83,8 @@ def bucket_by_attr(items: list[T], key_func: Callable[[T], str]) -> dict[str, li
 
 class PerformanceAnalyzer:
     """ this class is figure and table builder 
-        analyzer.scan_results_folder("/data1/home/dongxianzhe1/projects/hydrainfer/evaluation/test_correctness/result")
+        analyzer = PerformanceAnalyzer()
+        analyzer.scan_results_folder("/data1/home/dongxianzhe1/projects/hydrainfer/evaluation/slo_attainment/result")
         analyzer.parse()
         analyzer.analyze_results()
         analyzer.plot()
@@ -100,7 +101,9 @@ class PerformanceAnalyzer:
         date_pattern = re.compile(r'^\d{8}_\d{6}$')
         for folder_name in os.listdir(result_foler_path):
             folder_path = os.path.join(result_foler_path, folder_name)
-            if os.path.isdir(folder_path) and date_pattern.match(folder_name):
+            if not os.path.isdir(folder_path):
+                continue
+            if date_pattern.match(folder_name):
                 logger.info(f'scanning result folder {folder_path}')
                 # Iterate through all JSON files in the folder
                 for file_name in os.listdir(folder_path):
@@ -112,24 +115,29 @@ class PerformanceAnalyzer:
                             logger.info(f'load result {file_path}')
                         except Exception as e:
                             logger.info(f"error load result {file_path}: {e}")
+            else:
+                self.scan_results_folder(folder_path)
 
     def parse(self):
         """ build models, datasets, methods indexes """
+        assert len(self.methods_results) > 0, 'no result is scanned'
         for method_result in self.methods_results:
             self.models.add(method_result.model)
             self.datasets.add(json.dumps(method_result.datasets))
             self.methods.add(method_result.method_name)
-        logger.info(self.models)
-        logger.info(self.datasets)
-        logger.info(self.methods)
+        logger.info(f"all models: {self.models}")
+        logger.info(f"all models: {self.datasets}")
+        logger.info(f"all models: {self.methods}")
         
         assert all(len(method_result.results) == len(self.methods_results[0].results) for method_result in self.methods_results), f'method result is not equal'
         self.request_rates = [result.request_rate for result in self.methods_results[0].results]
 
     def compute_slo_attainenments(self, method_results: MethodResults, dataset_to_ttft_slo_settings: dict[str, float], dataset_to_tpot_slo_settings: dict[str, float]) -> SLOAttainment:
-        ttft_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] for output in result.outputs) / len(result.outputs) for result in method_results.results]
-        tpot_attainments = [sum(output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in result.outputs) / len(result.outputs) for result in method_results.results]
-        slo_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] and output.tpot_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in result.outputs) / len(result.outputs) for result in method_results.results]
+        def get_success_outputs(outputs: list[OnlineRequestOutput]) -> list[OnlineRequestOutput]:
+            return [output for output in outputs if output.success]
+        ttft_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
+        tpot_attainments = [sum(output.tbt_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
+        slo_attainments = [sum(output.ttft < dataset_to_ttft_slo_settings[output.entry.dataset] and output.tbt_statistics.p90 < dataset_to_tpot_slo_settings[output.entry.dataset] for output in get_success_outputs(result.outputs)) / len(result.outputs) for result in method_results.results]
         _, ttft_attainments = self.smooth_curve(self.request_rates, ttft_attainments)
         _, tpot_attainments = self.smooth_curve(self.request_rates, tpot_attainments)
         _, slo_attainments = self.smooth_curve(self.request_rates, slo_attainments)
@@ -211,11 +219,19 @@ class PerformanceAnalyzer:
     def auto_select_slo_settings(self, methods_results: list[MethodResults], ttft_slo_settings: Optional[list[float]]=None, tpot_slo_settings: Optional[list[float]]=None, num_groups_selected: int=1) -> list[MethodsComparionData]:
         sample_request_rate = len(self.request_rates) // 3 * 2
         ttft_slo_settings = self.sample_and_round_range(
-            values=[method_results.results[sample_request_rate].ttft_statistics.mean for method_results in methods_results], 
+            values=[
+                method_results.results[sample_request_rate].ttft_statistics.mean 
+                for method_results in methods_results
+                if method_results.results[sample_request_rate].ttft_statistics is not None
+                ], 
             num_samples=10, 
             round_to=0.2) if ttft_slo_settings is None else ttft_slo_settings
         tpot_slo_settings = self.sample_and_round_range(
-            values=[method_results.results[sample_request_rate].tpot_statistics.p90 for method_results in methods_results], 
+            values=[
+                method_results.results[sample_request_rate].tpot_statistics.p90 
+                for method_results in methods_results
+                if method_results.results[sample_request_rate].tpot_statistics is not None
+                ], 
             num_samples=10, 
             round_to=0.04) if tpot_slo_settings is None else tpot_slo_settings
 
@@ -235,11 +251,22 @@ class PerformanceAnalyzer:
         sorted_groups = sorted(groups, key=lambda methods_comprion_data: np.var([attainment.goodput for attainment in methods_comprion_data.methods_attainemnts]), reverse=True)
         return sorted_groups[:num_groups_selected]
 
-    def analyze_results(self):
+    def analyze_results(self, 
+        model_dataset_to_ttft_tpot_slo_settings: Optional[dict[tuple[str, str], tuple[list[float], list[float]]]]=None, 
+        ttft_slo_settings:Optional[list[float]]=None, 
+        tpot_slo_settings:Optional[list[float]]=None, 
+    ):
         self.all_methods_comparion_data: list[MethodsComparionData] = []
         for model, model_methods_results in bucket_by_attr(self.methods_results, lambda m: m.model).items():
             for dataset, model_dataset_methods_results in bucket_by_attr(model_methods_results, lambda m: json.dumps(m.datasets)).items():
-                methods_comparion_data: MethodsComparionData = self.auto_select_slo_settings(model_dataset_methods_results)[0]
+                if model_dataset_to_ttft_tpot_slo_settings is not None and (model, dataset) in model_dataset_to_ttft_tpot_slo_settings:
+                    ttft_slo_settings = model_dataset_to_ttft_tpot_slo_settings[(model, dataset)][0]
+                    tpot_slo_settings = model_dataset_to_ttft_tpot_slo_settings[(model, dataset)][1]
+                methods_comparion_data: MethodsComparionData = self.auto_select_slo_settings(
+                    model_dataset_methods_results, 
+                    ttft_slo_settings=ttft_slo_settings, 
+                    tpot_slo_settings=tpot_slo_settings, 
+                    )[0]
                 self.all_methods_comparion_data.append(methods_comparion_data)
                 methods_goodput = {attainment.method_results.method_name: attainment.goodput for attainment in methods_comparion_data.methods_attainemnts}
                 logger.info(f'{model}, {dataset}, ttft settting {methods_comparion_data.ttft_slo_setting} tpot setting {methods_comparion_data.tpot_slo_setting} goodput {methods_goodput}')
@@ -258,11 +285,11 @@ class PerformanceAnalyzer:
             "Qwen/Qwen2-VL-7B": "Qwen2-VL-7B", 
         }, 
         dataset_labels: dict[str, str] = {
-            '{"textcaps": 1, "pope": 0, "mme": 0, "text_vqa": 0, "vizwiz_vqa": 0}': "TextCaps", 
-            '{"textcaps": 0, "pope": 1, "mme": 0, "text_vqa": 0, "vizwiz_vqa": 0}': "POPE", 
-            '{"textcaps": 0, "pope": 0, "mme": 1, "text_vqa": 0, "vizwiz_vqa": 0}': "MME", 
-            '{"textcaps": 0, "pope": 0, "mme": 0, "text_vqa": 1, "vizwiz_vqa": 0}': "TextVQA", 
-            '{"textcaps": 0, "pope": 0, "mme": 0, "text_vqa": 0, "vizwiz_vqa": 1}': "VizWiz", 
+            "{\"/datasets/lmms-lab/TextCaps\": 1, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "TextCaps", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 1, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "POPE", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 1, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "MME", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 1, \"/datasets/lmms-lab/VizWiz-VQA\": 0}" : "TextVQA", 
+            "{\"/datasets/lmms-lab/TextCaps\": 0, \"/datasets/lmms-lab/POPE\": 0, \"/datasets/lmms-lab/MME\": 0, \"/datasets/lmms-lab/textvqa\": 0, \"/datasets/lmms-lab/VizWiz-VQA\": 1}" : "VizWiz", 
         }, 
         metric_labels: dict[str, str] = {
             'ttft_attainments': 'TTFT SLO Attainment', 
@@ -277,11 +304,17 @@ class PerformanceAnalyzer:
         marker_list: list[str]=['o', 's', '^', 'v', '>', '<', 'd', 'p', '*', 'h', 'H', 'x', '+', '.', ',', '|', '_'], 
         color_list: list[str]=["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf"], 
         fontsize: int=22, 
+        legend_n_cols: int = -1, 
+        legend_bbox_to_anchor: tuple[float, float]=(0.5, 1.0), 
+        legend_line_swap: list[tuple[int, int]] = [], 
+        show_dataset_labels: bool = True, 
+        show_model_labels: bool = True, 
+        legend_fontsize_offset: int = 2, 
     ):
         self.metrics = NameIndexer(metrics)
         n_models, n_metrics, n_datasets, n_methods = len(self.models), len(self.metrics), len(self.datasets), len(self.methods)
         n_rows, n_cols = n_models * n_metrics, len(self.datasets)
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4 * n_rows))
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 4.2 * n_rows))
         axes = np.array(axes).reshape(n_rows * n_cols)
         def compute_ax_id(model_id: int, dataset_id: int, metric_id: int) -> int:
             axes_stride = (n_metrics * n_datasets, n_datasets, 1)
@@ -289,12 +322,13 @@ class PerformanceAnalyzer:
             return ax_id
 
         for methods_comparion_data in self.all_methods_comparion_data:
+            request_rates=[result.request_rate for result in methods_comparion_data.methods_attainemnts[0].method_results.results]
             for method_attainment in methods_comparion_data.methods_attainemnts:
                 model_id = self.models.get_id(method_attainment.method_results.model)
                 dataset_id = self.datasets.get_id(json.dumps(method_attainment.method_results.datasets))
                 method_id = self.methods.get_id(method_attainment.method_results.method_name)
                 for metric_id, metric in enumerate(self.metrics):
-                    x = self.request_rates
+                    x = request_rates
                     y = getattr(method_attainment, metric)
                     ax = axes[compute_ax_id(model_id=model_id, dataset_id=dataset_id, metric_id=metric_id)]
                     ax.plot(x, y, color=color_list[method_id], marker=marker_list[method_id])
@@ -313,10 +347,12 @@ class PerformanceAnalyzer:
                     metric = self.metrics[k]
                     if j == 0:
                         ax.set_ylabel(metric_labels.get(self.metrics[k], self.metrics[k]), fontsize=fontsize)
+                    if show_model_labels and j == 0: 
                         ax.text(-0.30, 0.5, model_labels.get(self.models[i], self.models[i]), transform=ax.transAxes, ha='right', va='center', rotation=90, fontsize=fontsize)
                     if i == n_models - 1 and k == n_metrics - 1:
                         ax.set_xlabel('Request Rate (req/s)', fontsize=fontsize)
-                        ax.text(7, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', fontsize=fontsize)
+                    if show_dataset_labels and i == n_models - 1 and k == n_metrics - 1:
+                            ax.text(0.5, -0.45, dataset_labels.get(self.datasets[j], self.datasets[j]), ha='center', va='bottom', transform=ax.transAxes, fontsize=fontsize)
                     for label in ax.get_xticklabels():
                         label.set_fontsize(fontsize - 5)
                     for label in ax.get_yticklabels():
@@ -327,11 +363,23 @@ class PerformanceAnalyzer:
                     for spine in ax.spines.values():
                         spine.set_edgecolor('black')
                         
-        legend_labels = [method for method in self.methods]
-        legend_lines = [Line2D([0], [0], color=color_list[i], marker=marker_list[i]) for i, method in enumerate(self.methods)]
-        legend_n_cols = n_methods
+        legend_labels = [method_labels.get(method, method) for method in self.methods]
+        legend_lines = [Line2D([0], [0], color=color_list[i], marker=marker_list[i]) for i, method in enumerate(legend_labels)]
+        if legend_n_cols == -1:
+            legend_n_cols = n_methods
+        legend_n_rows = (n_methods + legend_n_cols - 1) // legend_n_cols
+        for i in range(legend_n_rows * legend_n_cols - n_methods):
+            legend_lines.append(Line2D([], [], color='none'))
+            legend_labels.append('')
+        def swap(l: list, i: int, j: int):
+            l[i], l[j] = l[j], l[i]
+        def swap_legend(i, j):
+            swap(legend_lines, i, j)
+            swap(legend_labels, i, j)
+        for i, j in legend_line_swap:
+            swap_legend(i, j)
         fig.legend(
             legend_lines, 
             legend_labels, 
-            loc='upper center', ncol=legend_n_cols, fontsize=fontsize + 2, frameon=False, bbox_to_anchor=(0.5, 1.0))
+            loc='upper center', ncol=legend_n_cols, fontsize=fontsize + legend_fontsize_offset, frameon=False, bbox_to_anchor=legend_bbox_to_anchor)
         fig.savefig(figure_path, bbox_inches="tight")

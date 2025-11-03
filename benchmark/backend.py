@@ -1,19 +1,26 @@
 import httpx
+from typing import Optional
 import time
 import traceback
 import json
 import time
-import argparse
 import traceback
 from tqdm import tqdm
-from openai import AsyncOpenAI
 from metric import OnlineRequestOutput
 from synthetic_dataset import SyntheticDataEntry
 
-async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1", timeout: float=60) -> OnlineRequestOutput:
-    send_pbar.update(1)
-    output = OnlineRequestOutput(entry=entry)
-    output.start_time = time.perf_counter()
+initialized = False
+limits = httpx.Limits(max_connections=1000, max_keepalive_connections=1000)
+client: Optional[httpx.AsyncClient] = None
+
+def initialize_client(timeout: float):
+    global initialized
+    if initialized:
+        return
+    global client
+    client = httpx.AsyncClient(timeout=timeout, limits=limits)
+
+def prepare_openai_compatible_payload(model_path: str, entry: SyntheticDataEntry) -> dict:
     content = [
         {
             "type": "text",
@@ -27,48 +34,68 @@ async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEn
                 "url": f"data:image/png;base64,{image}"
             },
         })
-    try:
-        payload = {
-            "model": model_path,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": content, 
-                }
-            ],
-            "max_tokens": entry.max_tokens,
-            "temperature": 0.0,
-            "stream": True,
-        }
+    payload = {
+        "model": model_path,
+        "messages": [
+            {
+                "role": "user",
+                "content": content, 
+            }
+        ],
+        "max_tokens": entry.n_output_tokens_ref,
+        "temperature": 0.0,
+        "stream": True,
+    }
+    return payload
 
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", f"{base_url}/chat/completions", json=payload) as response:
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    if line.strip() == "data: [DONE]":
-                        break
-                    data = json.loads(line[len("data: "):])
-                    delta = data["choices"][0]["delta"].get("content")
-                    if isinstance(delta, str):
-                        output.output_text += delta
-                    output.token_times.append(time.perf_counter())
+async def send_request(payload: dict, entry: SyntheticDataEntry, base_url: str="http://localhost:8000/v1") -> OnlineRequestOutput:
+    global client
+    output = OnlineRequestOutput(entry=entry)
+    output.start_time = time.perf_counter()
+    try:
+        async with client.stream("POST", f"{base_url}/chat/completions", json=payload) as response:
+            async for line in response.aiter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                if line.strip() == "data: [DONE]":
+                    break
+                data = json.loads(line[len("data: "):])
+                delta = data["choices"][0]["delta"].get("content")
+                if isinstance(delta, str):
+                    output.output_text += delta
+                output.token_times.append(time.perf_counter())
 
         output.success = True
         output.prompt = entry.prompt
     except Exception:
         output.success = False
         output.error_msg = traceback.format_exc()
+    return output
 
+async def openai_compatible_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1") -> OnlineRequestOutput:
+    send_pbar.update(1)
+    if send_pbar.n >= send_pbar.total:
+        send_pbar.close()
+    payload = prepare_openai_compatible_payload(model_path, entry)
+    output = await send_request(payload, entry, base_url)
     recv_pbar.update(1)
     return output
 
+async def vllm_server_proxy(model_path: str, entry: SyntheticDataEntry, send_pbar: tqdm, recv_pbar: tqdm, base_url="http://localhost:8000/v1") -> OnlineRequestOutput:
+    send_pbar.update(1)
+    if send_pbar.n >= send_pbar.total:
+        send_pbar.close()
+    payload = prepare_openai_compatible_payload(model_path, entry)
+    payload['ignore_eos']=True
+    output = await send_request(payload, entry, base_url)
+    recv_pbar.update(1)
+    return output
 
 def get_server_proxy(backend: str):
-    if backend == 'ours':
+    if backend in ['ours', 'tgi']:
         return openai_compatible_server_proxy
-    if backend in ['vllm', 'tgi']:
-        return openai_compatible_server_proxy
-    if backend == 'sglang':
-        return openai_compatible_server_proxy
+    if 'vllm' in backend:
+        return vllm_server_proxy
+    if 'sglang' in backend:
+        return vllm_server_proxy
     return openai_compatible_server_proxy

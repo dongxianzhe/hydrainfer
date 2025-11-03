@@ -1,112 +1,91 @@
+import concurrent
 import os
-import json
-from datasets import load_dataset, Dataset
-from dataclasses import dataclass, field, asdict
+from tqdm import tqdm
 import argparse
+import json
+import datasets
+from dataclasses import dataclass, asdict
+from synthetic_dataset import SyntheticDataEntry, encode_base64_content_from_image, SyntheticSourceDataset
 
 
-@dataclass
-class ProcessedRequestResult:
-    prompt: list[str] = field(default_factory=list)
-    images_size: list[tuple[int, int]] = field(default_factory=list) 
-    # input_text: list[str] = field(default_factory=list)
-    # input_tokens: list[int] = field(default_factory=list)
-    n_input_tokens: list[int] = field(default_factory=list)
-    # output_tokens: list[int] = field(default_factory=list)
-    n_output_tokens: list[int] = field(default_factory=list)
-    output: list[str] = field(default_factory=list)
+def get_preprocessed_data_path(path: str) -> str:
+    return os.path.join(path, 'synthetic_source_dataset.json')
 
 
-@dataclass
-class PreProcessedResult:
-    dataset: str
-    model_path: str
-    requests: list[ProcessedRequestResult] = field(default_factory=list)
+def get_limit_max_tokens() -> int:
+    return 1024
 
 
-def preprocess_dataset(path: str, split: str, model_path: str) -> Dataset:
-    cache_file = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 
-        'cache', 
-        f"{path}_{split}.parquet".replace('/', '-')
+def process_entry(i: int, dataset: list[dict], outputs: list[dict], args: argparse.Namespace) -> SyntheticDataEntry:
+    """
+    This function processes each entry and returns a SyntheticDataEntry.
+    
+    Args:
+        i (int): The index for the current entry.
+        dataset (List[dict]): A list of datasets containing 'question' and 'image'.
+        outputs (List[dict]): A list of output objects containing token information and text.
+        args (object): The arguments containing dataset and model information.
+    
+    Returns:
+        SyntheticDataEntry: The processed data entry with the appropriate fields.
+    """
+    return SyntheticDataEntry(
+        prompt=dataset[i]['question'], 
+        images=[encode_base64_content_from_image(dataset[i]['image'])], 
+        images_size=[dataset[i]['image'].size], 
+        dataset=args.dataset, 
+        n_output_tokens_ref=len(outputs[i].outputs[0].token_ids), 
+        output_ref=outputs[i].outputs[0].text, 
+        n_input_tokens_ref=len(outputs[i].prompt_token_ids)
     )
-    cache_log = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 
-        'cache', 
-        f"{path}_{split}.log".replace('/', '-')
+
+
+def preprocess(args: argparse.Namespace):
+    from vllm import LLM, SamplingParams
+    dataset = datasets.load_dataset(args.dataset_path, split='test')
+    n_requests = min(len(dataset), args.n_requests)
+    requests: list = [{
+        "prompt": f"USER: <image>\n{dataset[i]['question']}\nASSISTANT:", 
+        "multi_modal_data": {
+            "image" : dataset[i]['image'], 
+        }} for i in tqdm(range(n_requests), desc="Processing requests input")]
+    sampling_params: list[SamplingParams] = [SamplingParams(
+            temperature=0, 
+            max_tokens=get_limit_max_tokens(), 
+            ignore_eos=False, 
+        ) for i in range(n_requests)]
+    entrypoint = LLM(model=args.model_path)
+    outputs = entrypoint.generate(requests, sampling_params=sampling_params)
+    
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        results = list(tqdm(executor.map(process_entry, 
+                                        range(n_requests), 
+                                        [dataset] * n_requests, 
+                                        [outputs] * n_requests, 
+                                        [args] * n_requests),
+                            total=n_requests, 
+                            desc="Processing synthetic source dataset"))
+
+    synthetic_source_dataset = SyntheticSourceDataset(
+        dataset=args.dataset, 
+        model=args.model,
+        dataset_path=args.dataset_path, 
+        model_path=args.model_path, 
+        entries=results
     )
-    os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-    if os.path.exists(cache_file):
-        print(f"Loading preprocessed dataset from {cache_file}")
-        dataset = Dataset.from_parquet(cache_file)
-    else:
-        # load raw data
-        print(f"Loading raw dataset and preprocessing {cache_file}")
-        dataset = load_dataset(path=path, split=split)
 
-        # process data
-        from vllm import LLM, SamplingParams
-        n_requests = len(dataset)
-
-        result = PreProcessedResult(
-            dataset = path, 
-            model_path = model_path, 
-            requests=[ProcessedRequestResult() for _ in range(n_requests)], 
-        )
-        requests: list = []
-        sampling_params: list[SamplingParams] = []
-        for i in range(n_requests):
-            entry = dataset[i]
-            result.requests[i].prompt = entry['question']
-            result.requests[i].images_size = [entry['image'].size]
-            requests.append({
-                "prompt": f"USER: <image>\n{entry['question']}\nASSISTANT:", 
-                "multi_modal_data": {
-                    "image" : entry['image'], 
-                }, 
-            })
-            sampling_params.append(SamplingParams(
-                temperature=0, 
-                max_tokens=1024, 
-                ignore_eos=False, 
-            ))
-        entrypoint = LLM(model=model_path, max_model_len=4096)
-        outputs = entrypoint.generate(requests, sampling_params=sampling_params)
-
-        for i in range(n_requests):
-            # results[i].input_text = outputs[i].prompt
-            # results[i].input_tokens = outputs[i].prompt_token_ids
-            result.requests[i].n_input_tokens = len(outputs[i].prompt_token_ids)
-            # results[i].output_tokens = outputs[i].outputs[0].token_ids
-            result.requests[i].n_output_tokens = len(outputs[i].outputs[0].token_ids) 
-            result.requests[i].output = outputs[i].outputs[0].text
-        with open(cache_log, "w") as file:
-            json.dump(asdict(result), fp=file, indent=4)
-        
-        dataset = dataset.add_column('max_tokens', [request.n_output_tokens for request in result.requests])
-        # save data
-        dataset.to_parquet(cache_file)
-        print(f"Preprocessed dataset saved to {cache_file}")
-    return dataset
-
-
-def load_processed_dataset(path: str, split: str, model_path: str) -> Dataset:
-    cache_file = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 
-        'cache', 
-        f"{path}_{split}.parquet".replace('/', '-')
-    )
-    if os.path.exists(cache_file):
-        print(f"Loading preprocessed dataset from {cache_file}")
-        dataset = Dataset.from_parquet(cache_file)
-    else:
-        raise Exception(f'preprocessed dataset not exists {cache_file}')
-    return dataset
+    synthetic_source_dataset.entries = [entry for entry in synthetic_source_dataset.entries if entry.n_output_tokens_ref != get_limit_max_tokens()]
+    print(f'Discard {n_requests - len(synthetic_source_dataset.entries)} requests that exceed the length')
+    with open(get_preprocessed_data_path(args.dataset_path), "w") as file:
+        json.dump(asdict(synthetic_source_dataset), fp=file, indent=4)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='preprocess dataset', conflict_handler='resolve')
-    parser.add_argument(f'--model-path', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model.')
-    parser.add_argument(f'--dataset', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the dataset.')
-    args, remain_args = parser.parse_known_args()
-    dataset = preprocess_dataset(args.dataset, 'test', args.model_path)
+    parser = argparse.ArgumentParser(description='data preprocessor')
+    parser.add_argument(f'--dataset', type=str, default="lmms-lab/TextCaps", help='The name of the dataset in huggingface.')
+    parser.add_argument(f'--dataset-path', type=str, default="/datasets/lmms-lab/TextCaps", help='The path of the dataset in local.')
+    parser.add_argument(f'--model', type=str, default="llava-hf/llava-1.5-7b-hf", help='The name of the model in huggingface.')
+    parser.add_argument(f'--model-path', type=str, default="/models/llava-1.5-7b-hf", help='The path of the model in local.')
+    parser.add_argument(f'--n-requests', type=int, default=100000000, help='number of requests processed from dataset')
+    args = parser.parse_args()
+    preprocess(args)

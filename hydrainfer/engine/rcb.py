@@ -1,5 +1,6 @@
+import time
 from typing import Optional
-from hydrainfer.engine import Instruction, InstructionList, OutputTokenProcessor, RequestMetric, ScenarioType
+from hydrainfer.engine import Instruction, InstructionList, OutputTokenProcessor, ScenarioType
 from hydrainfer.engine.output_token_processor import OutputTokenParams
 from hydrainfer.memory import VirtualTokenCache
 from hydrainfer.request import SamplingParameters, Request, RequestMetaData
@@ -14,12 +15,13 @@ class RequestControlBlock:
         self.instructions: Optional[InstructionList] = None
         self.virtual_kv_cache: Optional[VirtualTokenCache] = None
         self.virtual_image_cache: Optional[VirtualTokenCache] = None
-        self.sid: int = -1
         self.output_token_processors: list[OutputTokenProcessor] = []
         self.output_token_params: Optional[OutputTokenParams] = None
         self.output_token_ids: list[int] = []
         self.scenario_type: Optional[ScenarioType] = None
-        self.metric = RequestMetric()
+
+        self.arrival_time = time.perf_counter()
+        self.event_timestamps: list[tuple[str, float]] = []
 
     def current_instruction(self) -> Instruction:
         return self.instructions.curr

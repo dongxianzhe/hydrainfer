@@ -1,4 +1,4 @@
-num_request_process_workers: 1
+num_request_process_workers: 32
 debug: False
 ignore_eos: ${ignore_eos}
 model: ${model}

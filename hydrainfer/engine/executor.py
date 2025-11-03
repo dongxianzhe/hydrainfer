@@ -153,7 +153,6 @@ class BatchFillExecutor(Executor):
             return EmptyFuture()
 
         # 3. process sampled tokens
-        token_time = time.perf_counter()
         i = 0
         for rcb, inst in batch:
             if not isinstance(inst, Fill) or not inst.sample:
@@ -163,7 +162,6 @@ class BatchFillExecutor(Executor):
             i += 1
 
             if not inst.is_chunked:
-                rcb.metric.token_times.append(token_time)
                 rcb.output_token_ids.append(next_token_id)
 
             if inst.sample_dst:

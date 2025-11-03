@@ -1,3 +1,4 @@
+import numpy as np
 from typing import Optional
 from dataclasses import dataclass, field
 from synthetic_dataset import SyntheticDataEntry
@@ -14,6 +15,20 @@ class Statistics:
     var: Optional[float] = None
 
 
+def make_statistic(values: list[float]) -> Statistics:
+    if len(values) == 0:
+        return None
+    return Statistics(
+        max = max(values), 
+        min = min(values), 
+        mean = np.mean(values), 
+        median = np.median(values), 
+        p90 = np.percentile(values, 90), 
+        p99 = np.percentile(values, 99), 
+        var = np.var(values), 
+    )
+
+
 @dataclass
 class OnlineRequestOutput:
     entry: SyntheticDataEntry
@@ -26,12 +41,15 @@ class OnlineRequestOutput:
     total_tokens: int = 0
     latency: Optional[float] = None
     ttft: Optional[float] = None
-    tpots: list[float] = field(default_factory=list)
-    tpot_statistics: Optional[Statistics] = None
+    tbts: list[float] = field(default_factory=(list))
+    tbt_statistics: Optional[Statistics] = None
+    tpot: Optional[float] = None
 
 
 @dataclass
 class BenchmarkResult:
+    total_request: int
+    request_rate_method: str
     request_rate: float = 0
     start_time: float = 0
     end_time: float = 0
@@ -43,10 +61,12 @@ class BenchmarkResult:
     request_throughput: float = 0
     latencies: list[float] = field(default_factory=list)
     ttfts: list[float] = field(default_factory=list)
+    tbts: list[float] = field(default_factory=list)
     tpots: list[float] = field(default_factory=list)
     latency_statistics: Optional[Statistics] = None
     ttft_statistics: Optional[Statistics] = None
     tpot_statistics: Optional[Statistics] = None
+    tbt_statistics: Optional[Statistics] = None
 
 
 @dataclass

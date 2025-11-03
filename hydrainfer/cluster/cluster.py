@@ -3,6 +3,7 @@ import ray
 from dataclasses import dataclass, field
 from typing import Optional, Literal
 from hydrainfer.request import Request
+from hydrainfer.cluster.log_server import LogServer, LogServerConfig
 from hydrainfer.engine import RequestProcessParameters
 from hydrainfer.cluster import NodeConfig, AsyncEPDNode, LoadBalancer, LoadBalancerConfig, MigrateGraphBuilder, MigrateGraph, NodeContext, NodeType
 from hydrainfer.utils.zmq_utils import ZMQConfig
@@ -35,6 +36,7 @@ class ClusterConfig:
     n_dnode: Optional[int] = 1
     ray_cluster_port: int = 6379
     debug: bool = False
+    log_server_path: str = "hydrainfer_log_server.json"
 
 
 class DisaggregationMethodProfiler:
@@ -78,6 +80,7 @@ class Cluster:
                 config.n_dnode = 1
             logger.info(f"auto set node n_enode={config.n_enode} n_epnode={config.n_epnode} n_ednode={config.n_ednode} n_epdnode={config.n_epdnode} n_pnode={config.n_pnode} n_pdnode={config.n_pdnode} n_dnode={config.n_dnode}")
 
+        self.log_server = LogServer.options(name='log_server').remote(LogServerConfig(log_path=self.config.log_server_path))
         instance_data_parallel_config_list: list[InstanceDataParallelConfig] = [
             InstanceDataParallelConfig(n_replicas=getattr(config, "n_enode", 0),   node_config=getattr(config, "enode", None),   node_type="E"), 
             InstanceDataParallelConfig(n_replicas=getattr(config, "n_epnode", 0),  node_config=getattr(config, "epnode", None),  node_type="EP"), 

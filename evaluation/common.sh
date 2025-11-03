@@ -1,10 +1,7 @@
 SCRIPT=$(readlink -f "$0")
 SCRIPT_PATH=$(dirname "$SCRIPT")
 OUR_ROOT_PATH=$(realpath "$SCRIPT_PATH/../../")
-RESULT_PATH=$(echo "$SCRIPT_PATH/result/$(date +%Y%m%d_%H%M%S)")
 COMMON_SCRIPT_PATH="$SCRIPT_PATH/../"
-
-mkdir -p $RESULT_PATH
 
 clean_up() {
     echo "Cleaning up..."
@@ -12,6 +9,7 @@ clean_up() {
     pgrep -f "hydrainfer.entrypoint.entrypoint" >/dev/null && pgrep -f "hydrainfer.entrypoint.entrypoint" | xargs kill
     pgrep -f "text-generation-launcher" >/dev/null && pgrep -f "text-generation-launcher" | xargs kill
     pgrep -f "sglang.launch_server" >/dev/null && pgrep -f "sglang.launch_server" | xargs kill
+    pgrep -f "lmdeploy serve" >/dev/null && pgrep -f "lmdeploy serve" | xargs kill
     # conda run -n hydrainfer ray stop
 }
 trap clean_up EXIT
@@ -42,4 +40,16 @@ wait_api_server() {
 get_free_gpus() {
     free_gpus=$(conda run -n hydrainfer --no-capture-output python $COMMON_SCRIPT_PATH/get_free_gpus.py)
     echo "$free_gpus"
+}
+
+find_free_port() {
+  local port=10000
+
+  while true; do
+    if ! lsof -i :$port &>/dev/null; then
+      echo "$port"
+      return 0
+    fi
+    ((port++))
+  done
 }

@@ -1,3 +1,5 @@
 defaults:
   - node
 
+batch_scheduler_profiler:
+  max_latency: ${tpot_slo}
