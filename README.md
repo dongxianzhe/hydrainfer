@@ -58,9 +58,9 @@ cd evaluation/dataset_analysis
 ./preprocess.sh
 ```
 
-You can use script to test inference correctness. The inference results will be in the evaluation/test_correctness/result directory.:
+You can use script to test inference correctness. The inference results will be in the result directory.:
 ```
-cd evaluation/test_correctness
+cd evaluation/slo_attainment
 ./evaluation.sh
 ```
 # Citation

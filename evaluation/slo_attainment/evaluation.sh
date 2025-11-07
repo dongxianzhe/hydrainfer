@@ -16,7 +16,7 @@ find_free_gpus_max_retry=1000
 only_text=0
 start_server=1
 start_benchmark=1
-log_latency_breakdown=true
+log_latency_breakdown=false
 gpu_configs=(
     1
     # 2
@@ -27,9 +27,9 @@ gpu_configs=(
     # 32
 )
 declare -A methods=(
-    # ["ours"]="start_hydrainfer_server"
+    ["ours"]="start_hydrainfer_server"
     # ["vllm"]="start_vllm_server"
-    ["vllm-0-11-0"]="start_vllm_server"
+    # ["vllm-0-11-0"]="start_vllm_server"
     # ["vllm-0-10-2"]="start_vllm_server"
     # ["vllm-0-9-2"]="start_vllm_server"
     # ["vllm-0-8-5"]="start_vllm_server"
@@ -47,8 +47,8 @@ additional_server_configs=(
     ""
 )
 declare -A MODELS=(
-    # ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
-    ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
+    ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
+    # ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
     # ["Qwen/Qwen2-VL-7B"]="/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
     # ["deepseek-ai/deepseek-vl2-tiny"]="/models/deepseek-vl2-tiny"
     # ["OpenGVLab/InternVL2-26B"]="/models/OpenGVLab/InternVL2-26B"
