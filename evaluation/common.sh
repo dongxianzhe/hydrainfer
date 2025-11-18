@@ -1,7 +1,7 @@
 SCRIPT=$(readlink -f "$0")
 SCRIPT_PATH=$(dirname "$SCRIPT")
-OUR_ROOT_PATH=$(realpath "$SCRIPT_PATH/../../")
-COMMON_SCRIPT_PATH="$SCRIPT_PATH/../"
+OUR_ROOT_PATH=$(realpath "$SCRIPT_PATH/../")
+COMMON_SCRIPT_PATH="$SCRIPT_PATH"
 
 clean_up() {
     echo "Cleaning up..."
