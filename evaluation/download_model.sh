@@ -26,10 +26,31 @@ download_hf_model() {
     fi
 }
 
-download_hf_model "llava-hf/llava-1.5-7b-hf" "/models/llava-hf/llava-1.5-7b-hf"
-download_hf_model "llava-hf/llava-1.5-13b-hf" "/models/llava-hf/llava-1.5-13b-hf"
-download_hf_model "llava-hf/llava-v1.6-vicuna-7b-hf" "/models/llava-hf/llava-v1.6-vicuna-7b-hf"
-download_hf_model "llava-hf/llava-v1.6-vicuna-13b-hf" "/models/llava-hf/llava-v1.6-vicuna-13b-hf"
-download_hf_model "Qwen/Qwen2-VL-7B" "/models/Qwen/Qwen2-VL-7B"
-download_hf_model "deepseek-ai/deepseek-vl2-tiny" "/models/deepseek-ai/deepseek-vl2-tiny"
-download_hf_model "OpenGVLab/InternVL2-26B" "/models/OpenGVLab/InternVL2-26B"
+download_model_if_not_exists() {
+    # Arguments: $1 - model name, $2 - model path
+    local MODEL=$1
+    local MODEL_PATH=$2
+
+    if [ -d "$MODEL_PATH" ]; then
+        echo "Model ${MODEL} exists in ${MODEL_PATH}, skipping download of HF model."
+    else
+        echo "Model ${MODEL} does not exist, attempting to download HF model to ${MODEL_PATH}."
+        download_hf_model "$MODEL" "$MODEL_PATH"
+    fi
+}
+
+main() {
+  if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <model_name> <destination>"
+    exit 1
+  fi
+
+  local model_name=$1
+  local destination=$2
+
+  download_model_if_not_exists "$model_name" "$destination"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

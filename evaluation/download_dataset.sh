@@ -26,8 +26,31 @@ download_hf_dataset() {
     fi
 }
 
-download_hf_dataset "lmms-lab/TextCaps" "/datasets/lmms-lab/TextCaps"
-download_hf_dataset "lmms-lab/POPE" "/datasets/lmms-lab/POPE"
-download_hf_dataset "lmms-lab/MME" "/datasets/lmms-lab/MME"
-download_hf_dataset "lmms-lab/textvqa" "/datasets/lmms-lab/textvqa"
-download_hf_dataset "lmms-lab/VizWiz-VQA" "/datasets/lmms-lab/VizWiz-VQA"
+download_dataset_if_not_exists() {
+    # Arguments: $1 - dataset name, $2 - dataset path
+    local DATASET=$1
+    local DATASET_PATH=$2
+
+    if [ -d "$DATASET_PATH" ]; then
+        echo "DATASET ${DATASET} exists in ${DATASET_PATH}, skipping download of HF dataset."
+    else
+        echo "DATASET ${DATASET} does not exist, attempting to download HF dataset to ${DATASET_PATH}."
+        download_hf_dataset "$DATASET" "$DATASET_PATH"
+    fi
+}
+
+main() {
+  if [ "$#" -ne 2 ]; then
+    echo "Usage: $0 <dataset_name> <destination>"
+    exit 1
+  fi
+
+  local dataset_name=$1
+  local destination=$2
+
+  download_dataset_if_not_exists "$dataset_name" "$destination"
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi
