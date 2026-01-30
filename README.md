@@ -47,9 +47,11 @@ conda env remove -n hydrainfer
 
 Before testing inference correctness, it's necessary to set up the vLLM environment for dataset preprocessing.
 ```
-conda create -n vllm python=3.12
-conda activate vllm
-pip install vllm==0.8.2
+conda create -n vllm-0-11-0 python=3.12
+conda activate vllm-0-11-0
+pip install vllm==0-11-0
+pip install datasets
+pip install dacite
 ```
 
 Dataset preprocess.

@@ -17,3 +17,21 @@ declare -A model_to_path=(
     ["deepseek-ai/deepseek-vl2-tiny"]="$model_root_path/deepseek-ai/deepseek-vl2-tiny"
     ["OpenGVLab/InternVL2-26B"]="$model_root_path/OpenGVLab/InternVL2-26B"
 )
+
+declare -A methods_to_apiserver_starter=(
+    ["ours"]="start_hydrainfer_server"
+    ["vllm"]="start_vllm_server"
+    ["vllm-0-11-0"]="start_vllm_server"
+    ["vllm-0-10-2"]="start_vllm_server"
+    ["vllm-0-9-2"]="start_vllm_server"
+    ["vllm-0-8-5"]="start_vllm_server"
+    ["vllm-0-7-3"]="start_vllm_server"
+    ["vllm-0-6-6"]="start_vllm_server"
+    ["sglang"]="start_sglang_server"
+    ["sglang-0-5-3"]=start_sglang_server
+    ["sglang-0-4-10"]=start_sglang_server
+    ["sglang-0-4-3"]=start_sglang_server
+    ["sglang-0-3-6"]=start_sglang_server
+    ["sglang-0-2-15"]=start_sglang_server
+    ["lmdeploy"]="start_lmdeploy_server"
+)

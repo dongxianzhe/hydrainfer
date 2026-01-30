@@ -1,5 +1,6 @@
 #!/bin/bash 
-source ../common.sh
+source common.sh
+source config.sh
 
 ############################## params ##############################
 # REQUEST_RATES="0.5 1 1.5 2 2.5 3 3.5 4 4.5 5"
@@ -26,32 +27,32 @@ gpu_configs=(
     # 16
     # 32
 )
-declare -A methods=(
-    ["ours"]="start_hydrainfer_server"
-    # ["vllm"]="start_vllm_server"
-    # ["vllm-0-11-0"]="start_vllm_server"
-    # ["vllm-0-10-2"]="start_vllm_server"
-    # ["vllm-0-9-2"]="start_vllm_server"
-    # ["vllm-0-8-5"]="start_vllm_server"
-    # ["vllm-0-7-3"]="start_vllm_server"
-    # ["vllm-0-6-6"]="start_vllm_server"
-    # ["sglang"]="start_sglang_server"
-    # ["sglang-0-5-3"]=start_sglang_server
-    # ["sglang-0-4-10"]=start_sglang_server
-    # ["sglang-0-4-3"]=start_sglang_server
-    # ["sglang-0-3-6"]=start_sglang_server
-    # ["sglang-0-2-15"]=start_sglang_server
-    # ["lmdeploy"]="start_lmdeploy_server"
+methods=(
+    "ours"
+    # "vllm"
+    # "vllm-0-11-0"
+    # "vllm-0-10-2"
+    # "vllm-0-9-2"
+    # "vllm-0-8-5"
+    # "vllm-0-7-3"
+    # "vllm-0-6-6"]="start_vllm_server"
+    # "sglang"]="start_sglang_server"
+    # "sglang-0-5-3"]=start_sglang_server
+    # "sglang-0-4-10"]=start_sglang_server
+    # "sglang-0-4-3"]=start_sglang_server
+    # "sglang-0-3-6"]=start_sglang_server
+    # "sglang-0-2-15"]=start_sglang_server
+    # "lmdeploy"]="start_lmdeploy_server"
 )
 additional_server_configs=(
     ""
 )
-declare -A MODELS=(
-    ["llava-hf/llava-1.5-7b-hf"]="/models/llava-1.5-7b-hf"
-    # ["llava-hf/llava-v1.6-vicuna-7b-hf"]="/models/llava-v1.6-vicuna-7b-hf"
-    # ["Qwen/Qwen2-VL-7B"]="/models/Qwen2-VL-7B/models--Qwen--Qwen2-VL-7B/snapshots/e61834264a23db10c06dc4f566dac5634c7ca024"
-    # ["deepseek-ai/deepseek-vl2-tiny"]="/models/deepseek-vl2-tiny"
-    # ["OpenGVLab/InternVL2-26B"]="/models/OpenGVLab/InternVL2-26B"
+MODELS=(
+    "llava-hf/llava-1.5-7b-hf"
+    # "llava-hf/llava-v1.6-vicuna-7b-hf"
+    # "Qwen/Qwen2-VL-7B"
+    # "deepseek-ai/deepseek-vl2-tiny"
+    # "OpenGVLab/InternVL2-26B"
 )
 trace_configs=(
     "--textcaps=1 --pope=0 --mme=0 --text_vqa=0 --vizwiz_vqa=0 --request-rate-method=poisson"
@@ -177,14 +178,14 @@ send_requests(){
 
 evaluation(){
     if [[ "$start_server" == "1" ]]; then
-        start_apiserver
+        $apiserver_starter
     fi
 
     if [[ "$start_benchmark" == "1" ]]; then
         for trace in "${trace_configs[@]}"; do
             if ! wait_api_server "$host" "$port" "$apiserver_pid" && [[ "$start_server" == "1" ]]; then
                 echo "server failed after benchmark. try to restart server."
-                start_apiserver
+                $apiserver_starter
             fi
             send_requests
         done
@@ -206,13 +207,15 @@ evaluation(){
     sleep 10
 }
 
-for method in "${!methods[@]}"; do
-    server_start_method="${methods[$method]}"
+for method_id in "${!methods[@]}"; do
+    method="${methods[$method_id]}"
+    apiserver_starter="${methods_to_apiserver_starter[$method]}"
     RESULT_PATH=$(echo "$SCRIPT_PATH/result/${method}/$(date +%Y%m%d_%H%M%S)")
     mkdir -p $RESULT_PATH
     for number_gpus_need in ${gpu_configs[@]}; do
-        for MODEL in "${!MODELS[@]}"; do
-            MODEL_PATH="${MODELS[$MODEL]}"
+        for model_id in "${!MODELS[@]}"; do
+            MODEL="${MODELS[$model_id]}"
+            MODEL_PATH="${model_to_path[$MODEL]}"
             for additional_server_config in "${additional_server_configs[@]}"; do
                 attempt=0
                 while [ $attempt -lt $find_free_gpus_max_retry ]; do
